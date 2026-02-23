@@ -1,0 +1,18 @@
+const mongoose = require("mongoose");
+
+const LocationSchema = new mongoose.Schema(
+  {
+    name: { type: String, required: true },
+    type: { type: String, enum: ["office", "warehouse", "facility", "site"], required: true },
+    address: { type: String, required: true },
+    city: { type: String, required: true },
+    phone: { type: String, required: true },
+    manager: { type: String, required: true },
+    employeeCount: { type: Number, default: 0 },
+    status: { type: String, enum: ["active", "inactive"], default: "active" },
+    operatingHours: { type: String, default: "" },
+  },
+  { timestamps: true }
+);
+
+module.exports = mongoose.model("Location", LocationSchema);
