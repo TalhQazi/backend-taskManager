@@ -10,10 +10,15 @@ const createSchema = z.object({
   title: z.string().min(1),
   description: z.string().optional().default(""),
   assignee: z.string().optional().default(""),
+  assigneeInitials: z.string().optional().default(""),
   location: z.string().optional().default(""),
   priority: z.enum(["high", "medium", "low"]).optional(),
-  status: z.enum(["active", "pending", "completed"]).optional(),
+  status: z.enum(["pending", "in-progress", "completed", "overdue"]).optional(),
   dueDate: z.union([z.string(), z.date()]).optional(),
+  dueTime: z.string().optional().default(""),
+  createdAt: z.string().optional().default(""),
+  attachmentFileName: z.string().optional().default(""),
+  attachmentNote: z.string().optional().default(""),
 });
 
 const updateSchema = createSchema.partial();
@@ -40,9 +45,22 @@ router.post("/", requireAuth, async (req, res, next) => {
     }
 
     const dueDate = parsed.data.dueDate ? new Date(parsed.data.dueDate) : undefined;
+    const createdAt = parsed.data.createdAt || new Date().toISOString().split("T")[0];
+    const assigneeInitials =
+      parsed.data.assigneeInitials ||
+      (parsed.data.assignee
+        ? parsed.data.assignee
+            .split(" ")
+            .map((n) => n[0])
+            .slice(0, 2)
+            .join("")
+            .toUpperCase()
+        : "");
 
     const created = await Task.create({
       ...parsed.data,
+      createdAt,
+      assigneeInitials,
       dueDate,
     });
 

@@ -8,12 +8,17 @@ const router = express.Router();
 
 const createSchema = z.object({
   name: z.string().min(1),
+  initials: z.string().optional().default(""),
   email: z.string().min(1),
   phone: z.string().optional().default(""),
   role: z.string().optional().default(""),
   department: z.string().optional().default(""),
+  company: z.string().optional().default(""),
   location: z.string().optional().default(""),
-  status: z.enum(["active", "away", "offline"]).optional(),
+  status: z.enum(["active", "inactive", "on-leave"]).optional(),
+  payRate: z.string().optional().default(""),
+  shift: z.string().optional().default(""),
+  hireDate: z.string().optional().default(""),
   joinDate: z.union([z.string(), z.date()]).optional(),
 });
 
@@ -40,10 +45,20 @@ router.post("/", requireAuth, async (req, res, next) => {
       return res.status(400).json({ error: { message: "Invalid payload" } });
     }
 
-    const joinDate = parsed.data.joinDate ? new Date(parsed.data.joinDate) : undefined;
+    const joinDateSource = parsed.data.joinDate || parsed.data.hireDate;
+    const joinDate = joinDateSource ? new Date(joinDateSource) : undefined;
+    const initials =
+      parsed.data.initials ||
+      parsed.data.name
+        .split(" ")
+        .map((n) => n[0])
+        .slice(0, 2)
+        .join("")
+        .toUpperCase();
 
     const created = await Employee.create({
       ...parsed.data,
+      initials,
       joinDate,
     });
 
@@ -62,8 +77,17 @@ router.put("/:id", requireAuth, async (req, res, next) => {
     }
 
     const patch = { ...parsed.data };
-    if (patch.joinDate) {
-      patch.joinDate = new Date(patch.joinDate);
+    const joinDateSource = patch.joinDate || patch.hireDate;
+    if (joinDateSource) patch.joinDate = new Date(joinDateSource);
+    if (typeof patch.hireDate === "string") delete patch.hireDate;
+
+    if (!patch.initials && typeof patch.name === "string" && patch.name.trim()) {
+      patch.initials = patch.name
+        .split(" ")
+        .map((n) => n[0])
+        .slice(0, 2)
+        .join("")
+        .toUpperCase();
     }
 
     const updated = await Employee.findByIdAndUpdate(req.params.id, patch, {

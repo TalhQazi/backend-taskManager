@@ -7,23 +7,34 @@ const { requireAuth, requireRole } = require("../middleware/auth");
 
 const router = express.Router();
 
+function withId(doc) {
+  if (!doc) return doc;
+  return { ...doc, id: String(doc._id) };
+}
+
 function sanitizeUser(u) {
   if (!u) return u;
   const { passwordHash, ...rest } = u;
-  return rest;
+  return withId(rest);
 }
 
 const createSchema = z.object({
-  username: z.string().min(1),
+  name: z.string().optional().default(""),
+  email: z.string().optional().default(""),
+  username: z.string().optional(),
   password: z.string().min(6),
-  role: z.enum(["admin", "manager"]),
+  role: z.enum(["admin", "manager", "employee"]),
+  status: z.enum(["active", "inactive", "pending"]).optional(),
 });
 
 const updateSchema = z
   .object({
+    name: z.string().optional(),
+    email: z.string().optional(),
     username: z.string().min(1).optional(),
     password: z.string().min(6).optional(),
-    role: z.enum(["admin", "manager"]).optional(),
+    role: z.enum(["admin", "manager", "employee"]).optional(),
+    status: z.enum(["active", "inactive", "pending"]).optional(),
   })
   .partial();
 
@@ -43,11 +54,23 @@ router.post("/", requireAuth, requireRole(["admin"]), async (req, res, next) => 
       return res.status(400).json({ error: { message: "Invalid payload" } });
     }
 
+    const derivedUsername =
+      (typeof parsed.data.username === "string" && parsed.data.username.trim())
+        ? parsed.data.username.trim()
+        : (typeof parsed.data.email === "string" && parsed.data.email.trim())
+          ? parsed.data.email.trim()
+          : (typeof parsed.data.name === "string" && parsed.data.name.trim())
+            ? parsed.data.name.trim().toLowerCase().replace(/\s+/g, ".")
+            : "user";
+
     const passwordHash = await bcrypt.hash(parsed.data.password, 10);
     const created = await User.create({
-      username: parsed.data.username,
+      name: parsed.data.name || "",
+      email: parsed.data.email || "",
+      username: derivedUsername,
       passwordHash,
       role: parsed.data.role,
+      status: parsed.data.status || "active",
     });
 
     res.status(201).json({ item: sanitizeUser(created.toObject()) });
@@ -71,6 +94,12 @@ router.put("/:id", requireAuth, requireRole(["admin"]), async (req, res, next) =
     if (typeof patch.password === "string" && patch.password) {
       patch.passwordHash = await bcrypt.hash(patch.password, 10);
       delete patch.password;
+    }
+
+    if (!patch.username) {
+      if (typeof patch.email === "string" && patch.email.trim()) {
+        patch.username = patch.email.trim();
+      }
     }
 
     const updated = await User.findByIdAndUpdate(req.params.id, patch, { new: true }).lean();

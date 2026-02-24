@@ -7,6 +7,10 @@ const { requireAuth } = require("../middleware/auth");
 const router = express.Router();
 
 const settingsSchema = z.object({
+  companyName: z.string().optional(),
+  supportEmail: z.string().optional(),
+  notificationsEnabled: z.boolean().optional(),
+  autoLogoutMinutes: z.number().optional(),
   fullName: z.string().optional().default(""),
   email: z.string().optional().default(""),
   phone: z.string().optional().default(""),

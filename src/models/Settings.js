@@ -3,6 +3,10 @@ const mongoose = require("mongoose");
 const SettingsSchema = new mongoose.Schema(
   {
     userId: { type: String, required: true, unique: true },
+    companyName: { type: String, default: "" },
+    supportEmail: { type: String, default: "" },
+    notificationsEnabled: { type: Boolean, default: true },
+    autoLogoutMinutes: { type: Number, default: 0 },
     fullName: { type: String, default: "" },
     email: { type: String, default: "" },
     phone: { type: String, default: "" },

@@ -3,12 +3,17 @@ const mongoose = require("mongoose");
 const EmployeeSchema = new mongoose.Schema(
   {
     name: { type: String, required: true },
+    initials: { type: String, default: "" },
     email: { type: String, required: true },
     phone: { type: String, default: "" },
     role: { type: String, default: "" },
     department: { type: String, default: "" },
+    company: { type: String, default: "" },
     location: { type: String, default: "" },
-    status: { type: String, enum: ["active", "away", "offline"], default: "active" },
+    status: { type: String, enum: ["active", "inactive", "on-leave"], default: "active" },
+    payRate: { type: String, default: "" },
+    shift: { type: String, default: "" },
+    hireDate: { type: String, default: "" },
     joinDate: { type: Date },
   },
   { timestamps: true }

@@ -18,6 +18,38 @@ const createSchema = z.object({
   nextInspection: z.union([z.string(), z.date()]).optional(),
 });
 
+const adminUiSchema = z.object({
+  make: z.string().min(1),
+  model: z.string().min(1),
+  year: z.string().min(1),
+  licensePlate: z.string().min(1),
+  vin: z.string().optional().default(""),
+  mileage: z.string().optional().default(""),
+  status: z.enum(["active", "inactive", "maintenance"]).optional(),
+  lastInspection: z.string().optional().default(""),
+  nextInspection: z.string().optional().default(""),
+  assignedTo: z.string().optional().default(""),
+  registrationFileName: z.string().optional().default(""),
+  insuranceFileName: z.string().optional().default(""),
+});
+
+const adminUiUpdateSchema = z
+  .object({
+    make: z.string().optional(),
+    model: z.string().optional(),
+    year: z.string().optional(),
+    licensePlate: z.string().optional(),
+    vin: z.string().optional(),
+    mileage: z.string().optional(),
+    status: z.enum(["active", "inactive", "maintenance"]).optional(),
+    lastInspection: z.string().optional(),
+    nextInspection: z.string().optional(),
+    assignedTo: z.string().optional(),
+    registrationFileName: z.string().optional(),
+    insuranceFileName: z.string().optional(),
+  })
+  .partial();
+
 const updateSchema = createSchema.partial();
 
 function withId(doc) {
@@ -36,6 +68,34 @@ router.get("/", requireAuth, async (_req, res, next) => {
 
 router.post("/", requireAuth, async (req, res, next) => {
   try {
+    const adminParsed = adminUiSchema.safeParse(req.body);
+    if (adminParsed.success) {
+      const name = `${adminParsed.data.year} ${adminParsed.data.make} ${adminParsed.data.model}`.trim();
+      const mileageNumber = Number(String(adminParsed.data.mileage || "").replace(/[^0-9.]/g, "")) || 0;
+
+      const created = await Vehicle.create({
+        name,
+        make: adminParsed.data.make,
+        model: adminParsed.data.model,
+        year: adminParsed.data.year,
+        type: adminParsed.data.model,
+        licensePlate: adminParsed.data.licensePlate,
+        vin: adminParsed.data.vin || "",
+        status: adminParsed.data.status || "active",
+        assignedTo: adminParsed.data.assignedTo || "-",
+        mileage: mileageNumber,
+        mileageText: adminParsed.data.mileage || "",
+        lastInspection: adminParsed.data.lastInspection ? new Date(adminParsed.data.lastInspection) : undefined,
+        nextInspection: adminParsed.data.nextInspection ? new Date(adminParsed.data.nextInspection) : undefined,
+        registrationFileName: adminParsed.data.registrationFileName || "",
+        insuranceFileName: adminParsed.data.insuranceFileName || "",
+        fuelLevel: 100,
+      });
+
+      const obj = created.toObject();
+      return res.status(201).json({ item: withId(obj) });
+    }
+
     const parsed = createSchema.safeParse(req.body);
     if (!parsed.success) {
       return res.status(400).json({ error: { message: "Invalid payload" } });
@@ -56,6 +116,44 @@ router.post("/", requireAuth, async (req, res, next) => {
 
 router.put("/:id", requireAuth, async (req, res, next) => {
   try {
+    const adminParsed = adminUiUpdateSchema.safeParse(req.body);
+    if (adminParsed.success) {
+      const patch = {};
+      if (typeof adminParsed.data.make === "string" && adminParsed.data.make.trim()) patch.make = adminParsed.data.make;
+      if (typeof adminParsed.data.model === "string" && adminParsed.data.model.trim()) patch.model = adminParsed.data.model;
+      if (typeof adminParsed.data.year === "string" && adminParsed.data.year.trim()) patch.year = adminParsed.data.year;
+      if (typeof adminParsed.data.licensePlate === "string" && adminParsed.data.licensePlate.trim()) {
+        patch.licensePlate = adminParsed.data.licensePlate;
+      }
+      if (typeof adminParsed.data.vin === "string") patch.vin = adminParsed.data.vin;
+      if (typeof adminParsed.data.status === "string") patch.status = adminParsed.data.status;
+      if (typeof adminParsed.data.assignedTo === "string") patch.assignedTo = adminParsed.data.assignedTo || "-";
+      if (typeof adminParsed.data.mileage === "string") {
+        patch.mileageText = adminParsed.data.mileage;
+        patch.mileage = Number(String(adminParsed.data.mileage || "").replace(/[^0-9.]/g, "")) || 0;
+      }
+      if (typeof adminParsed.data.lastInspection === "string") {
+        patch.lastInspection = adminParsed.data.lastInspection ? new Date(adminParsed.data.lastInspection) : undefined;
+      }
+      if (typeof adminParsed.data.nextInspection === "string") {
+        patch.nextInspection = adminParsed.data.nextInspection ? new Date(adminParsed.data.nextInspection) : undefined;
+      }
+      if (typeof adminParsed.data.registrationFileName === "string") patch.registrationFileName = adminParsed.data.registrationFileName;
+      if (typeof adminParsed.data.insuranceFileName === "string") patch.insuranceFileName = adminParsed.data.insuranceFileName;
+
+      if (typeof patch.year === "string" || typeof patch.make === "string" || typeof patch.model === "string") {
+        const existing = await Vehicle.findById(req.params.id).lean();
+        const y = typeof patch.year === "string" ? patch.year : existing?.year || "";
+        const mk = typeof patch.make === "string" ? patch.make : existing?.make || "";
+        const md = typeof patch.model === "string" ? patch.model : existing?.model || "";
+        patch.name = `${y} ${mk} ${md}`.trim();
+      }
+
+      const updated = await Vehicle.findByIdAndUpdate(req.params.id, patch, { new: true }).lean();
+      if (!updated) return res.status(404).json({ error: { message: "Vehicle not found" } });
+      return res.json({ item: withId(updated) });
+    }
+
     const parsed = updateSchema.safeParse(req.body);
     if (!parsed.success) {
       return res.status(400).json({ error: { message: "Invalid payload" } });

@@ -20,6 +20,7 @@ const onboardingRoutes = require("./routes/onboarding");
 const settingsRoutes = require("./routes/settings");
 const reportsRoutes = require("./routes/reports");
 const usersRoutes = require("./routes/users");
+const dashboardRoutes = require("./routes/dashboard");
 
 const app = express();
 
@@ -78,6 +79,7 @@ app.use("/api/onboarding", onboardingRoutes);
 app.use("/api/settings", settingsRoutes);
 app.use("/api/reports", reportsRoutes);
 app.use("/api/users", usersRoutes);
+app.use("/api/dashboard", dashboardRoutes);
 
 app.use(notFoundHandler);
 app.use(errorHandler);
