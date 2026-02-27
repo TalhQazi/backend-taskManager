@@ -37,6 +37,16 @@ router.get("/", requireAuth, async (_req, res, next) => {
   }
 });
 
+router.get("/:id", requireAuth, async (req, res, next) => {
+  try {
+    const item = await Task.findById(req.params.id).lean();
+    if (!item) return res.status(404).json({ error: { message: "Task not found" } });
+    return res.json({ item: withId(item) });
+  } catch (err) {
+    return next(err);
+  }
+});
+
 router.post("/", requireAuth, async (req, res, next) => {
   try {
     const parsed = createSchema.safeParse(req.body);
@@ -51,7 +61,7 @@ router.post("/", requireAuth, async (req, res, next) => {
       (parsed.data.assignee
         ? parsed.data.assignee
             .split(" ")
-            .map((n) => n[0])
+            .map((namePart) => namePart[0])
             .slice(0, 2)
             .join("")
             .toUpperCase()
