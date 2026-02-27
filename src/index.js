@@ -49,15 +49,14 @@ app.use(
       if (configuredOrigins.includes("*")) return callback(null, true);
       if (configuredOrigins.includes(origin)) return callback(null, true);
 
-      if (isDev) {
-        try {
-          const { hostname } = new URL(origin);
-          if (hostname === "localhost" || hostname === "127.0.0.1") {
-            return callback(null, true);
-          }
-        } catch {
-         
+      // Always allow localhost/127.0.0.1 for local development against any backend
+      try {
+        const { hostname } = new URL(origin);
+        if (hostname === "localhost" || hostname === "127.0.0.1") {
+          return callback(null, true);
         }
+      } catch {
+        // ignore invalid origins
       }
 
       return callback(new Error(`CORS blocked for origin: ${origin}`));
