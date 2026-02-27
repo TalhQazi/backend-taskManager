@@ -16,13 +16,7 @@ try {
   
 }
 
-const storage = multer.diskStorage({
-  destination: (_req, _file, cb) => cb(null, uploadsDir),
-  filename: (_req, file, cb) => {
-    const safeOriginal = String(file.originalname || "file").replace(/[^a-zA-Z0-9._-]/g, "_");
-    cb(null, `${Date.now()}_${safeOriginal}`);
-  },
-});
+const storage = multer.memoryStorage();
 
 const upload = multer({
   storage,
@@ -147,10 +141,11 @@ router.post("/upload", requireAuth, upload.fields([{ name: "registrationFile", m
     const regFile = Array.isArray(files.registrationFile) ? files.registrationFile[0] : undefined;
     const insFile = Array.isArray(files.insuranceFile) ? files.insuranceFile[0] : undefined;
 
+    // For Vercel serverless, store file metadata without saving to disk
     const registrationAttachment = regFile
       ? {
           fileName: regFile.originalname,
-          url: `/uploads/vehicles/${regFile.filename}`,
+          url: "", // Not persisted on serverless
           mimeType: regFile.mimetype,
           size: regFile.size,
         }
@@ -159,7 +154,7 @@ router.post("/upload", requireAuth, upload.fields([{ name: "registrationFile", m
     const insuranceAttachment = insFile
       ? {
           fileName: insFile.originalname,
-          url: `/uploads/vehicles/${insFile.filename}`,
+          url: "", // Not persisted on serverless
           mimeType: insFile.mimetype,
           size: insFile.size,
         }
