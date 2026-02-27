@@ -16,13 +16,7 @@ try {
   
 }
 
-const storage = multer.diskStorage({
-  destination: (_req, _file, cb) => cb(null, uploadsDir),
-  filename: (_req, file, cb) => {
-    const safeOriginal = String(file.originalname || "file").replace(/[^a-zA-Z0-9._-]/g, "_");
-    cb(null, `${Date.now()}_${safeOriginal}`);
-  },
-});
+const storage = multer.memoryStorage();
 
 const upload = multer({
   storage,
@@ -193,16 +187,16 @@ router.post("/upload", requireAuth, upload.fields([
     const approval = ["pending", "approved", "rejected"].includes(rawApproval) ? rawApproval : "pending";
 
     const w4Attachment = w4File
-      ? { fileName: w4File.originalname, url: `/uploads/onboarding/${w4File.filename}`, mimeType: w4File.mimetype, size: w4File.size }
+      ? { fileName: w4File.originalname, url: null, mimeType: w4File.mimetype, size: w4File.size }
       : undefined;
     const i9Attachment = i9File
-      ? { fileName: i9File.originalname, url: `/uploads/onboarding/${i9File.filename}`, mimeType: i9File.mimetype, size: i9File.size }
+      ? { fileName: i9File.originalname, url: null, mimeType: i9File.mimetype, size: i9File.size }
       : undefined;
     const signatureAttachment = signatureFile
-      ? { fileName: signatureFile.originalname, url: `/uploads/onboarding/${signatureFile.filename}`, mimeType: signatureFile.mimetype, size: signatureFile.size }
+      ? { fileName: signatureFile.originalname, url: null, mimeType: signatureFile.mimetype, size: signatureFile.size }
       : undefined;
     const generatedPdfAttachment = generatedPdfFile
-      ? { fileName: generatedPdfFile.originalname, url: `/uploads/onboarding/${generatedPdfFile.filename}`, mimeType: generatedPdfFile.mimetype, size: generatedPdfFile.size }
+      ? { fileName: generatedPdfFile.originalname, url: null, mimeType: generatedPdfFile.mimetype, size: generatedPdfFile.size }
       : undefined;
 
     const created = await Onboarding.create({
