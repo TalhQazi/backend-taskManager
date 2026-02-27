@@ -16,13 +16,7 @@ try {
   
 }
 
-const storage = multer.diskStorage({
-  destination: (_req, _file, cb) => cb(null, uploadsDir),
-  filename: (_req, file, cb) => {
-    const safeOriginal = String(file.originalname || "file").replace(/[^a-zA-Z0-9._-]/g, "_");
-    cb(null, `${Date.now()}_${safeOriginal}`);
-  },
-});
+const storage = multer.memoryStorage();
 
 const upload = multer({
   storage,
@@ -131,12 +125,14 @@ router.post("/upload", requireAuth, upload.single("file"), async (req, res, next
         : "");
 
     const f = req.file;
+    // For Vercel serverless, we store file metadata without saving to disk
     const attachment = f
       ? {
           fileName: f.originalname,
-          url: `/uploads/tasks/${f.filename}`,
+          url: "", // Files not persisted on serverless; store in cloud storage if needed
           mimeType: f.mimetype,
           size: f.size,
+          buffer: f.buffer ? true : false, // Indicate file was received
         }
       : undefined;
 
