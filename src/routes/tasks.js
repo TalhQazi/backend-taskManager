@@ -1,10 +1,33 @@
 const express = require("express");
 const { z } = require("zod");
+const multer = require("multer");
+const path = require("path");
+const fs = require("fs");
 
 const Task = require("../models/Task");
 const { requireAuth } = require("../middleware/auth");
 
 const router = express.Router();
+
+const uploadsDir = path.resolve(__dirname, "..", "..", "uploads", "tasks");
+try {
+  fs.mkdirSync(uploadsDir, { recursive: true });
+} catch {
+  
+}
+
+const storage = multer.diskStorage({
+  destination: (_req, _file, cb) => cb(null, uploadsDir),
+  filename: (_req, file, cb) => {
+    const safeOriginal = String(file.originalname || "file").replace(/[^a-zA-Z0-9._-]/g, "_");
+    cb(null, `${Date.now()}_${safeOriginal}`);
+  },
+});
+
+const upload = multer({
+  storage,
+  limits: { fileSize: 10 * 1024 * 1024 },
+});
 
 const createSchema = z.object({
   title: z.string().min(1),
@@ -37,16 +60,6 @@ router.get("/", requireAuth, async (_req, res, next) => {
   }
 });
 
-router.get("/:id", requireAuth, async (req, res, next) => {
-  try {
-    const item = await Task.findById(req.params.id).lean();
-    if (!item) return res.status(404).json({ error: { message: "Task not found" } });
-    return res.json({ item: withId(item) });
-  } catch (err) {
-    return next(err);
-  }
-});
-
 router.post("/", requireAuth, async (req, res, next) => {
   try {
     const parsed = createSchema.safeParse(req.body);
@@ -61,7 +74,7 @@ router.post("/", requireAuth, async (req, res, next) => {
       (parsed.data.assignee
         ? parsed.data.assignee
             .split(" ")
-            .map((namePart) => namePart[0])
+            .map((n) => n[0])
             .slice(0, 2)
             .join("")
             .toUpperCase()
@@ -72,6 +85,68 @@ router.post("/", requireAuth, async (req, res, next) => {
       createdAt,
       assigneeInitials,
       dueDate,
+    });
+
+    const obj = created.toObject();
+    return res.status(201).json({ item: withId(obj) });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+router.post("/upload", requireAuth, upload.single("file"), async (req, res, next) => {
+  try {
+    const body = req.body || {};
+    const payload = {
+      title: body.title,
+      description: body.description,
+      assignee: body.assignee,
+      assigneeInitials: body.assigneeInitials,
+      location: body.location,
+      priority: body.priority,
+      status: body.status,
+      dueDate: body.dueDate,
+      dueTime: body.dueTime,
+      createdAt: body.createdAt,
+      attachmentFileName: body.attachmentFileName,
+      attachmentNote: body.attachmentNote,
+    };
+
+    const parsed = createSchema.safeParse(payload);
+    if (!parsed.success) {
+      return res.status(400).json({ error: { message: "Invalid payload" } });
+    }
+
+    const dueDate = parsed.data.dueDate ? new Date(parsed.data.dueDate) : undefined;
+    const createdAt = parsed.data.createdAt || new Date().toISOString().split("T")[0];
+    const assigneeInitials =
+      parsed.data.assigneeInitials ||
+      (parsed.data.assignee
+        ? parsed.data.assignee
+            .split(" ")
+            .map((n) => n[0])
+            .slice(0, 2)
+            .join("")
+            .toUpperCase()
+        : "");
+
+    const f = req.file;
+    const attachment = f
+      ? {
+          fileName: f.originalname,
+          url: `/uploads/tasks/${f.filename}`,
+          mimeType: f.mimetype,
+          size: f.size,
+        }
+      : undefined;
+
+    const created = await Task.create({
+      ...parsed.data,
+      createdAt,
+      assigneeInitials,
+      dueDate,
+      attachmentFileName: f?.originalname || parsed.data.attachmentFileName || "",
+      attachment,
     });
 
     const obj = created.toObject();

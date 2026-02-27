@@ -1,10 +1,33 @@
 const express = require("express");
 const { z } = require("zod");
+const multer = require("multer");
+const path = require("path");
+const fs = require("fs");
 
 const Vehicle = require("../models/Vehicle");
 const { requireAuth } = require("../middleware/auth");
 
 const router = express.Router();
+
+const uploadsDir = path.resolve(__dirname, "..", "..", "uploads", "vehicles");
+try {
+  fs.mkdirSync(uploadsDir, { recursive: true });
+} catch {
+  
+}
+
+const storage = multer.diskStorage({
+  destination: (_req, _file, cb) => cb(null, uploadsDir),
+  filename: (_req, file, cb) => {
+    const safeOriginal = String(file.originalname || "file").replace(/[^a-zA-Z0-9._-]/g, "_");
+    cb(null, `${Date.now()}_${safeOriginal}`);
+  },
+});
+
+const upload = multer({
+  storage,
+  limits: { fileSize: 10 * 1024 * 1024 },
+});
 
 const createSchema = z.object({
   name: z.string().min(1),
@@ -105,6 +128,62 @@ router.post("/", requireAuth, async (req, res, next) => {
       ...parsed.data,
       lastInspection: parsed.data.lastInspection ? new Date(parsed.data.lastInspection) : undefined,
       nextInspection: parsed.data.nextInspection ? new Date(parsed.data.nextInspection) : undefined,
+    });
+
+    const obj = created.toObject();
+    return res.status(201).json({ item: withId(obj) });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+router.post("/upload", requireAuth, upload.fields([{ name: "registrationFile", maxCount: 1 }, { name: "insuranceFile", maxCount: 1 }]), async (req, res, next) => {
+  try {
+    const body = req.body || {};
+    const name = `${body.year} ${body.make} ${body.model}`.trim();
+    const mileageNumber = Number(String(body.mileage || "").replace(/[^0-9.]/g, "")) || 0;
+
+    const files = req.files || {};
+    const regFile = Array.isArray(files.registrationFile) ? files.registrationFile[0] : undefined;
+    const insFile = Array.isArray(files.insuranceFile) ? files.insuranceFile[0] : undefined;
+
+    const registrationAttachment = regFile
+      ? {
+          fileName: regFile.originalname,
+          url: `/uploads/vehicles/${regFile.filename}`,
+          mimeType: regFile.mimetype,
+          size: regFile.size,
+        }
+      : undefined;
+
+    const insuranceAttachment = insFile
+      ? {
+          fileName: insFile.originalname,
+          url: `/uploads/vehicles/${insFile.filename}`,
+          mimeType: insFile.mimetype,
+          size: insFile.size,
+        }
+      : undefined;
+
+    const created = await Vehicle.create({
+      name,
+      make: body.make,
+      model: body.model,
+      year: body.year,
+      type: body.model,
+      licensePlate: body.licensePlate,
+      vin: body.vin || "",
+      status: body.status || "active",
+      assignedTo: body.assignedTo || "-",
+      mileage: mileageNumber,
+      mileageText: body.mileage || "",
+      lastInspection: body.lastInspection ? new Date(body.lastInspection) : undefined,
+      nextInspection: body.nextInspection ? new Date(body.nextInspection) : undefined,
+      registrationFileName: regFile?.originalname || body.registrationFileName || "",
+      insuranceFileName: insFile?.originalname || body.insuranceFileName || "",
+      registrationAttachment,
+      insuranceAttachment,
+      fuelLevel: 100,
     });
 
     const obj = created.toObject();

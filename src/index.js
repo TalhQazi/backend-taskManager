@@ -1,6 +1,8 @@
 const express = require("express");
 const cors = require("cors");
 const morgan = require("morgan");
+const path = require("path");
+const fs = require("fs");
 require("dotenv").config();
 
 const { connectDb } = require("./lib/db");
@@ -24,6 +26,13 @@ const dashboardRoutes = require("./routes/dashboard");
 
 const app = express();
 
+const uploadsDir = path.resolve(__dirname, "..", "uploads");
+try {
+  fs.mkdirSync(uploadsDir, { recursive: true });
+} catch {
+  
+}
+
 const configuredOrigins = (process.env.CORS_ORIGIN || "")
   .split(",")
   .map((s) => s.trim())
@@ -40,14 +49,15 @@ app.use(
       if (configuredOrigins.includes("*")) return callback(null, true);
       if (configuredOrigins.includes(origin)) return callback(null, true);
 
-      // Always allow localhost/127.0.0.1 for local development against any backend
-      try {
-        const { hostname } = new URL(origin);
-        if (hostname === "localhost" || hostname === "127.0.0.1") {
-          return callback(null, true);
+      if (isDev) {
+        try {
+          const { hostname } = new URL(origin);
+          if (hostname === "localhost" || hostname === "127.0.0.1") {
+            return callback(null, true);
+          }
+        } catch {
+         
         }
-      } catch {
-        // ignore invalid origins
       }
 
       return callback(new Error(`CORS blocked for origin: ${origin}`));
@@ -57,6 +67,8 @@ app.use(
 );
 app.use(express.json({ limit: "1mb" }));
 app.use(morgan("dev"));
+
+app.use("/uploads", express.static(uploadsDir));
 
 app.get("/health", (_req, res) => {
   res.json({ ok: true });

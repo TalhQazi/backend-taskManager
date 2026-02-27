@@ -38,7 +38,7 @@ const updateSchema = z
   })
   .partial();
 
-router.get("/", requireAuth, requireRole(["admin"]), async (_req, res, next) => {
+router.get("/", requireAuth, requireRole(["admin", "manager"]), async (_req, res, next) => {
   try {
     const items = await User.find().sort({ createdAt: -1 }).lean();
     res.json({ items: items.map(sanitizeUser) });

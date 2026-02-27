@@ -1,10 +1,33 @@
 const express = require("express");
 const { z } = require("zod");
+const multer = require("multer");
+const path = require("path");
+const fs = require("fs");
 
 const Onboarding = require("../models/Onboarding");
 const { requireAuth } = require("../middleware/auth");
 
 const router = express.Router();
+
+const uploadsDir = path.resolve(__dirname, "..", "..", "uploads", "onboarding");
+try {
+  fs.mkdirSync(uploadsDir, { recursive: true });
+} catch {
+  
+}
+
+const storage = multer.diskStorage({
+  destination: (_req, _file, cb) => cb(null, uploadsDir),
+  filename: (_req, file, cb) => {
+    const safeOriginal = String(file.originalname || "file").replace(/[^a-zA-Z0-9._-]/g, "_");
+    cb(null, `${Date.now()}_${safeOriginal}`);
+  },
+});
+
+const upload = multer({
+  storage,
+  limits: { fileSize: 10 * 1024 * 1024 },
+});
 
 function withId(doc) {
   if (!doc) return doc;
@@ -31,6 +54,30 @@ const createSchema = z.object({
   documentsUploaded: z.number().min(0),
   documentsRequired: z.number().min(0),
   approvalStatus: z.enum(["pending", "approved", "rejected"]),
+  w4Attachment: z.object({
+    fileName: z.string().optional(),
+    url: z.string().optional(),
+    mimeType: z.string().optional(),
+    size: z.number().optional(),
+  }).optional(),
+  i9Attachment: z.object({
+    fileName: z.string().optional(),
+    url: z.string().optional(),
+    mimeType: z.string().optional(),
+    size: z.number().optional(),
+  }).optional(),
+  signatureAttachment: z.object({
+    fileName: z.string().optional(),
+    url: z.string().optional(),
+    mimeType: z.string().optional(),
+    size: z.number().optional(),
+  }).optional(),
+  generatedPdfAttachment: z.object({
+    fileName: z.string().optional(),
+    url: z.string().optional(),
+    mimeType: z.string().optional(),
+    size: z.number().optional(),
+  }).optional(),
 });
 
 const updateSchema = createSchema.partial();
@@ -117,6 +164,68 @@ router.put("/:id", requireAuth, async (req, res, next) => {
     res.json({ item: withId(updated) });
   } catch (err) {
     next(err);
+  }
+});
+
+router.post("/upload", requireAuth, upload.fields([
+  { name: "w4File", maxCount: 1 },
+  { name: "i9File", maxCount: 1 },
+  { name: "signatureFile", maxCount: 1 },
+  { name: "generatedPdfFile", maxCount: 1 },
+]), async (req, res, next) => {
+  try {
+    const body = req.body || {};
+    const files = req.files || {};
+
+    const w4File = Array.isArray(files.w4File) ? files.w4File[0] : undefined;
+    const i9File = Array.isArray(files.i9File) ? files.i9File[0] : undefined;
+    const signatureFile = Array.isArray(files.signatureFile) ? files.signatureFile[0] : undefined;
+    const generatedPdfFile = Array.isArray(files.generatedPdfFile) ? files.generatedPdfFile[0] : undefined;
+
+    const docs = [
+      w4File?.originalname || body.w4FileName,
+      i9File?.originalname || body.i9FileName,
+      signatureFile?.originalname || body.signatureFileName,
+      generatedPdfFile?.originalname || body.generatedPdfFileName,
+    ].filter((x) => typeof x === "string" && x.trim()).length;
+
+    const rawApproval = String(body.approvalStatus || "pending").toLowerCase();
+    const approval = ["pending", "approved", "rejected"].includes(rawApproval) ? rawApproval : "pending";
+
+    const w4Attachment = w4File
+      ? { fileName: w4File.originalname, url: `/uploads/onboarding/${w4File.filename}`, mimeType: w4File.mimetype, size: w4File.size }
+      : undefined;
+    const i9Attachment = i9File
+      ? { fileName: i9File.originalname, url: `/uploads/onboarding/${i9File.filename}`, mimeType: i9File.mimetype, size: i9File.size }
+      : undefined;
+    const signatureAttachment = signatureFile
+      ? { fileName: signatureFile.originalname, url: `/uploads/onboarding/${signatureFile.filename}`, mimeType: signatureFile.mimetype, size: signatureFile.size }
+      : undefined;
+    const generatedPdfAttachment = generatedPdfFile
+      ? { fileName: generatedPdfFile.originalname, url: `/uploads/onboarding/${generatedPdfFile.filename}`, mimeType: generatedPdfFile.mimetype, size: generatedPdfFile.size }
+      : undefined;
+
+    const created = await Onboarding.create({
+      employeeName: body.name,
+      role: "Employee",
+      startDate: body.startDate,
+      progress: Number.isFinite(Number(body.progress)) ? Number(body.progress) : 0,
+      documentsUploaded: docs,
+      documentsRequired: 4,
+      approvalStatus: approval,
+      w4FileName: w4File?.originalname || body.w4FileName || "",
+      i9FileName: i9File?.originalname || body.i9FileName || "",
+      signatureFileName: signatureFile?.originalname || body.signatureFileName || "",
+      generatedPdfFileName: generatedPdfFile?.originalname || body.generatedPdfFileName || "",
+      w4Attachment,
+      i9Attachment,
+      signatureAttachment,
+      generatedPdfAttachment,
+    });
+
+    return res.status(201).json({ item: withId(created.toObject()) });
+  } catch (err) {
+    return next(err);
   }
 });
 

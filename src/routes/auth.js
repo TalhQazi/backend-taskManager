@@ -4,7 +4,6 @@ const jwt = require("jsonwebtoken");
 const { z } = require("zod");
 
 const User = require("../models/User");
-const Employee = require("../models/Employee");
 const { requireAuth } = require("../middleware/auth");
 
 const router = express.Router();
@@ -15,7 +14,7 @@ const loginSchema = z
     email: z.string().optional(),
     password: z.string().min(1),
   })
-  .refine((value) => typeof value.username === "string" || typeof value.email === "string", {
+  .refine((v) => typeof v.username === "string" || typeof v.email === "string", {
     message: "Username or email is required",
   });
 
@@ -67,58 +66,6 @@ router.post("/login", async (req, res, next) => {
   }
 });
 
-router.post("/employee/login", async (req, res, next) => {
-  try {
-    const parsed = loginSchema.safeParse(req.body);
-    if (!parsed.success) {
-      return res.status(400).json({ error: { message: "Invalid payload" } });
-    }
-
-    const email = String(parsed.data.email || parsed.data.username || "").trim().toLowerCase();
-    const password = String(parsed.data.password || "");
-    if (!email) {
-      return res.status(400).json({ error: { message: "Invalid payload" } });
-    }
-
-    const employee = await Employee.findOne({ email }).lean();
-    if (!employee) {
-      return res.status(401).json({ error: { message: "Invalid credentials" } });
-    }
-
-    if (String(employee.status || "active").toLowerCase() !== "active") {
-      return res.status(403).json({ error: { message: "Account is not active" } });
-    }
-
-    const expectedPhone = String(employee.phone || "").replace(/\D/g, "");
-    const providedPhone = String(password).replace(/\D/g, "");
-
-    if (!expectedPhone || expectedPhone !== providedPhone) {
-      return res.status(401).json({ error: { message: "Invalid credentials" } });
-    }
-
-    const secret = process.env.JWT_SECRET;
-    if (!secret) {
-      return res.status(500).json({ error: { message: "JWT_SECRET is not set" } });
-    }
-
-    const token = jwt.sign(
-      { sub: String(employee._id), role: "employee", username: employee.email },
-      secret,
-      { expiresIn: "7d" }
-    );
-
-    return res.json({
-      item: {
-        token,
-        role: "employee",
-        username: employee.email,
-      },
-    });
-  } catch (err) {
-    return next(err);
-  }
-});
-
 const changePasswordSchema = z.object({
   currentPassword: z.string().min(1),
   newPassword: z.string().min(6),
@@ -160,30 +107,6 @@ router.get("/me", requireAuth, async (req, res, next) => {
     const userId = String(req.user?.sub || "");
     if (!userId) {
       return res.status(401).json({ error: { message: "Unauthorized" } });
-    }
-
-    const role = String(req.user?.role || "");
-    if (role === "employee") {
-      const employee = await Employee.findById(userId).lean();
-      if (!employee) {
-        return res.status(404).json({ error: { message: "User not found" } });
-      }
-
-      return res.json({
-        item: {
-          id: String(employee._id),
-          name: employee.name || "",
-          email: employee.email || "",
-          phone: employee.phone || "",
-          department: employee.department || "",
-          company: employee.company || "",
-          hireDate: employee.hireDate || "",
-          employeeRole: employee.role || "",
-          username: employee.email || "",
-          role: "employee",
-          status: employee.status || "",
-        },
-      });
     }
 
     const user = await User.findById(userId).lean();
