@@ -1,31 +1,21 @@
 const express = require("express");
 const { z } = require("zod");
 const multer = require("multer");
-const path = require("path");
 
 const Settings = require("../models/Settings");
 const { requireAuth } = require("../middleware/auth");
 
 const router = express.Router();
 
-// Configure multer for avatar uploads
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, path.resolve(__dirname, "..", "..", "uploads"));
-  },
-  filename: (req, file, cb) => {
-    const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
-    const ext = path.extname(file.originalname);
-    cb(null, "avatar-" + uniqueSuffix + ext);
-  },
-});
+// Configure multer for memory storage (for serverless environments like Vercel)
+const storage = multer.memoryStorage();
 
 const upload = multer({
   storage,
   limits: { fileSize: 5 * 1024 * 1024 }, // 5MB limit
   fileFilter: (req, file, cb) => {
     const allowedTypes = /jpeg|jpg|png|gif|webp/;
-    const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
+    const extname = allowedTypes.test(file.originalname.toLowerCase());
     const mimetype = allowedTypes.test(file.mimetype);
     if (extname && mimetype) {
       return cb(null, true);
@@ -53,6 +43,8 @@ const settingsSchema = z.object({
     .optional(),
   language: z.string().optional(),
   timezone: z.string().optional(),
+  avatarUrl: z.string().optional(),
+  avatarDataUrl: z.string().optional(),
 });
 
 router.get("/", requireAuth, async (req, res, next) => {
@@ -99,7 +91,7 @@ router.put("/", requireAuth, async (req, res, next) => {
   }
 });
 
-// Avatar upload endpoint
+// Avatar upload endpoint - stores as base64 data URL in MongoDB
 router.post("/avatar", requireAuth, upload.single("avatar"), async (req, res, next) => {
   try {
     const userId = String(req.user?.sub || "");
@@ -109,15 +101,17 @@ router.post("/avatar", requireAuth, upload.single("avatar"), async (req, res, ne
       return res.status(400).json({ error: { message: "No file uploaded" } });
     }
 
-    const avatarUrl = `${req.protocol}://${req.get("host")}/uploads/${req.file.filename}`;
+    // Convert file buffer to base64 data URL
+    const base64 = req.file.buffer.toString("base64");
+    const avatarDataUrl = `data:${req.file.mimetype};base64,${base64}`;
 
     const updated = await Settings.findOneAndUpdate(
       { userId },
-      { $set: { avatarUrl } },
+      { $set: { avatarUrl: "", avatarDataUrl } },
       { new: true, upsert: true }
     ).lean();
 
-    res.json({ item: updated, avatarUrl });
+    res.json({ item: updated, avatarUrl: avatarDataUrl, avatarDataUrl });
   } catch (err) {
     next(err);
   }

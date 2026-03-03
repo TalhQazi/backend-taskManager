@@ -33,6 +33,8 @@ const createSchema = z.object({
   mileage: z.number().min(0).optional(),
   lastInspection: z.union([z.string(), z.date()]).optional(),
   nextInspection: z.union([z.string(), z.date()]).optional(),
+  tagPhotoFileName: z.string().optional().default(""),
+  tagPhotoDataUrl: z.string().optional().default(""),
 });
 
 const adminUiSchema = z.object({
@@ -85,6 +87,11 @@ router.get("/", requireAuth, async (_req, res, next) => {
 
 router.post("/", requireAuth, async (req, res, next) => {
   try {
+    // Debug logging
+    console.log("[DEBUG] POST /vehicles req.body:", JSON.stringify(req.body, null, 2));
+    console.log("[DEBUG] tagPhotoFileName:", req.body?.tagPhotoFileName);
+    console.log("[DEBUG] tagPhotoDataUrl length:", req.body?.tagPhotoDataUrl?.length);
+    
     const adminParsed = adminUiSchema.safeParse(req.body);
     if (adminParsed.success) {
       const name = `${adminParsed.data.year} ${adminParsed.data.make} ${adminParsed.data.model}`.trim();
@@ -120,6 +127,8 @@ router.post("/", requireAuth, async (req, res, next) => {
 
     const created = await Vehicle.create({
       ...parsed.data,
+      tagPhotoFileName: parsed.data.tagPhotoFileName || "",
+      tagPhotoDataUrl: parsed.data.tagPhotoDataUrl || "",
       lastInspection: parsed.data.lastInspection ? new Date(parsed.data.lastInspection) : undefined,
       nextInspection: parsed.data.nextInspection ? new Date(parsed.data.nextInspection) : undefined,
     });
@@ -236,6 +245,9 @@ router.put("/:id", requireAuth, async (req, res, next) => {
     const patch = { ...parsed.data };
     if (patch.lastInspection) patch.lastInspection = new Date(patch.lastInspection);
     if (patch.nextInspection) patch.nextInspection = new Date(patch.nextInspection);
+    // Ensure photo fields are included in the update
+    if (typeof parsed.data.tagPhotoFileName === "string") patch.tagPhotoFileName = parsed.data.tagPhotoFileName;
+    if (typeof parsed.data.tagPhotoDataUrl === "string") patch.tagPhotoDataUrl = parsed.data.tagPhotoDataUrl;
 
     const updated = await Vehicle.findByIdAndUpdate(req.params.id, patch, {
       new: true,

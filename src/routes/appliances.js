@@ -31,11 +31,14 @@ const upload = multer({
 
 const createSchema = z.object({
   name: z.string().min(1),
-  category: z.string().min(1),
-  serialNumber: z.string().min(1),
-  status: z.enum(["operational", "needs-repair", "out-of-service"]).optional(),
+  type: z.enum(["residential", "commercial"]).optional().default("commercial"),
+  category: z.string().optional().default("appliance"),
+  serialNumber: z.string().optional().default(""),
+  status: z.enum(["active", "inactive", "operational", "needs-repair", "out-of-service"]).optional().default("active"),
   location: z.string().min(1),
+  purchaseDate: z.string().optional().default(""),
   warrantyExpiry: z.string().optional().default(""),
+  warrantyUntil: z.string().optional().default(""),
   lastMaintenance: z.string().optional().default(""),
   assignedTo: z.string().optional().nullable(),
   tagPhotoFileName: z.string().optional().default(""),
