@@ -14,6 +14,14 @@ const ApplianceSchema = new mongoose.Schema(
     warrantyExpiry: { type: String, default: "" },
     lastMaintenance: { type: String, default: "" },
     assignedTo: { type: String, default: null },
+    tagPhotoFileName: { type: String, default: "" },
+    tagPhotoDataUrl: { type: String, default: "" },
+    tagPhotoAttachment: {
+      fileName: { type: String, default: "" },
+      url: { type: String, default: "" },
+      mimeType: { type: String, default: "" },
+      size: { type: Number, default: 0 },
+    },
   },
   { timestamps: true }
 );

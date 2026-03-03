@@ -38,6 +38,8 @@ const createSchema = z.object({
   warrantyExpiry: z.string().optional().default(""),
   lastMaintenance: z.string().optional().default(""),
   assignedTo: z.string().optional().nullable(),
+  tagPhotoFileName: z.string().optional().default(""),
+  tagPhotoDataUrl: z.string().optional().default(""),
 });
 
 const updateSchema = createSchema.partial();

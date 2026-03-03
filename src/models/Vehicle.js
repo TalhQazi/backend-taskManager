@@ -20,8 +20,14 @@ const VehicleSchema = new mongoose.Schema(
     mileageText: { type: String, default: "" },
     lastInspection: { type: Date },
     nextInspection: { type: Date },
-    registrationFileName: { type: String, default: "" },
-    insuranceFileName: { type: String, default: "" },
+    tagPhotoFileName: { type: String, default: "" },
+    tagPhotoDataUrl: { type: String, default: "" },
+    tagPhotoAttachment: {
+      fileName: { type: String, default: "" },
+      url: { type: String, default: "" },
+      mimeType: { type: String, default: "" },
+      size: { type: Number, default: 0 },
+    },
   },
   { timestamps: true }
 );

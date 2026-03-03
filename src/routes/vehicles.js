@@ -46,8 +46,8 @@ const adminUiSchema = z.object({
   lastInspection: z.string().optional().default(""),
   nextInspection: z.string().optional().default(""),
   assignedTo: z.string().optional().default(""),
-  registrationFileName: z.string().optional().default(""),
-  insuranceFileName: z.string().optional().default(""),
+  tagPhotoFileName: z.string().optional().default(""),
+  tagPhotoDataUrl: z.string().optional().default(""),
 });
 
 const adminUiUpdateSchema = z
@@ -62,8 +62,8 @@ const adminUiUpdateSchema = z
     lastInspection: z.string().optional(),
     nextInspection: z.string().optional(),
     assignedTo: z.string().optional(),
-    registrationFileName: z.string().optional(),
-    insuranceFileName: z.string().optional(),
+    tagPhotoFileName: z.string().optional(),
+    tagPhotoDataUrl: z.string().optional(),
   })
   .partial();
 
@@ -104,8 +104,8 @@ router.post("/", requireAuth, async (req, res, next) => {
         mileageText: adminParsed.data.mileage || "",
         lastInspection: adminParsed.data.lastInspection ? new Date(adminParsed.data.lastInspection) : undefined,
         nextInspection: adminParsed.data.nextInspection ? new Date(adminParsed.data.nextInspection) : undefined,
-        registrationFileName: adminParsed.data.registrationFileName || "",
-        insuranceFileName: adminParsed.data.insuranceFileName || "",
+        tagPhotoFileName: adminParsed.data.tagPhotoFileName || "",
+        tagPhotoDataUrl: adminParsed.data.tagPhotoDataUrl || "",
         fuelLevel: 100,
       });
 
@@ -212,8 +212,8 @@ router.put("/:id", requireAuth, async (req, res, next) => {
       if (typeof adminParsed.data.nextInspection === "string") {
         patch.nextInspection = adminParsed.data.nextInspection ? new Date(adminParsed.data.nextInspection) : undefined;
       }
-      if (typeof adminParsed.data.registrationFileName === "string") patch.registrationFileName = adminParsed.data.registrationFileName;
-      if (typeof adminParsed.data.insuranceFileName === "string") patch.insuranceFileName = adminParsed.data.insuranceFileName;
+      if (typeof adminParsed.data.tagPhotoFileName === "string") patch.tagPhotoFileName = adminParsed.data.tagPhotoFileName;
+      if (typeof adminParsed.data.tagPhotoDataUrl === "string") patch.tagPhotoDataUrl = adminParsed.data.tagPhotoDataUrl;
 
       if (typeof patch.year === "string" || typeof patch.make === "string" || typeof patch.model === "string") {
         const existing = await Vehicle.findById(req.params.id).lean();
