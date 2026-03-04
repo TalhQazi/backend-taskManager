@@ -3,8 +3,8 @@ const mongoose = require("mongoose");
 const ApplianceSchema = new mongoose.Schema(
   {
     name: { type: String, required: true },
-    category: { type: String, required: true },
-    serialNumber: { type: String, required: true },
+    category: { type: String, default: "appliance" },
+    serialNumber: { type: String, default: "" },
     status: {
       type: String,
       enum: ["operational", "needs-repair", "out-of-service"],

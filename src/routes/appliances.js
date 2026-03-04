@@ -34,7 +34,7 @@ const createSchema = z.object({
   type: z.enum(["residential", "commercial"]).optional().default("commercial"),
   category: z.string().optional().default("appliance"),
   serialNumber: z.string().optional().default(""),
-  status: z.enum(["active", "inactive", "operational", "needs-repair", "out-of-service"]).optional().default("active"),
+  status: z.enum(["operational", "needs-repair", "out-of-service"]).optional().default("operational"),
   location: z.string().min(1),
   purchaseDate: z.string().optional().default(""),
   warrantyExpiry: z.string().optional().default(""),
