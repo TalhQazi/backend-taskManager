@@ -90,6 +90,9 @@ router.post("/", requireAuth, async (req, res, next) => {
 
 router.post("/upload", requireAuth, upload.single("file"), async (req, res, next) => {
   try {
+    console.log("Upload endpoint hit");
+    console.log("Request file:", req.file ? { name: req.file.originalname, size: req.file.size, mimetype: req.file.mimetype } : "No file");
+    
     const body = req.body || {};
     const payload = {
       title: body.title,
@@ -108,7 +111,8 @@ router.post("/upload", requireAuth, upload.single("file"), async (req, res, next
 
     const parsed = createSchema.safeParse(payload);
     if (!parsed.success) {
-      return res.status(400).json({ error: { message: "Invalid payload" } });
+      console.error("Validation failed:", parsed.error);
+      return res.status(400).json({ error: { message: "Invalid payload", details: parsed.error } });
     }
 
     const dueDate = parsed.data.dueDate ? new Date(parsed.data.dueDate) : undefined;
@@ -125,17 +129,28 @@ router.post("/upload", requireAuth, upload.single("file"), async (req, res, next
         : "");
 
     const f = req.file;
-    // For Vercel serverless, we store file metadata without saving to disk
-    const attachment = f
-      ? {
+    let attachment = undefined;
+    
+    if (f) {
+      console.log("Processing file:", f.originalname, "Size:", f.size);
+      if (f.buffer) {
+        const base64Data = f.buffer.toString("base64");
+        console.log("Base64 length:", base64Data.length);
+        attachment = {
           fileName: f.originalname,
-          url: "", // Files not persisted on serverless; store in cloud storage if needed
+          url: `data:${f.mimetype};base64,${base64Data}`,
           mimeType: f.mimetype,
           size: f.size,
-          buffer: f.buffer ? true : false, // Indicate file was received
-        }
-      : undefined;
+        };
+        console.log("Attachment created with URL length:", attachment.url.length);
+      } else {
+        console.error("File has no buffer!");
+      }
+    } else {
+      console.log("No file uploaded");
+    }
 
+    console.log("Creating task with attachment:", attachment ? "yes" : "no");
     const created = await Task.create({
       ...parsed.data,
       createdAt,
@@ -145,9 +160,11 @@ router.post("/upload", requireAuth, upload.single("file"), async (req, res, next
       attachment,
     });
 
+    console.log("Task created with ID:", created._id);
     const obj = created.toObject();
     return res.status(201).json({ item: withId(obj) });
   } catch (err) {
+    console.error("Upload error:", err);
     return next(err);
   }
 });
