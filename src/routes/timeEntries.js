@@ -2,17 +2,45 @@ const express = require("express");
 const { z } = require("zod");
 
 const TimeEntry = require("../models/TimeEntry");
+const Employee = require("../models/Employee");
+const User = require("../models/User");
+const TimeEditAuditLog = require("../models/TimeEditAuditLog");
 const { requireAuth } = require("../middleware/auth");
+const {
+  evaluateMealBreakCompliance,
+  evaluateOvertimeCompliance,
+  startOfWeekISO,
+  endOfWeekISO,
+} = require("../lib/complianceEngine");
 
 const router = express.Router();
+
+function escapeRegex(value) {
+  return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
 
 const createSchema = z.object({
   employee: z.string().min(1),
   avatar: z.string().optional().default(""),
+  userId: z.string().optional().default(""),
+  stateCode: z.string().optional().default(""),
+  hourlyRate: z.number().optional().default(0),
   date: z.union([z.string(), z.date()]),
   clockIn: z.string().optional().default(""),
   clockOut: z.string().optional().default(""),
   breakTime: z.string().optional().default(""),
+  clockInAt: z.union([z.string(), z.date()]).optional(),
+  clockOutAt: z.union([z.string(), z.date()]).optional(),
+  breaks: z
+    .array(
+      z.object({
+        type: z.enum(["meal", "rest"]).optional().default("meal"),
+        startAt: z.union([z.string(), z.date()]).optional(),
+        endAt: z.union([z.string(), z.date()]).optional(),
+      })
+    )
+    .optional()
+    .default([]),
   totalHours: z.number().optional().default(0),
   status: z.enum(["complete", "incomplete", "overtime"]).optional(),
   location: z.string().optional().default(""),
@@ -35,10 +63,158 @@ function withId(doc) {
   return { ...doc, id: String(doc._id) };
 }
 
-router.get("/", requireAuth, async (_req, res, next) => {
+function userDisplayName(userDoc) {
+  const name = String(userDoc?.name || "").trim();
+  if (name) return name;
+  const username = String(userDoc?.username || "").trim();
+  if (username) return username;
+  return "";
+}
+
+function employeeDisplayName(empDoc) {
+  const name = String(empDoc?.name || "").trim();
+  if (name) return name;
+  return "";
+}
+
+function toDateSafe(v) {
+  if (!v) return undefined;
+  const d = v instanceof Date ? v : new Date(v);
+  if (!Number.isFinite(d.getTime())) return undefined;
+  return d;
+}
+
+function parseHHMM(v) {
+  const s = String(v || "").trim();
+  const m = /^([01]?\d|2[0-3]):([0-5]\d)$/.exec(s);
+  if (!m) return null;
+  return { h: Number(m[1]), min: Number(m[2]) };
+}
+
+function combineDateAndTime(date, hhmm) {
+  const t = parseHHMM(hhmm);
+  if (!t) return undefined;
+  const d = new Date(date);
+  if (!Number.isFinite(d.getTime())) return undefined;
+  d.setHours(t.h, t.min, 0, 0);
+  return d;
+}
+
+function calcTotalHours(entry) {
+  const start = entry.clockInAt || combineDateAndTime(entry.date, entry.clockIn);
+  const end = entry.clockOutAt || combineDateAndTime(entry.date, entry.clockOut);
+  if (!start || !end) return 0;
+  const diffMs = new Date(end).getTime() - new Date(start).getTime();
+  if (!Number.isFinite(diffMs) || diffMs <= 0) return 0;
+  const totalMinutes = diffMs / 60000;
+
+  const breaks = Array.isArray(entry.breaks) ? entry.breaks : [];
+  const breakMinutes = breaks
+    .filter((b) => b?.startAt && b?.endAt)
+    .reduce((acc, b) => acc + Math.max(0, (new Date(b.endAt).getTime() - new Date(b.startAt).getTime()) / 60000), 0);
+
+  const paidMinutes = Math.max(0, totalMinutes - breakMinutes);
+  return Number((paidMinutes / 60).toFixed(2));
+}
+
+function getClientIp(req) {
+  const hdr = String(req.headers["x-forwarded-for"] || "").split(",")[0].trim();
+  return hdr || String(req.socket?.remoteAddress || "");
+}
+
+async function writeAuditLogs({ timeEntryId, before, after, editedByUserId, ipAddress }) {
+  const fields = [
+    "clockIn",
+    "clockOut",
+    "clockInAt",
+    "clockOutAt",
+    "breakTime",
+    "breaks",
+    "totalHours",
+    "status",
+    "location",
+  ];
+
+  const logs = [];
+  for (const f of fields) {
+    const a = before?.[f];
+    const b = after?.[f];
+    if (JSON.stringify(a) === JSON.stringify(b)) continue;
+    logs.push({
+      timeEntryId,
+      field: f,
+      originalValue: a,
+      modifiedValue: b,
+      editedByUserId,
+      ipAddress,
+    });
+  }
+
+  if (logs.length) {
+    await TimeEditAuditLog.insertMany(logs);
+  }
+}
+
+router.get("/", requireAuth, async (req, res, next) => {
   try {
-    const items = await TimeEntry.find().sort({ createdAt: -1 }).lean();
-    res.json({ items: items.map(withId) });
+    const employeeQuery = String(req.query?.employee || "").trim();
+    const filter = {};
+    if (employeeQuery) {
+      filter.employee = new RegExp(`^${escapeRegex(employeeQuery)}$`, "i");
+    }
+
+    const items = await TimeEntry.find(filter).sort({ createdAt: -1 }).lean();
+
+    const userIds = Array.from(
+      new Set(
+        items
+          .map((e) => String(e.userId || "").trim())
+          .filter(Boolean)
+      )
+    );
+
+    const users = userIds.length
+      ? await User.find({ _id: { $in: userIds } }, { name: 1, username: 1, email: 1 }).lean()
+      : [];
+
+    const userById = new Map(users.map((u) => [String(u._id), u]));
+
+    const emails = Array.from(
+      new Set(
+        users
+          .map((u) => String(u.email || "").trim().toLowerCase())
+          .filter(Boolean)
+      )
+    );
+
+    const emps = emails.length
+      ? await Employee.find({ email: { $in: emails } }, { name: 1, email: 1 }).lean()
+      : [];
+
+    const employeeByEmail = new Map(emps.map((e) => [String(e.email || "").trim().toLowerCase(), e]));
+
+    const enriched = items.map((e) => {
+      const uid = String(e.userId || "").trim();
+      const user = uid ? userById.get(uid) : null;
+      const email = String(user?.email || "").trim().toLowerCase();
+      const emp = email ? employeeByEmail.get(email) : null;
+      const resolved = employeeDisplayName(emp) || userDisplayName(user);
+      if (!resolved) return e;
+      return { ...e, employee: resolved };
+    });
+
+    // Trigger near-real-time compliance warnings for active shifts
+    const now = new Date();
+    const active = items.filter((e) => (e.clockInAt || e.clockIn) && !(e.clockOutAt || e.clockOut));
+    for (const e of active) {
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        await evaluateMealBreakCompliance({ timeEntry: e, now });
+      } catch {
+        // ignore compliance evaluation errors for listing endpoint
+      }
+    }
+    res.json({ items: enriched.map(withId) });
   } catch (err) {
     next(err);
   }
@@ -69,11 +245,189 @@ router.post("/", requireAuth, async (req, res, next) => {
 
     const created = await TimeEntry.create({
       ...parsed.data,
+      userId: parsed.data.userId || String(req.user?.sub || ""),
       date: new Date(parsed.data.date),
+      clockInAt: toDateSafe(parsed.data.clockInAt) || undefined,
+      clockOutAt: toDateSafe(parsed.data.clockOutAt) || undefined,
+      breaks: (parsed.data.breaks || []).map((b) => ({
+        type: b.type || "meal",
+        startAt: toDateSafe(b.startAt) || undefined,
+        endAt: toDateSafe(b.endAt) || undefined,
+      })),
     });
 
     const obj = created.toObject();
     return res.status(201).json({ item: withId(obj) });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+router.post("/clock-in", requireAuth, async (req, res, next) => {
+  try {
+    const schema = z.object({
+      employee: z.string().min(1),
+      location: z.string().optional().default(""),
+      stateCode: z.string().optional().default(""),
+      hourlyRate: z.number().optional().default(0),
+    });
+    const parsed = schema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: { message: "Invalid payload" } });
+
+    let employeeName = String(parsed.data.employee || "").trim();
+    try {
+      const userId = String(req.user?.sub || "").trim();
+      if (userId) {
+        const user = await User.findById(userId, { name: 1, username: 1, email: 1 }).lean();
+        const email = String(user?.email || "").trim().toLowerCase();
+        const emp = email ? await Employee.findOne({ email }, { name: 1, email: 1 }).lean() : null;
+        const resolved = employeeDisplayName(emp) || userDisplayName(user);
+        if (resolved) employeeName = resolved;
+      }
+    } catch {
+      // ignore name resolution errors
+    }
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    const existing = await TimeEntry.findOne({
+      employee: employeeName,
+      date: { $gte: today, $lt: new Date(today.getTime() + 24 * 60 * 60 * 1000) },
+      clockOutAt: { $exists: false },
+    }).lean();
+
+    if (existing) {
+      return res.status(400).json({ error: { message: "Already clocked in" } });
+    }
+
+    const created = await TimeEntry.create({
+      userId: String(req.user?.sub || ""),
+      employee: employeeName,
+      avatar: "",
+      stateCode: parsed.data.stateCode || "",
+      hourlyRate: Number(parsed.data.hourlyRate) || 0,
+      date: new Date(),
+      clockInAt: new Date(),
+      clockIn: "",
+      clockOut: "",
+      breaks: [],
+      breakTime: "",
+      totalHours: 0,
+      status: "incomplete",
+      location: parsed.data.location || "",
+    });
+
+    return res.status(201).json({ item: withId(created.toObject()) });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+router.post("/:id/breaks/start", requireAuth, async (req, res, next) => {
+  try {
+    const schema = z.object({ type: z.enum(["meal", "rest"]).optional().default("meal") });
+    const parsed = schema.safeParse(req.body || {});
+    if (!parsed.success) return res.status(400).json({ error: { message: "Invalid payload" } });
+
+    const entry = await TimeEntry.findById(req.params.id);
+    if (!entry) return res.status(404).json({ error: { message: "Time entry not found" } });
+
+    if (entry.clockOutAt) {
+      return res.status(400).json({ error: { message: "Cannot start break after clock-out" } });
+    }
+
+    entry.breaks = Array.isArray(entry.breaks) ? entry.breaks : [];
+    entry.breaks.push({ type: parsed.data.type, startAt: new Date(), endAt: undefined });
+    await entry.save();
+
+    await evaluateMealBreakCompliance({ timeEntry: entry.toObject(), now: new Date() });
+
+    return res.json({ item: withId(entry.toObject()) });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+router.post("/:id/breaks/end", requireAuth, async (req, res, next) => {
+  try {
+    const schema = z.object({ type: z.enum(["meal", "rest"]).optional().default("meal") });
+    const parsed = schema.safeParse(req.body || {});
+    if (!parsed.success) return res.status(400).json({ error: { message: "Invalid payload" } });
+
+    const entry = await TimeEntry.findById(req.params.id);
+    if (!entry) return res.status(404).json({ error: { message: "Time entry not found" } });
+
+    const breaks = Array.isArray(entry.breaks) ? entry.breaks : [];
+    for (let i = breaks.length - 1; i >= 0; i--) {
+      const b = breaks[i];
+      if (String(b.type || "meal") !== parsed.data.type) continue;
+      if (b.startAt && !b.endAt) {
+        b.endAt = new Date();
+        entry.breaks = breaks;
+        break;
+      }
+    }
+
+    await entry.save();
+
+    await evaluateMealBreakCompliance({ timeEntry: entry.toObject(), now: new Date() });
+
+    return res.json({ item: withId(entry.toObject()) });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+router.post("/:id/clock-out", requireAuth, async (req, res, next) => {
+  try {
+    const entry = await TimeEntry.findById(req.params.id);
+    if (!entry) return res.status(404).json({ error: { message: "Time entry not found" } });
+
+    if (!entry.clockInAt && !entry.clockIn) {
+      return res.status(400).json({ error: { message: "Cannot clock out without clock in" } });
+    }
+
+    if (entry.clockOutAt) {
+      return res.status(400).json({ error: { message: "Already clocked out" } });
+    }
+
+    entry.clockOutAt = new Date();
+    entry.status = "complete";
+    entry.totalHours = calcTotalHours(entry);
+
+    const check = await evaluateMealBreakCompliance({ timeEntry: entry.toObject(), now: new Date() });
+    if (check?.hardStop) {
+      return res.status(400).json({ error: { message: "Meal break required before clock-out" } });
+    }
+
+    await entry.save();
+
+    const refDate = entry.date || new Date();
+    const weekStart = startOfWeekISO(refDate);
+    const weekEnd = endOfWeekISO(refDate);
+    const weekEntries = await TimeEntry.find({
+      employee: entry.employee,
+      date: { $gte: new Date(`${weekStart}T00:00:00.000Z`), $lte: new Date(`${weekEnd}T23:59:59.999Z`) },
+    }).lean();
+
+    let hourlyRate = Number(entry.hourlyRate) || 0;
+    if (!hourlyRate) {
+      const emp = await Employee.findOne({ name: entry.employee }).lean();
+      const rate = Number(String(emp?.payRate || "").replace(/[^0-9.]/g, ""));
+      if (Number.isFinite(rate)) hourlyRate = rate;
+    }
+
+    await evaluateOvertimeCompliance({
+      employee: entry.employee,
+      userId: entry.userId,
+      timeEntries: weekEntries,
+      hourlyRate,
+      stateCode: entry.stateCode,
+      refDate,
+    });
+
+    return res.json({ item: withId(entry.toObject()) });
   } catch (err) {
     return next(err);
   }
@@ -105,8 +459,42 @@ router.put("/:id", requireAuth, async (req, res, next) => {
       return res.status(400).json({ error: { message: "Invalid payload" } });
     }
 
+    const before = await TimeEntry.findById(req.params.id).lean();
+    if (!before) {
+      return res.status(404).json({ error: { message: "Time entry not found" } });
+    }
+
     const patch = { ...parsed.data };
     if (patch.date) patch.date = new Date(patch.date);
+    if (patch.clockInAt) patch.clockInAt = toDateSafe(patch.clockInAt);
+    if (patch.clockOutAt) patch.clockOutAt = toDateSafe(patch.clockOutAt);
+    if (patch.breaks) {
+      patch.breaks = (patch.breaks || []).map((b) => ({
+        type: b.type || "meal",
+        startAt: toDateSafe(b.startAt),
+        endAt: toDateSafe(b.endAt),
+      }));
+    }
+
+    const merged = { ...before, ...patch };
+    if (merged.clockOutAt || merged.clockOut) {
+      const tmp = { ...merged };
+      const totalHours = calcTotalHours(tmp);
+      patch.totalHours = totalHours;
+      patch.status = "complete";
+    }
+
+    if ((patch.clockOutAt || patch.clockOut) && !(patch.breaks || before.breaks)) {
+      // keep existing behavior
+    }
+
+    if (patch.clockOutAt || patch.clockOut) {
+      const tmp = { ...before, ...patch };
+      const check = await evaluateMealBreakCompliance({ timeEntry: tmp, now: new Date() });
+      if (check?.hardStop) {
+        return res.status(400).json({ error: { message: "Meal break required before clock-out" } });
+      }
+    }
 
     const updated = await TimeEntry.findByIdAndUpdate(req.params.id, patch, {
       new: true,
@@ -114,6 +502,40 @@ router.put("/:id", requireAuth, async (req, res, next) => {
 
     if (!updated) {
       return res.status(404).json({ error: { message: "Time entry not found" } });
+    }
+
+    await writeAuditLogs({
+      timeEntryId: String(updated._id),
+      before,
+      after: updated,
+      editedByUserId: String(req.user?.sub || ""),
+      ipAddress: getClientIp(req),
+    });
+
+    if (updated.clockOutAt || updated.clockOut) {
+      const refDate = updated.date || new Date();
+      const weekStart = startOfWeekISO(refDate);
+      const weekEnd = endOfWeekISO(refDate);
+      const weekEntries = await TimeEntry.find({
+        employee: updated.employee,
+        date: { $gte: new Date(`${weekStart}T00:00:00.000Z`), $lte: new Date(`${weekEnd}T23:59:59.999Z`) },
+      }).lean();
+
+      let hourlyRate = Number(updated.hourlyRate) || 0;
+      if (!hourlyRate) {
+        const emp = await Employee.findOne({ name: updated.employee }).lean();
+        const rate = Number(String(emp?.payRate || "").replace(/[^0-9.]/g, ""));
+        if (Number.isFinite(rate)) hourlyRate = rate;
+      }
+
+      await evaluateOvertimeCompliance({
+        employee: updated.employee,
+        userId: updated.userId,
+        timeEntries: weekEntries,
+        hourlyRate,
+        stateCode: updated.stateCode,
+        refDate,
+      });
     }
 
     return res.json({ item: withId(updated) });

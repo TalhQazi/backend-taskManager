@@ -6,6 +6,7 @@ const fs = require("fs");
 
 const Task = require("../models/Task");
 const { requireAuth } = require("../middleware/auth");
+const { checkAndFlagOffTheClock } = require("../lib/offTheClockWork");
 
 const router = express.Router();
 
@@ -79,6 +80,14 @@ router.post("/", requireAuth, async (req, res, next) => {
       createdAt,
       assigneeInitials,
       dueDate,
+    });
+
+    await checkAndFlagOffTheClock({
+      employee: parsed.data.assignee,
+      userId: String(req.user?.sub || ""),
+      timestamp: new Date(),
+      activityType: "task_create",
+      metadata: { taskId: String(created._id), title: created.title },
     });
 
     const obj = created.toObject();
@@ -160,6 +169,14 @@ router.post("/upload", requireAuth, upload.single("file"), async (req, res, next
       attachment,
     });
 
+    await checkAndFlagOffTheClock({
+      employee: parsed.data.assignee,
+      userId: String(req.user?.sub || ""),
+      timestamp: new Date(),
+      activityType: "task_create_with_attachment",
+      metadata: { taskId: String(created._id), title: created.title },
+    });
+
     console.log("Task created with ID:", created._id);
     const obj = created.toObject();
     return res.status(201).json({ item: withId(obj) });
@@ -175,6 +192,14 @@ router.put("/:id", requireAuth, async (req, res, next) => {
     if (!parsed.success) {
       return res.status(400).json({ error: { message: "Invalid payload" } });
     }
+
+    await checkAndFlagOffTheClock({
+      employee: parsed.data.assignee,
+      userId: String(req.user?.sub || ""),
+      timestamp: new Date(),
+      activityType: "task_update",
+      metadata: { taskId: String(req.params.id) },
+    });
 
     const patch = { ...parsed.data };
     if (patch.dueDate) {

@@ -4,6 +4,7 @@ const { z } = require("zod");
 const Message = require("../models/Message");
 const { requireAuth } = require("../middleware/auth");
 const { encryptString, decryptString } = require("../lib/encryption");
+const { checkAndFlagOffTheClock } = require("../lib/offTheClockWork");
 
 const router = express.Router();
 
@@ -71,6 +72,14 @@ router.post("/", requireAuth, async (req, res, next) => {
     const parsed = createSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: { message: "Invalid payload" } });
 
+    await checkAndFlagOffTheClock({
+      employee: parsed.data.sender,
+      userId: String(req.user?.sub || ""),
+      timestamp: parsed.data.timestamp,
+      activityType: "message_create",
+      metadata: { recipient: parsed.data.recipient, type: parsed.data.type },
+    });
+
     const created = await Message.create({
       ...parsed.data,
       title: typeof parsed.data.title === "string" ? encryptString(parsed.data.title) : "",
@@ -86,6 +95,16 @@ router.put("/:id", requireAuth, async (req, res, next) => {
   try {
     const parsed = updateSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: { message: "Invalid payload" } });
+
+    if (typeof parsed.data.sender === "string" || typeof parsed.data.timestamp === "string") {
+      await checkAndFlagOffTheClock({
+        employee: parsed.data.sender,
+        userId: String(req.user?.sub || ""),
+        timestamp: parsed.data.timestamp || new Date(),
+        activityType: "message_update",
+        metadata: { messageId: String(req.params.id) },
+      });
+    }
 
     const patch = { ...parsed.data };
     if (typeof patch.title === "string") patch.title = encryptString(patch.title);

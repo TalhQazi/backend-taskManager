@@ -3,6 +3,7 @@ const { z } = require("zod");
 
 const Event = require("../models/Event");
 const { requireAuth } = require("../middleware/auth");
+const { checkAndFlagOffTheClock } = require("../lib/offTheClockWork");
 
 const router = express.Router();
 
@@ -63,6 +64,14 @@ router.post("/", requireAuth, async (req, res, next) => {
     const parsed = createSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: { message: "Invalid payload" } });
 
+    await checkAndFlagOffTheClock({
+      employee: parsed.data.assignee,
+      userId: String(req.user?.sub || ""),
+      timestamp: new Date(),
+      activityType: "event_create",
+      metadata: { title: parsed.data.title, type: parsed.data.type },
+    });
+
     const created = await Event.create(parsed.data);
     res.status(201).json({ item: withId(created.toObject()) });
   } catch (err) {
@@ -96,6 +105,14 @@ router.put("/:id", requireAuth, async (req, res, next) => {
 
     const parsed = updateSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: { message: "Invalid payload" } });
+
+    await checkAndFlagOffTheClock({
+      employee: parsed.data.assignee,
+      userId: String(req.user?.sub || ""),
+      timestamp: new Date(),
+      activityType: "event_update",
+      metadata: { eventId: String(req.params.id) },
+    });
 
     const updated = await Event.findByIdAndUpdate(req.params.id, parsed.data, { new: true }).lean();
     if (!updated) return res.status(404).json({ error: { message: "Event not found" } });

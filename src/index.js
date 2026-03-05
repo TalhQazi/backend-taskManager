@@ -24,6 +24,7 @@ const reportsRoutes = require("./routes/reports");
 const usersRoutes = require("./routes/users");
 const dashboardRoutes = require("./routes/dashboard");
 const vendorsRoutes = require("./routes/vendors");
+const complianceRoutes = require("./routes/compliance");
 
 const app = express();
 
@@ -92,6 +93,7 @@ app.use("/api/reports", reportsRoutes);
 app.use("/api/users", usersRoutes);
 app.use("/api/dashboard", dashboardRoutes);
 app.use("/api/vendors", vendorsRoutes);
+app.use("/api/compliance", complianceRoutes);
 
 app.use(notFoundHandler);
 app.use(errorHandler);
