@@ -5,6 +5,7 @@ const { z } = require("zod");
 
 const User = require("../models/User");
 const { requireAuth } = require("../middleware/auth");
+const { logLoginSuccess, logLoginFailure } = require("../middleware/auditLog");
 
 const router = express.Router();
 
@@ -35,11 +36,15 @@ router.post("/login", async (req, res, next) => {
       $or: [{ username: identifier }, { email: identifier }],
     }).lean();
     if (!user) {
+      // Log failed login - user not found
+      await logLoginFailure(identifier, req, "User not found");
       return res.status(401).json({ error: { message: "Invalid credentials" } });
     }
 
     const ok = await bcrypt.compare(password, user.passwordHash);
     if (!ok) {
+      // Log failed login - wrong password
+      await logLoginFailure(user.username, req, "Invalid password");
       return res.status(401).json({ error: { message: "Invalid credentials" } });
     }
 
@@ -53,6 +58,9 @@ router.post("/login", async (req, res, next) => {
       secret,
       { expiresIn: "7d" }
     );
+
+    // Log successful login
+    await logLoginSuccess(user, req);
 
     return res.json({
       item: {

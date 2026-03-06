@@ -23,7 +23,7 @@ const createSchema = z.object({
   email: z.string().optional().default(""),
   username: z.string().optional(),
   password: z.string().min(6),
-  role: z.enum(["admin", "manager", "employee"]),
+  role: z.enum(["super-admin", "admin", "manager", "employee"]),
   status: z.enum(["active", "inactive", "pending"]).optional(),
 });
 
@@ -33,12 +33,12 @@ const updateSchema = z
     email: z.string().optional(),
     username: z.string().min(1).optional(),
     password: z.string().min(6).optional(),
-    role: z.enum(["admin", "manager", "employee"]).optional(),
+    role: z.enum(["super-admin", "admin", "manager", "employee"]).optional(),
     status: z.enum(["active", "inactive", "pending"]).optional(),
   })
   .partial();
 
-router.get("/", requireAuth, requireRole(["admin", "manager"]), async (_req, res, next) => {
+router.get("/", requireAuth, requireRole(["super-admin", "admin", "manager"]), async (_req, res, next) => {
   try {
     const items = await User.find().sort({ createdAt: -1 }).lean();
     res.json({ items: items.map(sanitizeUser) });
@@ -47,7 +47,7 @@ router.get("/", requireAuth, requireRole(["admin", "manager"]), async (_req, res
   }
 });
 
-router.post("/", requireAuth, requireRole(["admin"]), async (req, res, next) => {
+router.post("/", requireAuth, requireRole(["super-admin", "admin"]), async (req, res, next) => {
   try {
     const parsed = createSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -83,7 +83,7 @@ router.post("/", requireAuth, requireRole(["admin"]), async (req, res, next) => 
   }
 });
 
-router.put("/:id", requireAuth, requireRole(["admin"]), async (req, res, next) => {
+router.put("/:id", requireAuth, requireRole(["super-admin", "admin"]), async (req, res, next) => {
   try {
     const parsed = updateSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -116,7 +116,7 @@ router.put("/:id", requireAuth, requireRole(["admin"]), async (req, res, next) =
   }
 });
 
-router.delete("/:id", requireAuth, requireRole(["admin"]), async (req, res, next) => {
+router.delete("/:id", requireAuth, requireRole(["super-admin", "admin"]), async (req, res, next) => {
   try {
     const deleted = await User.findByIdAndDelete(req.params.id).lean();
     if (!deleted) {

@@ -2,6 +2,7 @@ const express = require("express");
 const { z } = require("zod");
 
 const Message = require("../models/Message");
+const Employee = require("../models/Employee");
 const { requireAuth } = require("../middleware/auth");
 const { encryptString, decryptString } = require("../lib/encryption");
 const { checkAndFlagOffTheClock } = require("../lib/offTheClockWork");
@@ -40,15 +41,174 @@ const createSchema = z.object({
 
 const updateSchema = createSchema.partial();
 
-router.get("/", requireAuth, async (_req, res, next) => {
+// Get all messages (with optional filtering)
+router.get("/", requireAuth, async (req, res, next) => {
   try {
-    const items = await Message.find().sort({ createdAt: -1 }).lean();
+    const { sender, recipient, type, user } = req.query;
+    let query = {};
+
+    // If 'user' param provided, get all messages where user is sender OR recipient
+    if (user) {
+      query = {
+        $or: [
+          { sender: user },
+          { recipient: user }
+        ],
+        type: "direct"
+      };
+    } else {
+      // Otherwise apply individual filters
+      if (sender) query.sender = sender;
+      if (recipient) query.recipient = recipient;
+      if (type) query.type = type;
+    }
+
+    const items = await Message.find(query).sort({ createdAt: -1 }).lean();
     res.json({ items: items.map((x) => withId(decryptOut(x))) });
   } catch (err) {
     next(err);
   }
 });
 
+// Get conversation between two users
+router.get("/conversation/:user1/:user2", requireAuth, async (req, res, next) => {
+  try {
+    const { user1, user2 } = req.params;
+
+    const items = await Message.find({
+      type: "direct",
+      $or: [
+        { sender: user1, recipient: user2 },
+        { sender: user2, recipient: user1 }
+      ]
+    }).sort({ timestamp: 1 }).lean();
+
+    res.json({ items: items.map((x) => withId(decryptOut(x))) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Get conversations list for a user (with last message and unread count)
+router.get("/conversations/:user", requireAuth, async (req, res, next) => {
+  try {
+    const { user } = req.params;
+
+    // Get all direct messages where user is sender or recipient
+    const messages = await Message.find({
+      type: "direct",
+      $or: [
+        { sender: user },
+        { recipient: user }
+      ]
+    }).sort({ timestamp: -1 }).lean();
+
+    // Get all employees for reference
+    const employees = await Employee.find().lean();
+
+    // Group by conversation partner
+    const conversationMap = new Map();
+
+    // Initialize with all active employees
+    employees.forEach((emp) => {
+      if (emp.name !== user) {
+        conversationMap.set(emp.name, {
+          employee: {
+            id: String(emp._id),
+            name: emp.name,
+            email: emp.email,
+            department: emp.department || "",
+            status: emp.status || "active",
+            initials: emp.initials || emp.name.split(" ").map(n => n[0]).slice(0, 2).join("").toUpperCase()
+          },
+          lastMessage: null,
+          unreadCount: 0
+        });
+      }
+    });
+
+    // Process messages
+    messages.forEach((msg) => {
+      const isSentByUser = msg.sender === user;
+      const otherPerson = isSentByUser ? msg.recipient : msg.sender;
+
+      if (!conversationMap.has(otherPerson)) {
+        // Create entry for unknown person (not in employees list)
+        conversationMap.set(otherPerson, {
+          employee: {
+            id: otherPerson,
+            name: otherPerson,
+            email: "",
+            department: "",
+            status: "active",
+            initials: otherPerson.split(" ").map(n => n[0]).slice(0, 2).join("").toUpperCase()
+          },
+          lastMessage: null,
+          unreadCount: 0
+        });
+      }
+
+      const conv = conversationMap.get(otherPerson);
+
+      // Update last message if this is newer
+      if (!conv.lastMessage || new Date(msg.timestamp) > new Date(conv.lastMessage.timestamp)) {
+        conv.lastMessage = withId(decryptOut(msg));
+      }
+
+      // Count unread messages (not sent by user and not read)
+      if (!isSentByUser && msg.status !== "read") {
+        conv.unreadCount++;
+      }
+    });
+
+    // Convert to array and sort by last message time
+    const conversations = Array.from(conversationMap.values())
+      .filter((conv) => conv.lastMessage !== null || conv.employee.status === "active")
+      .sort((a, b) => {
+        if (!a.lastMessage && !b.lastMessage) return 0;
+        if (!a.lastMessage) return 1;
+        if (!b.lastMessage) return -1;
+        return new Date(b.lastMessage.timestamp) - new Date(a.lastMessage.timestamp);
+      });
+
+    res.json({ items: conversations });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Mark messages as read
+router.post("/mark-read", requireAuth, async (req, res, next) => {
+  try {
+    const schema = z.object({
+      sender: z.string().min(1),
+      recipient: z.string().min(1)
+    });
+
+    const parsed = schema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ error: { message: "Invalid payload" } });
+    }
+
+    const { sender, recipient } = parsed.data;
+
+    // Mark all messages from sender to recipient as read
+    await Message.updateMany(
+      {
+        sender: sender,
+        recipient: recipient,
+        status: { $ne: "read" }
+      },
+      { $set: { status: "read" } }
+    );
+
+    res.json({ success: true, message: "Messages marked as read" });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Create new message
 router.post("/", requireAuth, async (req, res, next) => {
   try {
     const notificationParsed = notificationSchema.safeParse(req.body);
@@ -91,6 +251,7 @@ router.post("/", requireAuth, async (req, res, next) => {
   }
 });
 
+// Update message
 router.put("/:id", requireAuth, async (req, res, next) => {
   try {
     const parsed = updateSchema.safeParse(req.body);
@@ -119,6 +280,7 @@ router.put("/:id", requireAuth, async (req, res, next) => {
   }
 });
 
+// Delete message
 router.delete("/:id", requireAuth, async (req, res, next) => {
   try {
     const deleted = await Message.findByIdAndDelete(req.params.id).lean();

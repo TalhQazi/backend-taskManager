@@ -7,6 +7,7 @@ require("dotenv").config();
 
 const { connectDb } = require("./lib/db");
 const { notFoundHandler, errorHandler } = require("./middleware/error");
+const { auditLogMiddleware } = require("./middleware/auditLog");
 
 const authRoutes = require("./routes/auth");
 const tasksRoutes = require("./routes/tasks");
@@ -25,6 +26,7 @@ const usersRoutes = require("./routes/users");
 const dashboardRoutes = require("./routes/dashboard");
 const vendorsRoutes = require("./routes/vendors");
 const complianceRoutes = require("./routes/compliance");
+const activityLogsRoutes = require("./routes/activityLogs");
 
 const app = express();
 
@@ -69,6 +71,8 @@ app.use(
 app.use(express.json({ limit: "1mb" }));
 app.use(morgan("dev"));
 
+app.use(auditLogMiddleware());
+
 app.use("/uploads", express.static(uploadsDir));
 
 app.get("/health", (_req, res) => {
@@ -94,6 +98,7 @@ app.use("/api/users", usersRoutes);
 app.use("/api/dashboard", dashboardRoutes);
 app.use("/api/vendors", vendorsRoutes);
 app.use("/api/compliance", complianceRoutes);
+app.use("/api/activity-logs", activityLogsRoutes);
 
 app.use(notFoundHandler);
 app.use(errorHandler);
