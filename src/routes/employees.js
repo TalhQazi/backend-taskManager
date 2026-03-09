@@ -1,8 +1,9 @@
 const express = require("express");
 const { z } = require("zod");
+const bcrypt = require("bcryptjs");
 
 const Employee = require("../models/Employee");
-const { requireAuth } = require("../middleware/auth");
+const { requireAuth, requireRole } = require("../middleware/auth");
 
 const router = express.Router();
 
@@ -11,8 +12,8 @@ const createSchema = z.object({
   initials: z.string().optional().default(""),
   email: z.string().min(1),
   phone: z.string().optional().default(""),
+  category: z.string().optional().default(""),
   role: z.string().optional().default(""),
-  department: z.string().optional().default(""),
   company: z.string().optional().default(""),
   location: z.string().optional().default(""),
   status: z.enum(["active", "inactive", "on-leave"]).optional(),
@@ -20,13 +21,18 @@ const createSchema = z.object({
   shift: z.string().optional().default(""),
   hireDate: z.string().optional().default(""),
   joinDate: z.union([z.string(), z.date()]).optional(),
+  password: z.string().min(1),
 });
 
-const updateSchema = createSchema.partial();
+const updateSchema = createSchema
+  .omit({ password: true })
+  .extend({ password: z.string().min(1).optional() })
+  .partial();
 
 function withId(doc) {
   if (!doc) return doc;
-  return { ...doc, id: String(doc._id) };
+  const { password, passwordHash, ...rest } = doc;
+  return { ...rest, id: String(doc._id) };
 }
 
 router.get("/", requireAuth, async (_req, res, next) => {
@@ -56,10 +62,15 @@ router.post("/", requireAuth, async (req, res, next) => {
         .join("")
         .toUpperCase();
 
+    const passwordHash = await bcrypt.hash(parsed.data.password, 10);
+
+    const { password, ...employeePayload } = parsed.data;
+
     const created = await Employee.create({
-      ...parsed.data,
+      ...employeePayload,
       initials,
       joinDate,
+      passwordHash,
     });
 
     const obj = created.toObject();
@@ -77,6 +88,13 @@ router.put("/:id", requireAuth, async (req, res, next) => {
     }
 
     const patch = { ...parsed.data };
+
+    if (typeof patch.password === "string" && patch.password.trim()) {
+      patch.passwordHash = await bcrypt.hash(patch.password, 10);
+    }
+
+    if (typeof patch.password === "string") delete patch.password;
+
     const joinDateSource = patch.joinDate || patch.hireDate;
     if (joinDateSource) patch.joinDate = new Date(joinDateSource);
     if (typeof patch.hireDate === "string") delete patch.hireDate;
@@ -111,6 +129,46 @@ router.delete("/:id", requireAuth, async (req, res, next) => {
       return res.status(404).json({ error: { message: "Employee not found" } });
     }
     return res.status(204).send();
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// Super Admin: Reset Employee Password
+router.post("/:id/reset-password", requireAuth, requireRole(["super-admin"]), async (req, res, next) => {
+  try {
+    const resetSchema = z.object({
+      newPassword: z.string().min(6, "Password must be at least 6 characters"),
+      confirmPassword: z.string().min(1, "Confirm password is required"),
+    });
+
+    const parsed = resetSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ error: { message: parsed.error.errors[0]?.message || "Invalid payload" } });
+    }
+
+    const { newPassword, confirmPassword } = parsed.data;
+
+    // Validate passwords match
+    if (newPassword !== confirmPassword) {
+      return res.status(400).json({ error: { message: "Passwords do not match" } });
+    }
+
+    // Hash the new password
+    const passwordHash = await bcrypt.hash(newPassword, 10);
+
+    // Update employee password
+    const updated = await Employee.findByIdAndUpdate(
+      req.params.id,
+      { passwordHash },
+      { new: true }
+    ).lean();
+
+    if (!updated) {
+      return res.status(404).json({ error: { message: "Employee not found" } });
+    }
+
+    return res.json({ success: true, message: "Password reset successfully" });
   } catch (err) {
     return next(err);
   }

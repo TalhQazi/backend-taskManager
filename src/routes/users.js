@@ -7,6 +7,14 @@ const { requireAuth, requireRole } = require("../middleware/auth");
 
 const router = express.Router();
 
+const resetPasswordSchema = z.object({
+  newPassword: z.string().min(6, "Password must be at least 6 characters"),
+  confirmPassword: z.string(),
+}).refine((data) => data.newPassword === data.confirmPassword, {
+  message: "Passwords do not match",
+  path: ["confirmPassword"],
+});
+
 function withId(doc) {
   if (!doc) return doc;
   return { ...doc, id: String(doc._id) };
@@ -123,6 +131,38 @@ router.delete("/:id", requireAuth, requireRole(["super-admin", "admin"]), async 
       return res.status(404).json({ error: { message: "User not found" } });
     }
     return res.status(204).send();
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// Super-admin only: Reset any user's password
+router.post("/:id/reset-password", requireAuth, requireRole(["super-admin"]), async (req, res, next) => {
+  try {
+    const parsed = resetPasswordSchema.safeParse(req.body);
+    if (!parsed.success) {
+      const errorMsg = parsed.error.errors.map((e) => e.message).join(", ");
+      return res.status(400).json({ error: { message: errorMsg } });
+    }
+
+    const { newPassword } = parsed.data;
+    const passwordHash = await bcrypt.hash(newPassword, 10);
+
+    const updated = await User.findByIdAndUpdate(
+      req.params.id,
+      { passwordHash },
+      { new: true }
+    ).lean();
+
+    if (!updated) {
+      return res.status(404).json({ error: { message: "User not found" } });
+    }
+
+    return res.json({ 
+      success: true,
+      message: "Password reset successfully",
+      item: sanitizeUser(updated)
+    });
   } catch (err) {
     return next(err);
   }

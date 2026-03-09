@@ -27,9 +27,7 @@ const upload = multer({
 const createSchema = z.object({
   title: z.string().min(1),
   description: z.string().optional().default(""),
-  assignee: z.string().optional().default(""),
-  assigneeInitials: z.string().optional().default(""),
-  location: z.string().optional().default(""),
+  assignees: z.array(z.string()).optional().default([]),
   priority: z.enum(["high", "medium", "low"]).optional(),
   status: z.enum(["pending", "in-progress", "completed", "overdue"]).optional(),
   dueDate: z.union([z.string(), z.date()]).optional(),
@@ -43,7 +41,23 @@ const updateSchema = createSchema.partial();
 
 function withId(doc) {
   if (!doc) return doc;
-  return { ...doc, id: String(doc._id) };
+  const legacyAssignee = typeof doc.assignee === "string" ? doc.assignee : "";
+  const nextAssignees = Array.isArray(doc.assignees)
+    ? doc.assignees
+    : legacyAssignee
+      ? [legacyAssignee]
+      : [];
+  const { assignee, assigneeInitials, location, ...rest } = doc;
+  return { ...rest, assignees: nextAssignees, id: String(doc._id) };
+}
+
+function normalizeAssignees(input) {
+  if (Array.isArray(input)) return input.filter((s) => typeof s === "string" && s.trim()).map((s) => s.trim());
+  if (typeof input === "string") {
+    const v = input.trim();
+    return v ? [v] : [];
+  }
+  return [];
 }
 
 router.get("/", requireAuth, async (_req, res, next) => {
@@ -57,33 +71,26 @@ router.get("/", requireAuth, async (_req, res, next) => {
 
 router.post("/", requireAuth, async (req, res, next) => {
   try {
-    const parsed = createSchema.safeParse(req.body);
+    const parsed = createSchema.safeParse({
+      ...req.body,
+      assignees: normalizeAssignees(req.body?.assignees ?? req.body?.assignee),
+    });
     if (!parsed.success) {
       return res.status(400).json({ error: { message: "Invalid payload" } });
     }
 
     const dueDate = parsed.data.dueDate ? new Date(parsed.data.dueDate) : undefined;
     const createdAt = parsed.data.createdAt || new Date().toISOString().split("T")[0];
-    const assigneeInitials =
-      parsed.data.assigneeInitials ||
-      (parsed.data.assignee
-        ? parsed.data.assignee
-            .split(" ")
-            .map((n) => n[0])
-            .slice(0, 2)
-            .join("")
-            .toUpperCase()
-        : "");
+    const firstAssignee = parsed.data.assignees?.[0] || "";
 
     const created = await Task.create({
       ...parsed.data,
       createdAt,
-      assigneeInitials,
       dueDate,
     });
 
     await checkAndFlagOffTheClock({
-      employee: parsed.data.assignee,
+      employee: firstAssignee,
       userId: String(req.user?.sub || ""),
       timestamp: new Date(),
       activityType: "task_create",
@@ -103,12 +110,22 @@ router.post("/upload", requireAuth, upload.single("file"), async (req, res, next
     console.log("Request file:", req.file ? { name: req.file.originalname, size: req.file.size, mimetype: req.file.mimetype } : "No file");
     
     const body = req.body || {};
+
+    let parsedAssignees = [];
+    if (typeof body.assignees === "string" && body.assignees.trim()) {
+      try {
+        parsedAssignees = JSON.parse(body.assignees);
+      } catch {
+        parsedAssignees = body.assignees;
+      }
+    } else {
+      parsedAssignees = body.assignee;
+    }
+
     const payload = {
       title: body.title,
       description: body.description,
-      assignee: body.assignee,
-      assigneeInitials: body.assigneeInitials,
-      location: body.location,
+      assignees: normalizeAssignees(parsedAssignees),
       priority: body.priority,
       status: body.status,
       dueDate: body.dueDate,
@@ -126,16 +143,7 @@ router.post("/upload", requireAuth, upload.single("file"), async (req, res, next
 
     const dueDate = parsed.data.dueDate ? new Date(parsed.data.dueDate) : undefined;
     const createdAt = parsed.data.createdAt || new Date().toISOString().split("T")[0];
-    const assigneeInitials =
-      parsed.data.assigneeInitials ||
-      (parsed.data.assignee
-        ? parsed.data.assignee
-            .split(" ")
-            .map((n) => n[0])
-            .slice(0, 2)
-            .join("")
-            .toUpperCase()
-        : "");
+    const firstAssignee = parsed.data.assignees?.[0] || "";
 
     const f = req.file;
     let attachment = undefined;
@@ -163,14 +171,13 @@ router.post("/upload", requireAuth, upload.single("file"), async (req, res, next
     const created = await Task.create({
       ...parsed.data,
       createdAt,
-      assigneeInitials,
       dueDate,
       attachmentFileName: f?.originalname || parsed.data.attachmentFileName || "",
       attachment,
     });
 
     await checkAndFlagOffTheClock({
-      employee: parsed.data.assignee,
+      employee: firstAssignee,
       userId: String(req.user?.sub || ""),
       timestamp: new Date(),
       activityType: "task_create_with_attachment",
@@ -188,13 +195,18 @@ router.post("/upload", requireAuth, upload.single("file"), async (req, res, next
 
 router.put("/:id", requireAuth, async (req, res, next) => {
   try {
-    const parsed = updateSchema.safeParse(req.body);
+    const parsed = updateSchema.safeParse({
+      ...req.body,
+      assignees: normalizeAssignees(req.body?.assignees ?? req.body?.assignee),
+    });
     if (!parsed.success) {
       return res.status(400).json({ error: { message: "Invalid payload" } });
     }
 
+    const firstAssignee = parsed.data.assignees?.[0] || "";
+
     await checkAndFlagOffTheClock({
-      employee: parsed.data.assignee,
+      employee: firstAssignee,
       userId: String(req.user?.sub || ""),
       timestamp: new Date(),
       activityType: "task_update",
@@ -205,6 +217,10 @@ router.put("/:id", requireAuth, async (req, res, next) => {
     if (patch.dueDate) {
       patch.dueDate = new Date(patch.dueDate);
     }
+
+    delete patch.location;
+    delete patch.assignee;
+    delete patch.assigneeInitials;
 
     const updated = await Task.findByIdAndUpdate(req.params.id, patch, {
       new: true,

@@ -8,8 +8,10 @@ const jwt = require("jsonwebtoken");
 
 // Helper function to determine action type from request
 function determineAction(method, path, body) {
-  const pathParts = path.split('/').filter(Boolean);
-  const resource = pathParts[1] || 'unknown';
+  // Normalize path - remove /api/ prefix for matching
+  const normalizedPath = path.replace(/^\/api\//, '/');
+  const pathParts = normalizedPath.split('/').filter(Boolean);
+  const resource = pathParts[0] || 'unknown';
   
   const actionMap = {
     POST: {
@@ -20,6 +22,13 @@ function determineAction(method, path, body) {
       'notifications': 'NOTIFICATION_CREATE',
       'messages': 'MESSAGE_SEND',
       'auth/login': 'AUTH_LOGIN_SUCCESS',
+      'auth/register': 'USER_CREATE',
+      'appliances': 'APPLIANCE_CREATE',
+      'vehicles': 'VEHICLE_CREATE',
+      'locations': 'LOCATION_CREATE',
+      'vendors': 'VENDOR_CREATE',
+      'events': 'EVENT_CREATE',
+      'onboarding': 'ONBOARDING_CREATE',
     },
     PUT: {
       'users': 'USER_UPDATE',
@@ -27,12 +36,23 @@ function determineAction(method, path, body) {
       'employees': 'EMPLOYEE_UPDATE',
       'time-entries': 'TIME_ENTRY_UPDATE',
       'settings': 'SETTINGS_UPDATE',
+      'appliances': 'APPLIANCE_UPDATE',
+      'vehicles': 'VEHICLE_UPDATE',
+      'locations': 'LOCATION_UPDATE',
+      'vendors': 'VENDOR_UPDATE',
+      'events': 'EVENT_UPDATE',
+      'onboarding': 'ONBOARDING_UPDATE',
     },
     DELETE: {
       'users': 'USER_DELETE',
       'tasks': 'TASK_DELETE',
       'employees': 'EMPLOYEE_DELETE',
       'time-entries': 'TIME_ENTRY_DELETE',
+      'appliances': 'APPLIANCE_DELETE',
+      'vehicles': 'VEHICLE_DELETE',
+      'locations': 'LOCATION_DELETE',
+      'vendors': 'VENDOR_DELETE',
+      'events': 'EVENT_DELETE',
     },
     GET: {
       'export': 'DATA_EXPORT',
@@ -41,9 +61,9 @@ function determineAction(method, path, body) {
   
   const methodActions = actionMap[method] || {};
   
-  // Check for specific paths
+  // Check for specific resource paths
   for (const [key, action] of Object.entries(methodActions)) {
-    if (path.includes(key)) {
+    if (resource === key || normalizedPath.includes(`/${key}`)) {
       return action;
     }
   }
@@ -53,14 +73,22 @@ function determineAction(method, path, body) {
 
 // Helper function to determine resource type
 function determineResourceType(path) {
-  if (path.includes('/users')) return 'user';
-  if (path.includes('/tasks')) return 'task';
-  if (path.includes('/employees')) return 'employee';
-  if (path.includes('/time-entries')) return 'time-entry';
-  if (path.includes('/notifications')) return 'notification';
-  if (path.includes('/messages')) return 'message';
-  if (path.includes('/settings')) return 'settings';
-  if (path.includes('/auth')) return 'auth';
+  // Normalize path - remove /api/ prefix for matching
+  const normalizedPath = path.replace(/^\/api\//, '/');
+  if (normalizedPath.includes('/users')) return 'user';
+  if (normalizedPath.includes('/tasks')) return 'task';
+  if (normalizedPath.includes('/employees')) return 'employee';
+  if (normalizedPath.includes('/time-entries')) return 'time-entry';
+  if (normalizedPath.includes('/notifications')) return 'notification';
+  if (normalizedPath.includes('/messages')) return 'message';
+  if (normalizedPath.includes('/settings')) return 'settings';
+  if (normalizedPath.includes('/auth')) return 'auth';
+  if (normalizedPath.includes('/appliances')) return 'appliance';
+  if (normalizedPath.includes('/vehicles')) return 'vehicle';
+  if (normalizedPath.includes('/locations')) return 'location';
+  if (normalizedPath.includes('/vendors')) return 'vendor';
+  if (normalizedPath.includes('/events') || normalizedPath.includes('/schedules')) return 'event';
+  if (normalizedPath.includes('/onboarding')) return 'onboarding';
   return 'system';
 }
 
