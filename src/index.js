@@ -28,7 +28,7 @@ const vendorsRoutes = require("./routes/vendors");
 const complianceRoutes = require("./routes/compliance");
 const activityLogsRoutes = require("./routes/activityLogs");
 const companiesRoutes = require("./routes/companies");
-
+//going to express now
 const app = express();
 
 const uploadsDir = path.resolve(__dirname, "..", "uploads");
