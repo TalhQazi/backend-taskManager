@@ -49,6 +49,10 @@ const companySchema = new mongoose.Schema(
         default: "USD",
       },
     },
+    logo: {
+      type: String,
+      default: "",
+    },
     createdBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",

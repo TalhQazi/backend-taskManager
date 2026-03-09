@@ -3,7 +3,6 @@ const { z } = require("zod");
 
 const Location = require("../models/Location");
 const { requireAuth } = require("../middleware/auth");
-const { getAllCountries, getCitiesByCountry } = require("../lib/countries");
 
 const router = express.Router();
 
@@ -16,27 +15,23 @@ const createSchema = z.object({
   name: z.string().min(1),
   type: z.enum(["office", "warehouse", "facility", "site"]),
   address: z.string().min(1),
-  country: z.string().min(1),
   city: z.string().min(1),
   phone: z.string().min(1),
   manager: z.string().min(1),
+  employeeCount: z.number().min(0),
   status: z.enum(["active", "inactive"]),
   operatingHours: z.string().min(1),
-  photoDataUrl: z.string().optional(),
-  photoFileName: z.string().optional(),
 });
 
 const adminUiSchema = z.object({
   name: z.string().min(1),
   address: z.string().min(1),
-  country: z.string().min(1),
   city: z.string().min(1),
   type: z.string().optional(),
   contactPhone: z.string().optional(),
   contactName: z.string().optional(),
+  tasksCount: z.number().optional(),
   status: z.enum(["active", "inactive"]).optional(),
-  photoDataUrl: z.string().optional(),
-  photoFileName: z.string().optional(),
 });
 
 const updateSchema = createSchema.partial();
@@ -45,28 +40,6 @@ router.get("/", requireAuth, async (_req, res, next) => {
   try {
     const items = await Location.find().sort({ createdAt: -1 }).lean();
     res.json({ items: items.map(withId) });
-  } catch (err) {
-    next(err);
-  }
-});
-
-router.get("/countries", requireAuth, async (_req, res, next) => {
-  try {
-    const countries = getAllCountries();
-    res.json({ countries });
-  } catch (err) {
-    next(err);
-  }
-});
-
-router.get("/cities", requireAuth, async (req, res, next) => {
-  try {
-    const { country } = req.query;
-    if (!country) {
-      return res.status(400).json({ error: { message: "Country query parameter is required" } });
-    }
-    const cities = getCitiesByCountry(country);
-    res.json({ cities });
   } catch (err) {
     next(err);
   }
@@ -81,15 +54,13 @@ router.post("/", requireAuth, async (req, res, next) => {
       const created = await Location.create({
         name: adminParsed.data.name,
         address: adminParsed.data.address,
-        country: adminParsed.data.country,
         city: adminParsed.data.city,
         type: mappedType,
         phone: adminParsed.data.contactPhone || "",
         manager: adminParsed.data.contactName || "",
+        employeeCount: Number.isFinite(adminParsed.data.tasksCount) ? adminParsed.data.tasksCount : 0,
         status: adminParsed.data.status || "active",
         operatingHours: "",
-        photoDataUrl: adminParsed.data.photoDataUrl || "",
-        photoFileName: adminParsed.data.photoFileName || "",
       });
       return res.status(201).json({ item: withId(created.toObject()) });
     }
@@ -111,7 +82,6 @@ router.put("/:id", requireAuth, async (req, res, next) => {
       const patch = {};
       if (typeof adminParsed.data.name === "string") patch.name = adminParsed.data.name;
       if (typeof adminParsed.data.address === "string") patch.address = adminParsed.data.address;
-      if (typeof adminParsed.data.country === "string") patch.country = adminParsed.data.country;
       if (typeof adminParsed.data.city === "string") patch.city = adminParsed.data.city;
 
       if (typeof adminParsed.data.type === "string") {
@@ -121,8 +91,7 @@ router.put("/:id", requireAuth, async (req, res, next) => {
       if (typeof adminParsed.data.contactPhone === "string") patch.phone = adminParsed.data.contactPhone;
       if (typeof adminParsed.data.contactName === "string") patch.manager = adminParsed.data.contactName;
       if (typeof adminParsed.data.status === "string") patch.status = adminParsed.data.status;
-      if (typeof adminParsed.data.photoDataUrl === "string") patch.photoDataUrl = adminParsed.data.photoDataUrl;
-      if (typeof adminParsed.data.photoFileName === "string") patch.photoFileName = adminParsed.data.photoFileName;
+      if (typeof adminParsed.data.tasksCount === "number") patch.employeeCount = adminParsed.data.tasksCount;
 
       const updated = await Location.findByIdAndUpdate(req.params.id, patch, { new: true }).lean();
       if (!updated) return res.status(404).json({ error: { message: "Location not found" } });

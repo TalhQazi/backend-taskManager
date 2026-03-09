@@ -27,6 +27,7 @@ const dashboardRoutes = require("./routes/dashboard");
 const vendorsRoutes = require("./routes/vendors");
 const complianceRoutes = require("./routes/compliance");
 const activityLogsRoutes = require("./routes/activityLogs");
+const companiesRoutes = require("./routes/companies");
 
 const app = express();
 
@@ -68,7 +69,7 @@ app.use(
     credentials: true,
   })
 );
-app.use(express.json({ limit: "10mb" }));
+app.use(express.json({ limit: "1mb" }));
 app.use(morgan("dev"));
 
 app.use(auditLogMiddleware());
@@ -99,6 +100,7 @@ app.use("/api/dashboard", dashboardRoutes);
 app.use("/api/vendors", vendorsRoutes);
 app.use("/api/compliance", complianceRoutes);
 app.use("/api/activity-logs", activityLogsRoutes);
+app.use("/api/companies", companiesRoutes);
 
 app.use(notFoundHandler);
 app.use(errorHandler);
