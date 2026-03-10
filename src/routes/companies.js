@@ -63,8 +63,8 @@ router.get("/:id", requireAuth, async (req, res, next) => {
   }
 });
 
-// Create company (super-admin only)
-router.post("/", requireAuth, requireRole(["super-admin"]), async (req, res, next) => {
+// Create company (super-admin or admin)
+router.post("/", requireAuth, requireRole(["super-admin", "admin"]), async (req, res, next) => {
   try {
     const parsed = createSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -89,8 +89,8 @@ router.post("/", requireAuth, requireRole(["super-admin"]), async (req, res, nex
   }
 });
 
-// Update company (super-admin only)
-router.put("/:id", requireAuth, requireRole(["super-admin"]), async (req, res, next) => {
+// Update company (super-admin or admin)
+router.put("/:id", requireAuth, requireRole(["super-admin", "admin"]), async (req, res, next) => {
   try {
     const parsed = updateSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -125,8 +125,8 @@ router.put("/:id", requireAuth, requireRole(["super-admin"]), async (req, res, n
   }
 });
 
-// Delete company (super-admin only)
-router.delete("/:id", requireAuth, requireRole(["super-admin"]), async (req, res, next) => {
+// Delete company (super-admin or admin)
+router.delete("/:id", requireAuth, requireRole(["super-admin", "admin"]), async (req, res, next) => {
   try {
     const deleted = await Company.findByIdAndDelete(req.params.id).lean();
     if (!deleted) {

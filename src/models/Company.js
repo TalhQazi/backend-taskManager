@@ -69,6 +69,5 @@ const companySchema = new mongoose.Schema(
 
 // Index for faster queries
 companySchema.index({ status: 1 });
-companySchema.index({ code: 1 });
 
 module.exports = mongoose.model("Company", companySchema);
