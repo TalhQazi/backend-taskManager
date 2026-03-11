@@ -29,13 +29,30 @@ const ActivityLogSchema = new mongoose.Schema(
         "MESSAGE_SEND",
         "SETTINGS_UPDATE",
         "DATA_EXPORT",
+        "APPLIANCE_CREATE",
+        "APPLIANCE_UPDATE",
+        "APPLIANCE_DELETE",
+        "VEHICLE_CREATE",
+        "VEHICLE_UPDATE",
+        "VEHICLE_DELETE",
+        "LOCATION_CREATE",
+        "LOCATION_UPDATE",
+        "LOCATION_DELETE",
+        "VENDOR_CREATE",
+        "VENDOR_UPDATE",
+        "VENDOR_DELETE",
+        "EVENT_CREATE",
+        "EVENT_UPDATE",
+        "EVENT_DELETE",
+        "ONBOARDING_CREATE",
+        "ONBOARDING_UPDATE",
         "OTHER"
       ]
     },
     resourceType: { 
       type: String, 
       required: true,
-      enum: ["user", "task", "employee", "time-entry", "notification", "message", "settings", "system", "auth"]
+      enum: ["user", "task", "employee", "time-entry", "notification", "message", "settings", "system", "auth", "appliance", "vehicle", "location", "vendor", "event", "onboarding"]
     },
     resourceId: { type: String, default: "" },
     resourceName: { type: String, default: "" },

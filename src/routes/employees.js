@@ -3,6 +3,7 @@ const { z } = require("zod");
 const bcrypt = require("bcryptjs");
 
 const Employee = require("../models/Employee");
+const ActivityLog = require("../models/ActivityLog");
 const { requireAuth, requireRole } = require("../middleware/auth");
 
 const router = express.Router();
@@ -17,6 +18,7 @@ const createSchema = z.object({
   company: z.string().optional().default(""),
   location: z.string().optional().default(""),
   status: z.enum(["active", "inactive", "on-leave"]).optional(),
+  payType: z.enum(["hourly", "monthly"]).optional().default("hourly"),
   payRate: z.string().optional().default(""),
   shift: z.string().optional().default(""),
   hireDate: z.string().optional().default(""),
@@ -33,6 +35,27 @@ function withId(doc) {
   if (!doc) return doc;
   const { password, passwordHash, ...rest } = doc;
   return { ...rest, id: String(doc._id) };
+}
+
+// Helper to log activity
+async function logActivity(req, action, resourceType, resourceId, resourceName, description) {
+  try {
+    await ActivityLog.create({
+      actorUserId: String(req.user?.sub || req.user?.id || "unknown"),
+      actorUsername: String(req.user?.username || req.user?.name || "unknown"),
+      actorRole: String(req.user?.role || "unknown"),
+      action,
+      resourceType,
+      resourceId: String(resourceId || ""),
+      resourceName: String(resourceName || ""),
+      description: String(description || ""),
+      ipAddress: String(req.ip || req.headers["x-forwarded-for"] || ""),
+      userAgent: String(req.headers["user-agent"] || ""),
+      metadata: { body: req.body },
+    });
+  } catch (err) {
+    console.error("Failed to log activity:", err);
+  }
 }
 
 router.get("/", requireAuth, async (_req, res, next) => {
@@ -74,6 +97,10 @@ router.post("/", requireAuth, async (req, res, next) => {
     });
 
     const obj = created.toObject();
+    
+    // Log activity
+    await logActivity(req, "EMPLOYEE_CREATE", "employee", created._id, created.name, `Created employee: ${created.name}`);
+    
     return res.status(201).json({ item: withId(obj) });
   } catch (err) {
     return next(err);
@@ -116,6 +143,9 @@ router.put("/:id", requireAuth, async (req, res, next) => {
       return res.status(404).json({ error: { message: "Employee not found" } });
     }
 
+    // Log activity
+    await logActivity(req, "EMPLOYEE_UPDATE", "employee", req.params.id, updated.name, `Updated employee: ${updated.name}`);
+
     return res.json({ item: withId(updated) });
   } catch (err) {
     return next(err);
@@ -128,6 +158,10 @@ router.delete("/:id", requireAuth, async (req, res, next) => {
     if (!deleted) {
       return res.status(404).json({ error: { message: "Employee not found" } });
     }
+    
+    // Log activity
+    await logActivity(req, "EMPLOYEE_DELETE", "employee", req.params.id, deleted.name, `Deleted employee: ${deleted.name}`);
+    
     return res.status(204).send();
   } catch (err) {
     return next(err);

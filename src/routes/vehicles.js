@@ -5,6 +5,7 @@ const path = require("path");
 const fs = require("fs");
 
 const Vehicle = require("../models/Vehicle");
+const ActivityLog = require("../models/ActivityLog");
 const { requireAuth } = require("../middleware/auth");
 
 const router = express.Router();
@@ -76,6 +77,27 @@ function withId(doc) {
   return { ...doc, id: String(doc._id) };
 }
 
+// Helper to log activity
+async function logActivity(req, action, resourceType, resourceId, resourceName, description) {
+  try {
+    await ActivityLog.create({
+      actorUserId: String(req.user?.sub || req.user?.id || "unknown"),
+      actorUsername: String(req.user?.username || req.user?.name || "unknown"),
+      actorRole: String(req.user?.role || "unknown"),
+      action,
+      resourceType,
+      resourceId: String(resourceId || ""),
+      resourceName: String(resourceName || ""),
+      description: String(description || ""),
+      ipAddress: String(req.ip || req.headers["x-forwarded-for"] || ""),
+      userAgent: String(req.headers["user-agent"] || ""),
+      metadata: { body: req.body },
+    });
+  } catch (err) {
+    console.error("Failed to log activity:", err);
+  }
+}
+
 router.get("/", requireAuth, async (_req, res, next) => {
   try {
     const items = await Vehicle.find().sort({ createdAt: -1 }).lean();
@@ -117,6 +139,10 @@ router.post("/", requireAuth, async (req, res, next) => {
       });
 
       const obj = created.toObject();
+      
+      // Log activity
+      await logActivity(req, "VEHICLE_CREATE", "vehicle", created._id, created.name, `Created vehicle: ${created.name}`);
+      
       return res.status(201).json({ item: withId(obj) });
     }
 
@@ -234,6 +260,10 @@ router.put("/:id", requireAuth, async (req, res, next) => {
 
       const updated = await Vehicle.findByIdAndUpdate(req.params.id, patch, { new: true }).lean();
       if (!updated) return res.status(404).json({ error: { message: "Vehicle not found" } });
+      
+      // Log activity
+      await logActivity(req, "VEHICLE_UPDATE", "vehicle", req.params.id, updated.name, `Updated vehicle: ${updated.name}`);
+      
       return res.json({ item: withId(updated) });
     }
 
@@ -257,6 +287,9 @@ router.put("/:id", requireAuth, async (req, res, next) => {
       return res.status(404).json({ error: { message: "Vehicle not found" } });
     }
 
+    // Log activity
+    await logActivity(req, "VEHICLE_UPDATE", "vehicle", req.params.id, updated.name, `Updated vehicle: ${updated.name}`);
+
     return res.json({ item: withId(updated) });
   } catch (err) {
     return next(err);
@@ -269,6 +302,10 @@ router.delete("/:id", requireAuth, async (req, res, next) => {
     if (!deleted) {
       return res.status(404).json({ error: { message: "Vehicle not found" } });
     }
+    
+    // Log activity
+    await logActivity(req, "VEHICLE_DELETE", "vehicle", req.params.id, deleted.name, `Deleted vehicle: ${deleted.name}`);
+    
     return res.status(204).send();
   } catch (err) {
     return next(err);

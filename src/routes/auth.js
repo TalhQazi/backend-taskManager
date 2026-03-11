@@ -6,6 +6,7 @@ const { z } = require("zod");
 const User = require("../models/User");
 const { requireAuth } = require("../middleware/auth");
 const { logLoginSuccess, logLoginFailure } = require("../middleware/auditLog");
+const ActivityLog = require("../models/ActivityLog");
 
 const router = express.Router();
 
@@ -132,6 +133,34 @@ router.get("/me", requireAuth, async (req, res, next) => {
         status: user.status || "",
       },
     });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// Logout endpoint - logs the logout activity
+router.post("/logout", requireAuth, async (req, res, next) => {
+  try {
+    const userId = String(req.user?.sub || "");
+    const username = String(req.user?.username || "unknown");
+    const role = String(req.user?.role || "unknown");
+
+    // Log the logout activity
+    await ActivityLog.create({
+      actorUserId: userId,
+      actorUsername: username,
+      actorRole: role,
+      action: "AUTH_LOGOUT",
+      resourceType: "auth",
+      resourceId: userId,
+      resourceName: username,
+      description: `${username} logged out`,
+      ipAddress: String(req.ip || req.headers["x-forwarded-for"] || ""),
+      userAgent: String(req.headers["user-agent"] || ""),
+      metadata: { logoutTime: new Date().toISOString() },
+    });
+
+    return res.json({ ok: true, message: "Logged out successfully" });
   } catch (err) {
     return next(err);
   }

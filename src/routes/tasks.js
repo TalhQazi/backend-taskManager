@@ -5,6 +5,7 @@ const path = require("path");
 const fs = require("fs");
 
 const Task = require("../models/Task");
+const ActivityLog = require("../models/ActivityLog");
 const { requireAuth } = require("../middleware/auth");
 const { checkAndFlagOffTheClock } = require("../lib/offTheClockWork");
 
@@ -60,6 +61,27 @@ function normalizeAssignees(input) {
   return [];
 }
 
+// Helper to log activity
+async function logActivity(req, action, resourceType, resourceId, resourceName, description) {
+  try {
+    await ActivityLog.create({
+      actorUserId: String(req.user?.sub || req.user?.id || "unknown"),
+      actorUsername: String(req.user?.username || req.user?.name || "unknown"),
+      actorRole: String(req.user?.role || "unknown"),
+      action,
+      resourceType,
+      resourceId: String(resourceId || ""),
+      resourceName: String(resourceName || ""),
+      description: String(description || ""),
+      ipAddress: String(req.ip || req.headers["x-forwarded-for"] || ""),
+      userAgent: String(req.headers["user-agent"] || ""),
+      metadata: { body: req.body },
+    });
+  } catch (err) {
+    console.error("Failed to log activity:", err);
+  }
+}
+
 router.get("/", requireAuth, async (_req, res, next) => {
   try {
     const items = await Task.find().sort({ createdAt: -1 }).lean();
@@ -98,6 +120,10 @@ router.post("/", requireAuth, async (req, res, next) => {
     });
 
     const obj = created.toObject();
+    
+    // Log activity
+    await logActivity(req, "TASK_CREATE", "task", created._id, created.title, `Created task: ${created.title}`);
+    
     return res.status(201).json({ item: withId(obj) });
   } catch (err) {
     return next(err);
@@ -186,6 +212,10 @@ router.post("/upload", requireAuth, upload.single("file"), async (req, res, next
 
     console.log("Task created with ID:", created._id);
     const obj = created.toObject();
+    
+    // Log activity
+    await logActivity(req, "TASK_CREATE", "task", created._id, created.title, `Created task with attachment: ${created.title}`);
+    
     return res.status(201).json({ item: withId(obj) });
   } catch (err) {
     console.error("Upload error:", err);
@@ -230,6 +260,9 @@ router.put("/:id", requireAuth, async (req, res, next) => {
       return res.status(404).json({ error: { message: "Task not found" } });
     }
 
+    // Log activity
+    await logActivity(req, "TASK_UPDATE", "task", req.params.id, updated.title, `Updated task: ${updated.title}`);
+
     return res.json({ item: withId(updated) });
   } catch (err) {
     return next(err);
@@ -242,6 +275,10 @@ router.delete("/:id", requireAuth, async (req, res, next) => {
     if (!deleted) {
       return res.status(404).json({ error: { message: "Task not found" } });
     }
+    
+    // Log activity
+    await logActivity(req, "TASK_DELETE", "task", req.params.id, deleted.title, `Deleted task: ${deleted.title}`);
+    
     return res.status(204).send();
   } catch (err) {
     return next(err);

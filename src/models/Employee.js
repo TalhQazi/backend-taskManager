@@ -11,6 +11,7 @@ const EmployeeSchema = new mongoose.Schema(
     company: { type: String, default: "" },
     location: { type: String, default: "" },
     status: { type: String, enum: ["active", "inactive", "on-leave"], default: "active" },
+    payType: { type: String, enum: ["hourly", "monthly"], default: "hourly" },
     payRate: { type: String, default: "" },
     shift: { type: String, default: "" },
     hireDate: { type: String, default: "" },

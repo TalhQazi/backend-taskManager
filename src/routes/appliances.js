@@ -5,6 +5,7 @@ const path = require("path");
 const fs = require("fs");
 
 const Appliance = require("../models/Appliance");
+const ActivityLog = require("../models/ActivityLog");
 const { requireAuth } = require("../middleware/auth");
 
 const router = express.Router();
@@ -47,6 +48,27 @@ const createSchema = z.object({
 
 const updateSchema = createSchema.partial();
 
+// Helper to log activity
+async function logActivity(req, action, resourceType, resourceId, resourceName, description) {
+  try {
+    await ActivityLog.create({
+      actorUserId: String(req.user?.sub || req.user?.id || "unknown"),
+      actorUsername: String(req.user?.username || req.user?.name || "unknown"),
+      actorRole: String(req.user?.role || "unknown"),
+      action,
+      resourceType,
+      resourceId: String(resourceId || ""),
+      resourceName: String(resourceName || ""),
+      description: String(description || ""),
+      ipAddress: String(req.ip || req.headers["x-forwarded-for"] || ""),
+      userAgent: String(req.headers["user-agent"] || ""),
+      metadata: { body: req.body },
+    });
+  } catch (err) {
+    console.error("Failed to log activity:", err);
+  }
+}
+
 router.get("/", requireAuth, async (_req, res, next) => {
   try {
     const items = await Appliance.find().sort({ createdAt: -1 }).lean();
@@ -62,6 +84,10 @@ router.post("/", requireAuth, async (req, res, next) => {
     if (!parsed.success) return res.status(400).json({ error: { message: "Invalid payload" } });
 
     const created = await Appliance.create(parsed.data);
+    
+    // Log activity
+    await logActivity(req, "APPLIANCE_CREATE", "appliance", created._id, created.name, `Created appliance: ${created.name}`);
+    
     res.status(201).json({ item: created.toObject() });
   } catch (err) {
     next(err);
@@ -75,6 +101,9 @@ router.put("/:id", requireAuth, async (req, res, next) => {
 
     const updated = await Appliance.findByIdAndUpdate(req.params.id, parsed.data, { new: true }).lean();
     if (!updated) return res.status(404).json({ error: { message: "Appliance not found" } });
+
+    // Log activity
+    await logActivity(req, "APPLIANCE_UPDATE", "appliance", req.params.id, updated.name, `Updated appliance: ${updated.name}`);
 
     res.json({ item: updated });
   } catch (err) {
@@ -109,6 +138,9 @@ router.post("/upload", requireAuth, upload.single("tagPhotoFile"), async (req, r
       tagPhotoAttachment,
     });
 
+    // Log activity
+    await logActivity(req, "APPLIANCE_CREATE", "appliance", created._id, created.name, `Created appliance with photo: ${created.name}`);
+
     return res.status(201).json({ item: created.toObject() });
   } catch (err) {
     return next(err);
@@ -119,6 +151,10 @@ router.delete("/:id", requireAuth, async (req, res, next) => {
   try {
     const deleted = await Appliance.findByIdAndDelete(req.params.id).lean();
     if (!deleted) return res.status(404).json({ error: { message: "Appliance not found" } });
+    
+    // Log activity
+    await logActivity(req, "APPLIANCE_DELETE", "appliance", req.params.id, deleted.name, `Deleted appliance: ${deleted.name}`);
+    
     res.status(204).send();
   } catch (err) {
     next(err);

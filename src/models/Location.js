@@ -6,6 +6,7 @@ const LocationSchema = new mongoose.Schema(
     type: { type: String, enum: ["office", "warehouse", "facility", "site"], required: true },
     address: { type: String, required: true },
     city: { type: String, required: true },
+    country: { type: String, default: "" },
     phone: { type: String, default: "" },
     manager: { type: String, default: "" },
     employeeCount: { type: Number, default: 0 },
