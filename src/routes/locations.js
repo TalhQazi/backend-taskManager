@@ -100,7 +100,7 @@ router.post("/", requireAuth, async (req, res, next) => {
         locationInfo,
         `Location "${createdObj.name}" in ${createdObj.country || createdObj.city} created`
       );
-      return res.status(201).json({ item: createdObj });
+      return res.status(201).json({ item: withId(created.toObject()) });
     }
 
     const parsed = createSchema.safeParse(req.body);
@@ -117,7 +117,7 @@ router.post("/", requireAuth, async (req, res, next) => {
       `${createdObj.name} (${createdObj.city})`,
       `Location "${createdObj.name}" in ${createdObj.city} created`
     );
-    res.status(201).json({ item: createdObj });
+    res.status(201).json({ item: withId(created.toObject()) });
   } catch (err) {
     next(err);
   }

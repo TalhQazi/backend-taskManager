@@ -69,7 +69,15 @@ app.use(
     credentials: true,
   })
 );
-app.use(express.json({ limit: "10mb" }));
+
+app.use((req, res, next) => {
+  const ct = req.headers['content-type'] || '';
+  if (ct.includes('multipart/form-data')) {
+    return next();
+  }
+  // For other requests, use JSON parser
+  express.json({ limit: "10mb" })(req, res, next);
+});
 app.use(morgan("dev"));
 
 app.use(auditLogMiddleware());

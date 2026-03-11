@@ -10,7 +10,15 @@ const { requireAuth } = require("../middleware/auth");
 const { checkAndFlagOffTheClock } = require("../lib/offTheClockWork");
 
 const router = express.Router();
-
+// Middleware to skip body parsing for multipart/form-data (must be before other middleware)
+router.use((req, res, next) => {
+  const ct = req.headers['content-type'] || '';
+  if (ct.includes('multipart/form-data')) {
+    // Skip all body parsing for multipart - multer will handle it
+    return next();
+  }
+  next();
+});
 const uploadsDir = path.resolve(__dirname, "..", "..", "uploads", "tasks");
 try {
   fs.mkdirSync(uploadsDir, { recursive: true });
