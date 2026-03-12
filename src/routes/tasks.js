@@ -34,8 +34,8 @@ const upload = multer({
 });
 
 const createSchema = z.object({
-  title: z.string().min(1),
-  description: z.string().optional().default(""),
+  title: z.string().min(1, "Task title is required"),
+  description: z.string().min(1, "Task description is required"),
   assignees: z.array(z.string()).optional().default([]),
   priority: z.enum(["high", "medium", "low"]).optional(),
   status: z.enum(["pending", "in-progress", "completed", "overdue"]).optional(),
@@ -101,12 +101,20 @@ router.get("/", requireAuth, async (_req, res, next) => {
 
 router.post("/", requireAuth, async (req, res, next) => {
   try {
+    // Manual validation for title and description
+    if (!req.body?.title || !req.body.title.trim()) {
+      return res.status(400).json({ error: { message: "Task title is required" } });
+    }
+    if (!req.body?.description || !req.body.description.trim()) {
+      return res.status(400).json({ error: { message: "Task description is required" } });
+    }
+
     const parsed = createSchema.safeParse({
       ...req.body,
       assignees: normalizeAssignees(req.body?.assignees ?? req.body?.assignee),
     });
     if (!parsed.success) {
-      return res.status(400).json({ error: { message: "Invalid payload" } });
+      return res.status(400).json({ error: { message: "Invalid payload", details: parsed.error.errors } });
     }
 
     const dueDate = parsed.data.dueDate ? new Date(parsed.data.dueDate) : undefined;
@@ -144,6 +152,14 @@ router.post("/upload", requireAuth, upload.single("file"), async (req, res, next
     console.log("Request file:", req.file ? { name: req.file.originalname, size: req.file.size, mimetype: req.file.mimetype } : "No file");
     
     const body = req.body || {};
+
+    // Manual validation for title and description
+    if (!body.title || !body.title.trim()) {
+      return res.status(400).json({ error: { message: "Task title is required" } });
+    }
+    if (!body.description || !body.description.trim()) {
+      return res.status(400).json({ error: { message: "Task description is required" } });
+    }
 
     let parsedAssignees = [];
     if (typeof body.assignees === "string" && body.assignees.trim()) {
