@@ -36,7 +36,7 @@ function withId(doc) {
 const createSchema = z.object({
   name: z.string().min(1),
   type: z.enum(["office", "warehouse", "facility", "site"]),
-  address: z.string().min(1),
+  address: z.string().optional(),
   city: z.string().min(1),
   country: z.string().optional(),
   phone: z.string().min(1),
@@ -48,7 +48,7 @@ const createSchema = z.object({
 
 const adminUiSchema = z.object({
   name: z.string().min(1),
-  address: z.string().min(1),
+  address: z.string().optional(),
   city: z.string().min(1),
   country: z.string().optional(),
   type: z.string().optional(),
@@ -56,6 +56,8 @@ const adminUiSchema = z.object({
   contactName: z.string().optional(),
   tasksCount: z.number().optional(),
   status: z.enum(["active", "inactive"]).optional(),
+  photoDataUrl: z.string().optional(),
+  photoFileName: z.string().optional(),
 });
 
 const updateSchema = createSchema.partial();
@@ -77,7 +79,7 @@ router.post("/", requireAuth, async (req, res, next) => {
       const mappedType = ["office", "warehouse", "facility", "site"].includes(t) ? t : "site";
       const created = await Location.create({
         name: adminParsed.data.name,
-        address: adminParsed.data.address,
+        address: adminParsed.data.address || "",
         city: adminParsed.data.city,
         country: adminParsed.data.country || "",
         type: mappedType,
@@ -86,7 +88,10 @@ router.post("/", requireAuth, async (req, res, next) => {
         employeeCount: Number.isFinite(adminParsed.data.tasksCount) ? adminParsed.data.tasksCount : 0,
         status: adminParsed.data.status || "active",
         operatingHours: "",
+        photoDataUrl: adminParsed.data.photoDataUrl || "",
+        photoFileName: adminParsed.data.photoFileName || "",
       });
+
       const createdObj = withId(created.toObject());
       // Log activity with country and city info
       const locationInfo = createdObj.country 
@@ -141,6 +146,8 @@ router.put("/:id", requireAuth, async (req, res, next) => {
       if (typeof adminParsed.data.contactName === "string") patch.manager = adminParsed.data.contactName;
       if (typeof adminParsed.data.status === "string") patch.status = adminParsed.data.status;
       if (typeof adminParsed.data.tasksCount === "number") patch.employeeCount = adminParsed.data.tasksCount;
+      if (typeof adminParsed.data.photoDataUrl === "string") patch.photoDataUrl = adminParsed.data.photoDataUrl;
+      if (typeof adminParsed.data.photoFileName === "string") patch.photoFileName = adminParsed.data.photoFileName;
 
       const updated = await Location.findByIdAndUpdate(req.params.id, patch, { new: true }).lean();
       if (!updated) return res.status(404).json({ error: { message: "Location not found" } });

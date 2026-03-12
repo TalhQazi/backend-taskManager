@@ -83,7 +83,13 @@ router.post("/", requireAuth, async (req, res, next) => {
     const parsed = createSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: { message: "Invalid payload" } });
 
-    const created = await Appliance.create(parsed.data);
+    // Map warrantyUntil to warrantyExpiry for database compatibility
+    const data = {
+      ...parsed.data,
+      warrantyExpiry: parsed.data.warrantyUntil || parsed.data.warrantyExpiry || "",
+    };
+
+    const created = await Appliance.create(data);
     
     // Log activity
     await logActivity(req, "APPLIANCE_CREATE", "appliance", created._id, created.name, `Created appliance: ${created.name}`);
@@ -99,7 +105,15 @@ router.put("/:id", requireAuth, async (req, res, next) => {
     const parsed = updateSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: { message: "Invalid payload" } });
 
-    const updated = await Appliance.findByIdAndUpdate(req.params.id, parsed.data, { new: true }).lean();
+    // Map warrantyUntil to warrantyExpiry for database compatibility
+    const data = {
+      ...parsed.data,
+    };
+    if (parsed.data.warrantyUntil !== undefined) {
+      data.warrantyExpiry = parsed.data.warrantyUntil;
+    }
+
+    const updated = await Appliance.findByIdAndUpdate(req.params.id, data, { new: true }).lean();
     if (!updated) return res.status(404).json({ error: { message: "Appliance not found" } });
 
     // Log activity
