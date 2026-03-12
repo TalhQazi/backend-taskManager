@@ -3,6 +3,7 @@ const bcrypt = require("bcryptjs");
 const { z } = require("zod");
 
 const User = require("../models/User");
+const Settings = require("../models/Settings");
 const { requireAuth, requireRole } = require("../middleware/auth");
 
 const router = express.Router();
@@ -49,7 +50,20 @@ const updateSchema = z
 router.get("/", requireAuth, requireRole(["super-admin", "admin", "manager"]), async (_req, res, next) => {
   try {
     const items = await User.find().sort({ createdAt: -1 }).lean();
-    res.json({ items: items.map(sanitizeUser) });
+    
+    // Fetch settings for all users to get avatar data
+    const userIds = items.map(u => String(u._id));
+    const settings = await Settings.find({ userId: { $in: userIds } }).lean();
+    const settingsMap = new Map(settings.map(s => [String(s.userId), s]));
+    
+    // Merge user data with avatar from settings
+    const itemsWithAvatars = items.map(u => {
+      const userSettings = settingsMap.get(String(u._id));
+      const avatarUrl = userSettings?.avatarDataUrl || userSettings?.avatarUrl || "";
+      return { ...u, avatarUrl, avatarDataUrl: avatarUrl };
+    });
+    
+    res.json({ items: itemsWithAvatars.map(sanitizeUser) });
   } catch (err) {
     next(err);
   }

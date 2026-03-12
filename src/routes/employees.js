@@ -4,6 +4,7 @@ const bcrypt = require("bcryptjs");
 
 const Employee = require("../models/Employee");
 const ActivityLog = require("../models/ActivityLog");
+const Settings = require("../models/Settings");
 const { requireAuth, requireRole } = require("../middleware/auth");
 
 const router = express.Router();
@@ -61,7 +62,33 @@ async function logActivity(req, action, resourceType, resourceId, resourceName, 
 router.get("/", requireAuth, async (_req, res, next) => {
   try {
     const items = await Employee.find().sort({ createdAt: -1 }).lean();
-    res.json({ items: items.map(withId) });
+    
+    // Get unique emails from employees to fetch their settings
+    const employeeEmails = items.map(e => e.email).filter(Boolean);
+    const settings = await Settings.find({ 
+      $or: [
+        { email: { $in: employeeEmails } },
+        { userId: { $in: items.map(e => String(e._id)) } }
+      ]
+    }).lean();
+    
+    // Create a map of email -> avatarUrl
+    const avatarMap = new Map();
+    settings.forEach(s => {
+      if (s.avatarDataUrl || s.avatarUrl) {
+        const avatar = s.avatarDataUrl || s.avatarUrl;
+        if (s.email) avatarMap.set(s.email, avatar);
+        if (s.userId) avatarMap.set(String(s.userId), avatar);
+      }
+    });
+    
+    // Merge employee data with avatar
+    const itemsWithAvatars = items.map(e => {
+      const avatarUrl = avatarMap.get(e.email) || avatarMap.get(String(e._id)) || "";
+      return { ...e, avatarUrl, avatarDataUrl: avatarUrl };
+    });
+    
+    res.json({ items: itemsWithAvatars.map(withId) });
   } catch (err) {
     next(err);
   }
