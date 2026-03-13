@@ -2,6 +2,7 @@ const mongoose = require("mongoose");
 
 const ApplianceSchema = new mongoose.Schema(
   {
+    frontendId: { type: String, required: true, unique: true },
     name: { type: String, required: true },
     category: { type: String, default: "appliance" },
     serialNumber: { type: String, default: "" },

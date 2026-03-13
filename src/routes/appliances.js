@@ -5,10 +5,69 @@ const path = require("path");
 const fs = require("fs");
 
 const Appliance = require("../models/Appliance");
+const AssetSequence = require("../models/AssetSequence");
+const Vehicle = require("../models/Vehicle");
 const ActivityLog = require("../models/ActivityLog");
-const { requireAuth } = require("../middleware/auth");
+const { requireAuth, requireRole } = require("../middleware/auth");
 
 const router = express.Router();
+
+// Helper function to generate the next AST- ID
+async function getNextAssetId() {
+  const sequence = await AssetSequence.findOneAndUpdate(
+    {},
+    { $inc: { sequence: 1 } },
+    { new: true, upsert: true }
+  );
+  return `AST-${String(sequence.sequence).padStart(6, "0")}`;
+}
+
+async function syncAssetSequenceToCurrentMax() {
+  const vMaxAgg = await Vehicle.aggregate([
+    { $match: { frontendId: { $type: "string", $regex: /^AST-\d+$/ } } },
+    {
+      $project: {
+        n: {
+          $toInt: {
+            $substrBytes: [
+              "$frontendId",
+              4,
+              { $subtract: [{ $strLenBytes: "$frontendId" }, 4] },
+            ],
+          },
+        },
+      },
+    },
+    { $sort: { n: -1 } },
+    { $limit: 1 },
+  ]);
+
+  const aMaxAgg = await Appliance.aggregate([
+    { $match: { frontendId: { $type: "string", $regex: /^AST-\d+$/ } } },
+    {
+      $project: {
+        n: {
+          $toInt: {
+            $substrBytes: [
+              "$frontendId",
+              4,
+              { $subtract: [{ $strLenBytes: "$frontendId" }, 4] },
+            ],
+          },
+        },
+      },
+    },
+    { $sort: { n: -1 } },
+    { $limit: 1 },
+  ]);
+
+  const vMax = Number(vMaxAgg?.[0]?.n) || 0;
+  const aMax = Number(aMaxAgg?.[0]?.n) || 0;
+  const max = Math.max(vMax, aMax);
+
+  await AssetSequence.findOneAndUpdate({}, { $set: { sequence: max } }, { upsert: true, new: true });
+  return max;
+}
 
 const uploadsDir = path.resolve(__dirname, "..", "..", "uploads", "appliances");
 try {
@@ -78,6 +137,38 @@ router.get("/", requireAuth, async (_req, res, next) => {
   }
 });
 
+// Backfill missing frontendId (admin-only)
+router.post("/backfill-frontend-ids", requireAuth, requireRole(["super-admin", "admin"]), async (req, res, next) => {
+  try {
+    const dryRun = String(req.query?.dryRun || "").toLowerCase() === "true";
+
+    await syncAssetSequenceToCurrentMax();
+
+    const missing = await Appliance.find({ $or: [{ frontendId: { $exists: false } }, { frontendId: "" }, { frontendId: null }] })
+      .sort({ createdAt: 1, _id: 1 })
+      .select({ _id: 1 })
+      .lean();
+
+    if (dryRun) {
+      return res.json({ ok: true, dryRun: true, wouldUpdate: missing.length });
+    }
+
+    let updatedCount = 0;
+    for (const doc of missing) {
+      const newId = await getNextAssetId();
+      const updated = await Appliance.updateOne(
+        { _id: doc._id, $or: [{ frontendId: { $exists: false } }, { frontendId: "" }, { frontendId: null }] },
+        { $set: { frontendId: newId } }
+      );
+      if (updated?.modifiedCount === 1) updatedCount += 1;
+    }
+
+    return res.json({ ok: true, updatedCount });
+  } catch (err) {
+    return next(err);
+  }
+});
+
 router.post("/", requireAuth, async (req, res, next) => {
   try {
     const parsed = createSchema.safeParse(req.body);
@@ -89,7 +180,10 @@ router.post("/", requireAuth, async (req, res, next) => {
       warrantyExpiry: parsed.data.warrantyUntil || parsed.data.warrantyExpiry || "",
     };
 
-    const created = await Appliance.create(data);
+    const created = await Appliance.create({
+      frontendId: await getNextAssetId(),
+      ...data,
+    });
     
     // Log activity
     await logActivity(req, "APPLIANCE_CREATE", "appliance", created._id, created.name, `Created appliance: ${created.name}`);
@@ -140,6 +234,7 @@ router.post("/upload", requireAuth, upload.single("tagPhotoFile"), async (req, r
       : undefined;
 
     const created = await Appliance.create({
+      frontendId: await getNextAssetId(),
       name: body.name,
       category: body.type || body.category || "appliance",
       serialNumber: body.location || body.serialNumber || "N/A",
