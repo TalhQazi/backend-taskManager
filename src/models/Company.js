@@ -14,6 +14,11 @@ const companySchema = new mongoose.Schema(
       trim: true,
       uppercase: true,
     },
+    sequence: {
+      type: Number,
+      required: true,
+      unique: true,
+    },
     description: {
       type: String,
       trim: true,
@@ -69,5 +74,6 @@ const companySchema = new mongoose.Schema(
 
 // Index for faster queries
 companySchema.index({ status: 1 });
+companySchema.index({ sequence: 1 });
 
 module.exports = mongoose.model("Company", companySchema);

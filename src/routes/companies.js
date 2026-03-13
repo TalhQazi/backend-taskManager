@@ -6,9 +6,52 @@ const { requireAuth, requireRole } = require("../middleware/auth");
 
 const router = express.Router();
 
+// Helper function to generate prefix from company name (always 3-4 characters)
+function generatePrefix(name) {
+  if (!name || typeof name !== "string") return "XXX";
+  
+  // Remove special characters and split by spaces
+  const cleanName = name.replace(/[^a-zA-Z0-9\s]/g, "");
+  const words = cleanName.trim().split(/\s+/).filter(w => w.length > 0);
+  
+  if (words.length === 0) return "XXX";
+  
+  // If single word, take first 3 letters (or all if less than 3)
+  if (words.length === 1) {
+    const word = words[0];
+    // Get first 3 letters, including numbers if present
+    let prefix = "";
+    for (let i = 0; i < Math.min(3, word.length); i++) {
+      prefix += word.charAt(i).toUpperCase();
+    }
+    return prefix || "XXX";
+  }
+  
+  // For multiple words, take first letter of first 3 words
+  const prefix = words
+    .slice(0, 3)
+    .map(word => word.charAt(0).toUpperCase())
+    .join("");
+  
+  return prefix || "XXX";
+}
+
+// Helper function to get next sequence number
+async function getNextSequence() {
+  const lastCompany = await Company.findOne().sort({ sequence: -1 }).lean();
+  return lastCompany?.sequence ? lastCompany.sequence + 1 : 1;
+}
+
+// Helper function to generate company code
+async function generateCompanyCode(name) {
+  const prefix = generatePrefix(name);
+  const sequence = await getNextSequence();
+  const formattedSequence = String(sequence).padStart(3, "0");
+  return { code: `${prefix}-${formattedSequence}`, sequence };
+}
+
 const createSchema = z.object({
   name: z.string().min(1, "Company name is required"),
-  code: z.string().min(1, "Company code is required"),
   description: z.string().optional().default(""),
   address: z.object({
     street: z.string().optional().default(""),
@@ -71,15 +114,21 @@ router.post("/", requireAuth, requireRole(["super-admin", "admin"]), async (req,
       return res.status(400).json({ error: { message: parsed.error.errors[0]?.message || "Invalid payload" } });
     }
 
-    // Check if code already exists
-    const existing = await Company.findOne({ code: parsed.data.code.toUpperCase() }).lean();
-    if (existing) {
-      return res.status(409).json({ error: { message: "Company code already exists" } });
+    // Auto-generate company code and sequence
+    const { code, sequence } = await generateCompanyCode(parsed.data.name);
+
+    // Check if generated code already exists (collision handling)
+    let finalCode = code;
+    let suffix = 0;
+    while (await Company.findOne({ code: finalCode }).lean()) {
+      suffix++;
+      finalCode = `${code}-${suffix}`;
     }
 
     const created = await Company.create({
       ...parsed.data,
-      code: parsed.data.code.toUpperCase(),
+      code: finalCode,
+      sequence,
       createdBy: req.user?.id,
     });
 
