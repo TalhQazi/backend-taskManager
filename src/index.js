@@ -28,6 +28,7 @@ const vendorsRoutes = require("./routes/vendors");
 const complianceRoutes = require("./routes/compliance");
 const activityLogsRoutes = require("./routes/activityLogs");
 const companiesRoutes = require("./routes/companies");
+const asanaImportRoutes = require("./routes/asanaImport");
 //going to express now
 const app = express();
 
@@ -109,6 +110,7 @@ app.use("/api/vendors", vendorsRoutes);
 app.use("/api/compliance", complianceRoutes);
 app.use("/api/activity-logs", activityLogsRoutes);
 app.use("/api/companies", companiesRoutes);
+app.use("/api/asana-import", asanaImportRoutes);
 
 app.use(notFoundHandler);
 app.use(errorHandler);
