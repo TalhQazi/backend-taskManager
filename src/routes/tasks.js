@@ -5,6 +5,7 @@ const path = require("path");
 const fs = require("fs");
 
 const Task = require("../models/Task");
+const TaskComment = require("../models/TaskComment");
 const ActivityLog = require("../models/ActivityLog");
 const { requireAuth } = require("../middleware/auth");
 const { checkAndFlagOffTheClock } = require("../lib/offTheClockWork");
@@ -67,6 +68,20 @@ function normalizeAssignees(input) {
     return v ? [v] : [];
   }
   return [];
+}
+
+function canAccessTask(user, task) {
+  const role = String(user?.role || "").trim().toLowerCase();
+  const username = String(user?.username || "").trim();
+
+  if (role === "super-admin" || role === "admin" || role === "manager") return true;
+  if (role === "employee") {
+    if (!username) return false;
+    const assignees = Array.isArray(task?.assignees) ? task.assignees : [];
+    return assignees.includes(username);
+  }
+
+  return false;
 }
 
 // Helper to log activity
@@ -243,6 +258,107 @@ router.post("/upload", requireAuth, upload.single("file"), async (req, res, next
     return res.status(201).json({ item: withId(obj) });
   } catch (err) {
     console.error("Upload error:", err);
+    return next(err);
+  }
+});
+
+router.get("/:id/comments", requireAuth, async (req, res, next) => {
+  try {
+    const task = await Task.findById(req.params.id).lean();
+    if (!task) {
+      return res.status(404).json({ error: { message: "Task not found" } });
+    }
+
+    if (!canAccessTask(req.user, task)) {
+      return res.status(403).json({ error: { message: "Forbidden" } });
+    }
+
+    const items = await TaskComment.find({ taskId: task._id }).sort({ createdAt: 1 }).lean();
+
+    return res.json({
+      items: items.map((c) => ({
+        id: String(c._id),
+        taskId: String(c.taskId),
+        message: String(c.message || ""),
+        authorUserId: String(c.authorUserId || ""),
+        authorUsername: String(c.authorUsername || ""),
+        authorRole: String(c.authorRole || ""),
+        createdAt: c.createdAt,
+      })),
+    });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+router.post("/:id/comments", requireAuth, async (req, res, next) => {
+  try {
+    const task = await Task.findById(req.params.id).lean();
+    if (!task) {
+      return res.status(404).json({ error: { message: "Task not found" } });
+    }
+
+    if (!canAccessTask(req.user, task)) {
+      return res.status(403).json({ error: { message: "Forbidden" } });
+    }
+
+    const message = String(req.body?.message || "").trim();
+    if (!message) {
+      return res.status(400).json({ error: { message: "Message is required" } });
+    }
+
+    const created = await TaskComment.create({
+      taskId: task._id,
+      authorUserId: String(req.user?.sub || req.user?.id || ""),
+      authorUsername: String(req.user?.username || ""),
+      authorRole: String(req.user?.role || ""),
+      message,
+    });
+
+    await logActivity(req, "TASK_COMMENT_CREATE", "task", task._id, task.title, `Comment added on task: ${task.title}`);
+
+    return res.status(201).json({
+      item: {
+        id: String(created._id),
+        taskId: String(created.taskId),
+        message: String(created.message || ""),
+        authorUserId: String(created.authorUserId || ""),
+        authorUsername: String(created.authorUsername || ""),
+        authorRole: String(created.authorRole || ""),
+        createdAt: created.createdAt,
+      },
+    });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+router.patch("/:id/status", requireAuth, async (req, res, next) => {
+  try {
+    const task = await Task.findById(req.params.id).lean();
+    if (!task) {
+      return res.status(404).json({ error: { message: "Task not found" } });
+    }
+
+    if (!canAccessTask(req.user, task)) {
+      return res.status(403).json({ error: { message: "Forbidden" } });
+    }
+
+    const status = String(req.body?.status || "").trim();
+    const allowed = new Set(["pending", "in-progress", "completed", "overdue"]);
+    if (!allowed.has(status)) {
+      return res.status(400).json({ error: { message: "Invalid status" } });
+    }
+
+    const updated = await Task.findByIdAndUpdate(req.params.id, { status }, { new: true }).lean();
+    if (!updated) {
+      return res.status(404).json({ error: { message: "Task not found" } });
+    }
+
+    await logActivity(req, "TASK_STATUS_UPDATE", "task", req.params.id, updated.title, `Updated task status: ${updated.title} -> ${status}`);
+
+    return res.json({ item: withId(updated) });
+  } catch (err) {
     return next(err);
   }
 });
