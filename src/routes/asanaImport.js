@@ -3,6 +3,7 @@ const { z } = require("zod");
 
 const { requireAuth, requireRole } = require("../middleware/auth");
 const { importAsanaData } = require("../lib/asanaImportService");
+const { createAsanaClient } = require("../lib/asanaClient");
 const AsanaWorkspace = require("../models/AsanaWorkspace");
 const AsanaProject = require("../models/AsanaProject");
 const AsanaTask = require("../models/AsanaTask");
@@ -19,7 +20,14 @@ function newJobId() {
 
 const startSchema = z.object({
   token: z.string().min(1, "Asana token is required"),
-  workspaceId: z.string().min(1, "Workspace ID is required"),
+  workspaceId: z.string().optional(),
+  clientSecret: z.string().optional(),
+});
+
+const testSchema = z.object({
+  token: z.string().min(1, "Asana token is required"),
+  workspaceId: z.string().optional(),
+  clientSecret: z.string().optional(),
 });
 
 router.post("/start", requireAuth, requireRole(["admin", "super-admin"]), async (req, res, next) => {
@@ -30,7 +38,29 @@ router.post("/start", requireAuth, requireRole(["admin", "super-admin"]), async 
     }
 
     // Token is used only in-memory for this request.
-    const { token, workspaceId } = parsed.data;
+    const token = String(parsed.data.token || "").trim();
+    const workspaceId = String(parsed.data.workspaceId || parsed.data.clientSecret || "").trim();
+    if (!workspaceId) {
+      return res.status(400).json({ error: { message: "Client Secret ID (Workspace ID) is required" } });
+    }
+
+    // Validate Asana token/workspace access early so we don't start a job that will fail.
+    try {
+      const client = createAsanaClient(token);
+      await client.get("/users/me", { params: { opt_fields: "gid,name,email" } });
+      await client.get(`/workspaces/${encodeURIComponent(workspaceId)}`, {
+        params: { opt_fields: "gid,name" },
+      });
+    } catch (err) {
+      const e = err;
+      const status = Number(e?.response?.status || 500);
+      const msgFromAsana = e?.response?.data?.errors?.[0]?.message;
+      const message = String(msgFromAsana || e?.message || "Asana validation failed");
+      if (status === 401 || status === 403) {
+        return res.status(400).json({ error: { message } });
+      }
+      return res.status(status >= 400 && status < 600 ? status : 500).json({ error: { message } });
+    }
 
     const jobId = newJobId();
     const job = {
@@ -85,6 +115,42 @@ router.get("/status/:jobId", requireAuth, requireRole(["admin", "super-admin"]),
     return res.status(404).json({ error: { message: "Job not found" } });
   }
   return res.json({ ok: true, job });
+});
+
+router.post("/test", requireAuth, requireRole(["admin", "super-admin"]), async (req, res) => {
+  const parsed = testSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: { message: "Invalid payload" } });
+  }
+
+  const token = String(parsed.data.token || "").trim();
+  const workspaceId = String(parsed.data.workspaceId || parsed.data.clientSecret || "").trim();
+
+  try {
+    const client = createAsanaClient(token);
+    const meRes = await client.get("/users/me", { params: { opt_fields: "gid,name,email" } });
+
+    let workspace = null;
+    if (workspaceId) {
+      const wsRes = await client.get(`/workspaces/${encodeURIComponent(workspaceId)}`, {
+        params: { opt_fields: "gid,name" },
+      });
+      workspace = wsRes?.data?.data || null;
+    }
+
+    return res.json({ ok: true, user: meRes?.data?.data || null, workspace });
+  } catch (err) {
+    const e = err;
+    const status = Number(e?.response?.status || 500);
+    const msgFromAsana = e?.response?.data?.errors?.[0]?.message;
+    const message = String(msgFromAsana || e?.message || "Test connection failed");
+    // If Asana token/workspace access is invalid, don't return 401 to the frontend.
+    // A 401 response triggers admin UI auto-logout (used for app auth), but this is an external API error.
+    if (status === 401 || status === 403) {
+      return res.status(400).json({ error: { message } });
+    }
+    return res.status(status >= 400 && status < 600 ? status : 500).json({ error: { message } });
+  }
 });
 
 router.get("/workspaces", requireAuth, requireRole(["admin", "super-admin"]), async (_req, res, next) => {
