@@ -4,6 +4,7 @@ const { z } = require("zod");
 
 const User = require("../models/User");
 const Settings = require("../models/Settings");
+const { createNotification } = require("../utils/notifications");
 const { requireAuth, requireRole } = require("../middleware/auth");
 
 const router = express.Router();
@@ -87,15 +88,21 @@ router.post("/", requireAuth, requireRole(["super-admin", "admin"]), async (req,
 
     const passwordHash = await bcrypt.hash(parsed.data.password, 10);
     const created = await User.create({
-      name: parsed.data.name || "",
-      email: parsed.data.email || "",
-      username: derivedUsername,
-      passwordHash,
-      role: parsed.data.role,
-      status: parsed.data.status || "active",
+      ...parsed.data,
+      passwordHash: await bcrypt.hash(parsed.data.password, 10),
     });
 
-    res.status(201).json({ item: sanitizeUser(created.toObject()) });
+    // Create notification
+    await createNotification({
+      actor: req.user?.username || req.user?.name || "Admin",
+      actorRole: req.user?.role || "admin",
+      action: "created",
+      resourceType: "user",
+      resourceName: created.name || created.username || created.email,
+      details: `Role: ${created.role}`,
+    });
+
+    return res.status(201).json({ item: sanitizeUser(created.toObject()) });
   } catch (err) {
     
     if (err && err.code === 11000) {
@@ -129,6 +136,16 @@ router.put("/:id", requireAuth, requireRole(["super-admin", "admin"]), async (re
       return res.status(404).json({ error: { message: "User not found" } });
     }
 
+    // Create notification
+    await createNotification({
+      actor: req.user?.username || req.user?.name || "Admin",
+      actorRole: req.user?.role || "admin",
+      action: "updated",
+      resourceType: "user",
+      resourceName: updated.name || updated.username || updated.email,
+      details: patch.status ? `Status: ${patch.status}` : "",
+    });
+
     return res.json({ item: sanitizeUser(updated) });
   } catch (err) {
     if (err && err.code === 11000) {
@@ -144,6 +161,16 @@ router.delete("/:id", requireAuth, requireRole(["super-admin", "admin"]), async 
     if (!deleted) {
       return res.status(404).json({ error: { message: "User not found" } });
     }
+
+    // Create notification
+    await createNotification({
+      actor: req.user?.username || req.user?.name || "Admin",
+      actorRole: req.user?.role || "admin",
+      action: "deleted",
+      resourceType: "user",
+      resourceName: deleted.name || deleted.username || deleted.email,
+    });
+
     return res.status(204).send();
   } catch (err) {
     return next(err);

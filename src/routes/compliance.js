@@ -6,7 +6,7 @@ const StateLaborRule = require("../models/StateLaborRule");
 const TimeEditAuditLog = require("../models/TimeEditAuditLog");
 const ViolationNotification = require("../models/ViolationNotification");
 const OvertimeTracker = require("../models/OvertimeTracker");
-
+const { createNotification } = require("../utils/notifications");
 const { requireAuth } = require("../middleware/auth");
 
 const router = express.Router();
@@ -46,6 +46,17 @@ router.post("/flags/:id/resolve", requireAuth, async (req, res, next) => {
     ).lean();
 
     if (!updated) return res.status(404).json({ error: { message: "Flag not found" } });
+    
+    // Create notification
+    await createNotification({
+      actor: req.user?.username || req.user?.name || "Admin",
+      actorRole: req.user?.role || "admin",
+      action: "resolved",
+      resourceType: "compliance flag",
+      resourceName: updated.employee || "Unknown",
+      details: updated.violation || "",
+    });
+    
     res.json({ item: withId(updated) });
   } catch (err) {
     next(err);

@@ -2,6 +2,7 @@ const express = require("express");
 const { z } = require("zod");
 
 const Event = require("../models/Event");
+const { createNotification } = require("../utils/notifications");
 const { requireAuth } = require("../middleware/auth");
 const { checkAndFlagOffTheClock } = require("../lib/offTheClockWork");
 
@@ -58,6 +59,17 @@ router.post("/", requireAuth, async (req, res, next) => {
         endTime: adminParsed.data.endTime || "",
         type: "task",
       });
+      
+      // Create notification
+      await createNotification({
+        actor: req.user?.username || req.user?.name || "Admin",
+        actorRole: req.user?.role || "admin",
+        action: "created",
+        resourceType: "event",
+        resourceName: created.title,
+        details: created.assignee ? `Assigned to: ${created.assignee}` : "",
+      });
+      
       return res.status(201).json({ item: withId(created.toObject()) });
     }
 
@@ -73,6 +85,17 @@ router.post("/", requireAuth, async (req, res, next) => {
     });
 
     const created = await Event.create(parsed.data);
+    
+    // Create notification
+    await createNotification({
+      actor: req.user?.username || req.user?.name || "Admin",
+      actorRole: req.user?.role || "admin",
+      action: "created",
+      resourceType: "event",
+      resourceName: created.title,
+      details: created.assignee ? `Assigned to: ${created.assignee}` : "",
+    });
+    
     res.status(201).json({ item: withId(created.toObject()) });
   } catch (err) {
     next(err);
@@ -100,6 +123,17 @@ router.put("/:id", requireAuth, async (req, res, next) => {
 
       const updated = await Event.findByIdAndUpdate(req.params.id, patch, { new: true }).lean();
       if (!updated) return res.status(404).json({ error: { message: "Event not found" } });
+      
+      // Create notification
+      await createNotification({
+        actor: req.user?.username || req.user?.name || "Admin",
+        actorRole: req.user?.role || "admin",
+        action: "updated",
+        resourceType: "event",
+        resourceName: updated.title,
+        details: patch.assignee ? `Reassigned to: ${patch.assignee}` : "",
+      });
+      
       return res.json({ item: withId(updated) });
     }
 
@@ -116,6 +150,15 @@ router.put("/:id", requireAuth, async (req, res, next) => {
 
     const updated = await Event.findByIdAndUpdate(req.params.id, parsed.data, { new: true }).lean();
     if (!updated) return res.status(404).json({ error: { message: "Event not found" } });
+    
+    // Create notification
+    await createNotification({
+      actor: req.user?.username || req.user?.name || "Admin",
+      actorRole: req.user?.role || "admin",
+      action: "updated",
+      resourceType: "event",
+      resourceName: updated.title,
+    });
 
     res.json({ item: withId(updated) });
   } catch (err) {
@@ -127,6 +170,16 @@ router.delete("/:id", requireAuth, async (req, res, next) => {
   try {
     const deleted = await Event.findByIdAndDelete(req.params.id).lean();
     if (!deleted) return res.status(404).json({ error: { message: "Event not found" } });
+    
+    // Create notification
+    await createNotification({
+      actor: req.user?.username || req.user?.name || "Admin",
+      actorRole: req.user?.role || "admin",
+      action: "deleted",
+      resourceType: "event",
+      resourceName: deleted.title,
+    });
+    
     res.status(204).send();
   } catch (err) {
     next(err);

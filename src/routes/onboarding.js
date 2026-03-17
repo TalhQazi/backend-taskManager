@@ -5,6 +5,7 @@ const path = require("path");
 const fs = require("fs");
 
 const Onboarding = require("../models/Onboarding");
+const { createNotification } = require("../utils/notifications");
 const { requireAuth } = require("../middleware/auth");
 
 const router = express.Router();
@@ -109,6 +110,16 @@ router.post("/", requireAuth, async (req, res, next) => {
         approvalStatus: approval,
       });
 
+      // Create notification
+      await createNotification({
+        actor: req.user?.username || req.user?.name || "Admin",
+        actorRole: req.user?.role || "admin",
+        action: "created",
+        resourceType: "onboarding",
+        resourceName: created.employeeName,
+        details: `Status: ${created.approvalStatus}`,
+      });
+
       return res.status(201).json({ item: withId(created.toObject()) });
     }
 
@@ -116,6 +127,17 @@ router.post("/", requireAuth, async (req, res, next) => {
     if (!parsed.success) return res.status(400).json({ error: { message: "Invalid payload" } });
 
     const created = await Onboarding.create(parsed.data);
+    
+    // Create notification
+    await createNotification({
+      actor: req.user?.username || req.user?.name || "Admin",
+      actorRole: req.user?.role || "admin",
+      action: "created",
+      resourceType: "onboarding",
+      resourceName: created.employeeName,
+      details: `Status: ${created.approvalStatus}`,
+    });
+    
     res.status(201).json({ item: withId(created.toObject()) });
   } catch (err) {
     next(err);
@@ -146,6 +168,17 @@ router.put("/:id", requireAuth, async (req, res, next) => {
 
       const updated = await Onboarding.findByIdAndUpdate(req.params.id, patch, { new: true }).lean();
       if (!updated) return res.status(404).json({ error: { message: "Onboarding item not found" } });
+      
+      // Create notification
+      await createNotification({
+        actor: req.user?.username || req.user?.name || "Admin",
+        actorRole: req.user?.role || "admin",
+        action: "updated",
+        resourceType: "onboarding",
+        resourceName: updated.employeeName,
+        details: patch.approvalStatus ? `Status: ${patch.approvalStatus}` : "",
+      });
+      
       return res.json({ item: withId(updated) });
     }
 
@@ -154,6 +187,15 @@ router.put("/:id", requireAuth, async (req, res, next) => {
 
     const updated = await Onboarding.findByIdAndUpdate(req.params.id, parsed.data, { new: true }).lean();
     if (!updated) return res.status(404).json({ error: { message: "Onboarding item not found" } });
+
+    // Create notification
+    await createNotification({
+      actor: req.user?.username || req.user?.name || "Admin",
+      actorRole: req.user?.role || "admin",
+      action: "updated",
+      resourceType: "onboarding",
+      resourceName: updated.employeeName,
+    });
 
     res.json({ item: withId(updated) });
   } catch (err) {
@@ -217,6 +259,16 @@ router.post("/upload", requireAuth, upload.fields([
       generatedPdfAttachment,
     });
 
+    // Create notification
+    await createNotification({
+      actor: req.user?.username || req.user?.name || "Admin",
+      actorRole: req.user?.role || "admin",
+      action: "created",
+      resourceType: "onboarding",
+      resourceName: created.employeeName,
+      details: `With attachments, Status: ${created.approvalStatus}`,
+    });
+
     return res.status(201).json({ item: withId(created.toObject()) });
   } catch (err) {
     return next(err);
@@ -227,6 +279,16 @@ router.delete("/:id", requireAuth, async (req, res, next) => {
   try {
     const deleted = await Onboarding.findByIdAndDelete(req.params.id).lean();
     if (!deleted) return res.status(404).json({ error: { message: "Onboarding item not found" } });
+    
+    // Create notification
+    await createNotification({
+      actor: req.user?.username || req.user?.name || "Admin",
+      actorRole: req.user?.role || "admin",
+      action: "deleted",
+      resourceType: "onboarding",
+      resourceName: deleted.employeeName,
+    });
+    
     res.status(204).send();
   } catch (err) {
     next(err);

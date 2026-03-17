@@ -5,6 +5,7 @@ const bcrypt = require("bcryptjs");
 const Employee = require("../models/Employee");
 const ActivityLog = require("../models/ActivityLog");
 const Settings = require("../models/Settings");
+const { createNotification } = require("../utils/notifications");
 const { requireAuth, requireRole } = require("../middleware/auth");
 
 const router = express.Router();
@@ -128,6 +129,15 @@ router.post("/", requireAuth, async (req, res, next) => {
     // Log activity
     await logActivity(req, "EMPLOYEE_CREATE", "employee", created._id, created.name, `Created employee: ${created.name}`);
     
+    // Create notification for all admin/manager users
+    await createNotification({
+      actor: req.user?.username || req.user?.name || "Admin",
+      actorRole: req.user?.role || "admin",
+      action: "created",
+      resourceType: "employee",
+      resourceName: created.name,
+    });
+    
     return res.status(201).json({ item: withId(obj) });
   } catch (err) {
     return next(err);
@@ -173,6 +183,15 @@ router.put("/:id", requireAuth, async (req, res, next) => {
     // Log activity
     await logActivity(req, "EMPLOYEE_UPDATE", "employee", req.params.id, updated.name, `Updated employee: ${updated.name}`);
 
+    // Create notification for all admin/manager users
+    await createNotification({
+      actor: req.user?.username || req.user?.name || "Admin",
+      actorRole: req.user?.role || "admin",
+      action: "updated",
+      resourceType: "employee",
+      resourceName: updated.name,
+    });
+
     return res.json({ item: withId(updated) });
   } catch (err) {
     return next(err);
@@ -188,6 +207,15 @@ router.delete("/:id", requireAuth, async (req, res, next) => {
     
     // Log activity
     await logActivity(req, "EMPLOYEE_DELETE", "employee", req.params.id, deleted.name, `Deleted employee: ${deleted.name}`);
+    
+    // Create notification for all admin/manager users
+    await createNotification({
+      actor: req.user?.username || req.user?.name || "Admin",
+      actorRole: req.user?.role || "admin",
+      action: "deleted",
+      resourceType: "employee",
+      resourceName: deleted.name,
+    });
     
     return res.status(204).send();
   } catch (err) {

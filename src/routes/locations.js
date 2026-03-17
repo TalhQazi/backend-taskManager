@@ -3,6 +3,7 @@ const { z } = require("zod");
 
 const Location = require("../models/Location");
 const ActivityLog = require("../models/ActivityLog");
+const { createNotification } = require("../utils/notifications");
 const { requireAuth } = require("../middleware/auth");
 
 const router = express.Router();
@@ -105,6 +106,17 @@ router.post("/", requireAuth, async (req, res, next) => {
         locationInfo,
         `Location "${createdObj.name}" in ${createdObj.country || createdObj.city} created`
       );
+      
+      // Create notification
+      await createNotification({
+        actor: req.user?.username || req.user?.name || "Admin",
+        actorRole: req.user?.role || "admin",
+        action: "created",
+        resourceType: "location",
+        resourceName: createdObj.name,
+        details: createdObj.city ? `City: ${createdObj.city}` : "",
+      });
+      
       return res.status(201).json({ item: withId(created.toObject()) });
     }
 
@@ -122,6 +134,17 @@ router.post("/", requireAuth, async (req, res, next) => {
       `${createdObj.name} (${createdObj.city})`,
       `Location "${createdObj.name}" in ${createdObj.city} created`
     );
+    
+    // Create notification
+    await createNotification({
+      actor: req.user?.username || req.user?.name || "Admin",
+      actorRole: req.user?.role || "admin",
+      action: "created",
+      resourceType: "location",
+      resourceName: createdObj.name,
+      details: createdObj.city ? `City: ${createdObj.city}` : "",
+    });
+    
     res.status(201).json({ item: withId(created.toObject()) });
   } catch (err) {
     next(err);
@@ -164,6 +187,17 @@ router.put("/:id", requireAuth, async (req, res, next) => {
         locationInfo,
         `Location "${updatedObj.name}" in ${updatedObj.country || updatedObj.city} updated`
       );
+      
+      // Create notification
+      await createNotification({
+        actor: req.user?.username || req.user?.name || "Admin",
+        actorRole: req.user?.role || "admin",
+        action: "updated",
+        resourceType: "location",
+        resourceName: updatedObj.name,
+        details: patch.status ? `Status: ${patch.status}` : "",
+      });
+      
       return res.json({ item: updatedObj });
     }
 
@@ -185,6 +219,16 @@ router.put("/:id", requireAuth, async (req, res, next) => {
       locationInfo,
       `Location "${updatedObj.name}" in ${updatedObj.country || updatedObj.city} updated`
     );
+    
+    // Create notification
+    await createNotification({
+      actor: req.user?.username || req.user?.name || "Admin",
+      actorRole: req.user?.role || "admin",
+      action: "updated",
+      resourceType: "location",
+      resourceName: updatedObj.name,
+    });
+    
     res.json({ item: updatedObj });
   } catch (err) {
     next(err);
@@ -208,6 +252,16 @@ router.delete("/:id", requireAuth, async (req, res, next) => {
       locationInfo,
       `Location "${deletedObj.name}" in ${deletedObj.country || deletedObj.city} deleted`
     );
+    
+    // Create notification
+    await createNotification({
+      actor: req.user?.username || req.user?.name || "Admin",
+      actorRole: req.user?.role || "admin",
+      action: "deleted",
+      resourceType: "location",
+      resourceName: deletedObj.name,
+    });
+    
     res.status(204).send();
   } catch (err) {
     next(err);

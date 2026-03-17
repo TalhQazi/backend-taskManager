@@ -1,6 +1,7 @@
 const express = require("express");
 const { z } = require("zod");
 const Vendor = require("../models/Vendor");
+const { createNotification } = require("../utils/notifications");
 const { requireAuth } = require("../middleware/auth");
 
 const router = express.Router();
@@ -55,6 +56,17 @@ router.post("/", requireAuth, async (req, res, next) => {
     }
 
     const created = await Vendor.create(parsed.data);
+    
+    // Create notification
+    await createNotification({
+      actor: req.user?.username || req.user?.name || "Admin",
+      actorRole: req.user?.role || "admin",
+      action: "created",
+      resourceType: "vendor",
+      resourceName: created.name,
+      details: created.serviceType ? `Service: ${created.serviceType}` : "",
+    });
+    
     res.status(201).json({ item: created.toObject() });
   } catch (err) {
     next(err);
@@ -82,6 +94,16 @@ router.put("/:id", requireAuth, async (req, res, next) => {
     
     if (!updated) return res.status(404).json({ error: { message: "Vendor not found" } });
 
+    // Create notification
+    await createNotification({
+      actor: req.user?.username || req.user?.name || "Admin",
+      actorRole: req.user?.role || "admin",
+      action: "updated",
+      resourceType: "vendor",
+      resourceName: updated.name,
+      details: parsed.data.status ? `Status: ${parsed.data.status}` : "",
+    });
+
     res.json({ item: updated });
   } catch (err) {
     next(err);
@@ -93,6 +115,16 @@ router.delete("/:id", requireAuth, async (req, res, next) => {
   try {
     const deleted = await Vendor.findByIdAndDelete(req.params.id).lean();
     if (!deleted) return res.status(404).json({ error: { message: "Vendor not found" } });
+    
+    // Create notification
+    await createNotification({
+      actor: req.user?.username || req.user?.name || "Admin",
+      actorRole: req.user?.role || "admin",
+      action: "deleted",
+      resourceType: "vendor",
+      resourceName: deleted.name,
+    });
+    
     res.status(204).send();
   } catch (err) {
     next(err);

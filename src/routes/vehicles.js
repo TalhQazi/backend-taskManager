@@ -5,6 +5,7 @@ const path = require("path");
 const fs = require("fs");
 
 const Vehicle = require("../models/Vehicle");
+const { createNotification } = require("../utils/notifications");
 const AssetSequence = require("../models/AssetSequence");
 const Appliance = require("../models/Appliance");
 const ActivityLog = require("../models/ActivityLog");
@@ -243,6 +244,16 @@ router.post("/", requireAuth, async (req, res, next) => {
       // Log activity
       await logActivity(req, "VEHICLE_CREATE", "vehicle", created._id, created.name, `Created vehicle: ${created.name}`);
       
+      // Create notification
+      await createNotification({
+        actor: req.user?.username || req.user?.name || "Admin",
+        actorRole: req.user?.role || "admin",
+        action: "created",
+        resourceType: "vehicle",
+        resourceName: created.name,
+        details: `License: ${created.licensePlate}`,
+      });
+      
       return res.status(201).json({ item: withId(obj) });
     }
 
@@ -366,6 +377,16 @@ router.put("/:id", requireAuth, async (req, res, next) => {
       // Log activity
       await logActivity(req, "VEHICLE_UPDATE", "vehicle", req.params.id, updated.name, `Updated vehicle: ${updated.name}`);
       
+      // Create notification
+      await createNotification({
+        actor: req.user?.username || req.user?.name || "Admin",
+        actorRole: req.user?.role || "admin",
+        action: "updated",
+        resourceType: "vehicle",
+        resourceName: updated.name,
+        details: patch.status ? `Status: ${patch.status}` : "",
+      });
+      
       return res.json({ item: withId(updated) });
     }
 
@@ -392,6 +413,15 @@ router.put("/:id", requireAuth, async (req, res, next) => {
     // Log activity
     await logActivity(req, "VEHICLE_UPDATE", "vehicle", req.params.id, updated.name, `Updated vehicle: ${updated.name}`);
 
+    // Create notification
+    await createNotification({
+      actor: req.user?.username || req.user?.name || "Admin",
+      actorRole: req.user?.role || "admin",
+      action: "updated",
+      resourceType: "vehicle",
+      resourceName: updated.name,
+    });
+
     return res.json({ item: withId(updated) });
   } catch (err) {
     return next(err);
@@ -407,6 +437,15 @@ router.delete("/:id", requireAuth, async (req, res, next) => {
     
     // Log activity
     await logActivity(req, "VEHICLE_DELETE", "vehicle", req.params.id, deleted.name, `Deleted vehicle: ${deleted.name}`);
+    
+    // Create notification
+    await createNotification({
+      actor: req.user?.username || req.user?.name || "Admin",
+      actorRole: req.user?.role || "admin",
+      action: "deleted",
+      resourceType: "vehicle",
+      resourceName: deleted.name,
+    });
     
     return res.status(204).send();
   } catch (err) {

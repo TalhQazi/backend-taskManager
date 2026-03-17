@@ -2,6 +2,7 @@ const express = require("express");
 const { z } = require("zod");
 
 const Company = require("../models/Company");
+const { createNotification } = require("../utils/notifications");
 const { requireAuth, requireRole } = require("../middleware/auth");
 
 const router = express.Router();
@@ -132,6 +133,16 @@ router.post("/", requireAuth, requireRole(["super-admin", "admin"]), async (req,
       createdBy: req.user?.id,
     });
 
+    // Create notification
+    await createNotification({
+      actor: req.user?.username || req.user?.name || "Admin",
+      actorRole: req.user?.role || "admin",
+      action: "created",
+      resourceType: "company",
+      resourceName: created.name,
+      details: `Code: ${created.code}`,
+    });
+
     return res.status(201).json({ item: withId(created) });
   } catch (err) {
     return next(err);
@@ -168,6 +179,15 @@ router.put("/:id", requireAuth, requireRole(["super-admin", "admin"]), async (re
       return res.status(404).json({ error: { message: "Company not found" } });
     }
 
+    // Create notification
+    await createNotification({
+      actor: req.user?.username || req.user?.name || "Admin",
+      actorRole: req.user?.role || "admin",
+      action: "updated",
+      resourceType: "company",
+      resourceName: updated.name,
+    });
+
     return res.json({ item: withId(updated) });
   } catch (err) {
     return next(err);
@@ -181,6 +201,16 @@ router.delete("/:id", requireAuth, requireRole(["super-admin", "admin"]), async 
     if (!deleted) {
       return res.status(404).json({ error: { message: "Company not found" } });
     }
+
+    // Create notification
+    await createNotification({
+      actor: req.user?.username || req.user?.name || "Admin",
+      actorRole: req.user?.role || "admin",
+      action: "deleted",
+      resourceType: "company",
+      resourceName: deleted.name,
+    });
+
     return res.status(204).send();
   } catch (err) {
     return next(err);

@@ -8,6 +8,7 @@ const Appliance = require("../models/Appliance");
 const AssetSequence = require("../models/AssetSequence");
 const Vehicle = require("../models/Vehicle");
 const ActivityLog = require("../models/ActivityLog");
+const { createNotification } = require("../utils/notifications");
 const { requireAuth, requireRole } = require("../middleware/auth");
 
 const router = express.Router();
@@ -212,7 +213,17 @@ router.put("/:id", requireAuth, async (req, res, next) => {
 
     // Log activity
     await logActivity(req, "APPLIANCE_UPDATE", "appliance", req.params.id, updated.name, `Updated appliance: ${updated.name}`);
-
+    
+    // Create notification
+    await createNotification({
+      actor: req.user?.username || req.user?.name || "Admin",
+      actorRole: req.user?.role || "admin",
+      action: "updated",
+      resourceType: "appliance",
+      resourceName: updated.name,
+      details: data.status ? `Status: ${data.status}` : "",
+    });
+    
     res.json({ item: updated });
   } catch (err) {
     next(err);
@@ -249,7 +260,17 @@ router.post("/upload", requireAuth, upload.single("tagPhotoFile"), async (req, r
 
     // Log activity
     await logActivity(req, "APPLIANCE_CREATE", "appliance", created._id, created.name, `Created appliance with photo: ${created.name}`);
-
+    
+    // Create notification
+    await createNotification({
+      actor: req.user?.username || req.user?.name || "Admin",
+      actorRole: req.user?.role || "admin",
+      action: "created",
+      resourceType: "appliance",
+      resourceName: created.name,
+      details: created.category ? `Category: ${created.category}` : "",
+    });
+    
     return res.status(201).json({ item: created.toObject() });
   } catch (err) {
     return next(err);
@@ -263,6 +284,15 @@ router.delete("/:id", requireAuth, async (req, res, next) => {
     
     // Log activity
     await logActivity(req, "APPLIANCE_DELETE", "appliance", req.params.id, deleted.name, `Deleted appliance: ${deleted.name}`);
+    
+    // Create notification
+    await createNotification({
+      actor: req.user?.username || req.user?.name || "Admin",
+      actorRole: req.user?.role || "admin",
+      action: "deleted",
+      resourceType: "appliance",
+      resourceName: deleted.name,
+    });
     
     res.status(204).send();
   } catch (err) {

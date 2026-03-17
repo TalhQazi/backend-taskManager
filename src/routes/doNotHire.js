@@ -2,6 +2,7 @@ const express = require("express");
 const { z } = require("zod");
 
 const DoNotHire = require("../models/DoNotHire");
+const { createNotification } = require("../utils/notifications");
 const { requireAuth } = require("../middleware/auth");
 
 const router = express.Router();
@@ -51,6 +52,17 @@ router.post("/", requireAuth, async (req, res, next) => {
         incidentNotes: adminParsed.data.incidentNotes,
         createdAt: adminParsed.data.addedAt,
       });
+      
+      // Create notification
+      await createNotification({
+        actor: req.user?.username || req.user?.name || "Admin",
+        actorRole: req.user?.role || "admin",
+        action: "created",
+        resourceType: "do not hire entry",
+        resourceName: created.fullName,
+        details: `Reason: ${created.reason}`,
+      });
+      
       return res.status(201).json({ item: withId(created.toObject()) });
     }
 
@@ -58,6 +70,17 @@ router.post("/", requireAuth, async (req, res, next) => {
     if (!parsed.success) return res.status(400).json({ error: { message: "Invalid payload" } });
 
     const created = await DoNotHire.create(parsed.data);
+    
+    // Create notification
+    await createNotification({
+      actor: req.user?.username || req.user?.name || "Admin",
+      actorRole: req.user?.role || "admin",
+      action: "created",
+      resourceType: "do not hire entry",
+      resourceName: created.fullName,
+      details: `Reason: ${created.reason}`,
+    });
+    
     res.status(201).json({ item: withId(created.toObject()) });
   } catch (err) {
     next(err);
@@ -76,6 +99,16 @@ router.put("/:id", requireAuth, async (req, res, next) => {
 
       const updated = await DoNotHire.findByIdAndUpdate(req.params.id, patch, { new: true }).lean();
       if (!updated) return res.status(404).json({ error: { message: "Entry not found" } });
+      
+      // Create notification
+      await createNotification({
+        actor: req.user?.username || req.user?.name || "Admin",
+        actorRole: req.user?.role || "admin",
+        action: "updated",
+        resourceType: "do not hire entry",
+        resourceName: updated.fullName,
+      });
+      
       return res.json({ item: withId(updated) });
     }
 
@@ -84,6 +117,15 @@ router.put("/:id", requireAuth, async (req, res, next) => {
 
     const updated = await DoNotHire.findByIdAndUpdate(req.params.id, parsed.data, { new: true }).lean();
     if (!updated) return res.status(404).json({ error: { message: "Entry not found" } });
+
+    // Create notification
+    await createNotification({
+      actor: req.user?.username || req.user?.name || "Admin",
+      actorRole: req.user?.role || "admin",
+      action: "updated",
+      resourceType: "do not hire entry",
+      resourceName: updated.fullName,
+    });
 
     res.json({ item: withId(updated) });
   } catch (err) {
@@ -95,6 +137,16 @@ router.delete("/:id", requireAuth, async (req, res, next) => {
   try {
     const deleted = await DoNotHire.findByIdAndDelete(req.params.id).lean();
     if (!deleted) return res.status(404).json({ error: { message: "Entry not found" } });
+    
+    // Create notification
+    await createNotification({
+      actor: req.user?.username || req.user?.name || "Admin",
+      actorRole: req.user?.role || "admin",
+      action: "deleted",
+      resourceType: "do not hire entry",
+      resourceName: deleted.fullName,
+    });
+    
     res.status(204).send();
   } catch (err) {
     next(err);

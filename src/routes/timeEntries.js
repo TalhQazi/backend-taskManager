@@ -5,6 +5,7 @@ const TimeEntry = require("../models/TimeEntry");
 const Employee = require("../models/Employee");
 const User = require("../models/User");
 const TimeEditAuditLog = require("../models/TimeEditAuditLog");
+const { createNotification } = require("../utils/notifications");
 const { requireAuth } = require("../middleware/auth");
 const {
   evaluateMealBreakCompliance,
@@ -235,6 +236,17 @@ router.post("/", requireAuth, async (req, res, next) => {
         status: adminParsed.data.clockOut ? "complete" : "incomplete",
         location: adminParsed.data.location,
       });
+      
+      // Create notification
+      await createNotification({
+        actor: req.user?.username || req.user?.name || "Admin",
+        actorRole: req.user?.role || "admin",
+        action: "created",
+        resourceType: "time entry",
+        resourceName: adminParsed.data.employee,
+        details: `Date: ${adminParsed.data.date}`,
+      });
+      
       return res.status(201).json({ item: withId(created.toObject()) });
     }
 
@@ -257,6 +269,17 @@ router.post("/", requireAuth, async (req, res, next) => {
     });
 
     const obj = created.toObject();
+    
+    // Create notification
+    await createNotification({
+      actor: req.user?.username || req.user?.name || "Admin",
+      actorRole: req.user?.role || "admin",
+      action: "created",
+      resourceType: "time entry",
+      resourceName: parsed.data.employee,
+      details: `Date: ${parsed.data.date}`,
+    });
+    
     return res.status(201).json({ item: withId(obj) });
   } catch (err) {
     return next(err);
@@ -451,6 +474,17 @@ router.put("/:id", requireAuth, async (req, res, next) => {
 
       const updated = await TimeEntry.findByIdAndUpdate(req.params.id, patch, { new: true }).lean();
       if (!updated) return res.status(404).json({ error: { message: "Time entry not found" } });
+      
+      // Create notification
+      await createNotification({
+        actor: req.user?.username || req.user?.name || "Admin",
+        actorRole: req.user?.role || "admin",
+        action: "updated",
+        resourceType: "time entry",
+        resourceName: updated.employee,
+        details: patch.status ? `Status: ${patch.status}` : "",
+      });
+      
       return res.json({ item: withId(updated) });
     }
 
@@ -511,6 +545,15 @@ router.put("/:id", requireAuth, async (req, res, next) => {
       editedByUserId: String(req.user?.sub || ""),
       ipAddress: getClientIp(req),
     });
+    
+    // Create notification
+    await createNotification({
+      actor: req.user?.username || req.user?.name || "Admin",
+      actorRole: req.user?.role || "admin",
+      action: "updated",
+      resourceType: "time entry",
+      resourceName: updated.employee,
+    });
 
     if (updated.clockOutAt || updated.clockOut) {
       const refDate = updated.date || new Date();
@@ -550,6 +593,16 @@ router.delete("/:id", requireAuth, async (req, res, next) => {
     if (!deleted) {
       return res.status(404).json({ error: { message: "Time entry not found" } });
     }
+    
+    // Create notification
+    await createNotification({
+      actor: req.user?.username || req.user?.name || "Admin",
+      actorRole: req.user?.role || "admin",
+      action: "deleted",
+      resourceType: "time entry",
+      resourceName: deleted.employee,
+    });
+    
     return res.status(204).send();
   } catch (err) {
     return next(err);
