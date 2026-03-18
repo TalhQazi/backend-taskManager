@@ -10,12 +10,52 @@ const AsanaTask = require("../models/AsanaTask");
 const AsanaComment = require("../models/AsanaComment");
 const AsanaAttachment = require("../models/AsanaAttachment");
 
+const AsanaJob = require("../models/AsanaJob");
+
 const router = express.Router();
 
-const jobs = new Map();
+// Rate limiting: 1 concurrent job per user, 5 min cooldown
+const COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes
+const JOB_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
 
 function newJobId() {
   return `job_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+}
+
+async function checkRateLimit(userId) {
+  // Check for running job
+  const runningJob = await AsanaJob.findOne({ 
+    userId, 
+    status: "running",
+    startedAt: { $gte: new Date(Date.now() - JOB_TIMEOUT_MS) }
+  });
+  
+  if (runningJob) {
+    return { 
+      allowed: false, 
+      reason: "You already have an import in progress. Please wait for it to complete."
+    };
+  }
+  
+  // Check cooldown after last completed job
+  const lastJob = await AsanaJob.findOne({ 
+    userId, 
+    status: { $in: ["completed", "failed", "timeout"] },
+    completedAt: { $exists: true }
+  }).sort({ completedAt: -1 });
+  
+  if (lastJob?.completedAt) {
+    const timeSinceLastJob = Date.now() - new Date(lastJob.completedAt).getTime();
+    if (timeSinceLastJob < COOLDOWN_MS) {
+      const remainingSeconds = Math.ceil((COOLDOWN_MS - timeSinceLastJob) / 1000);
+      return { 
+        allowed: false, 
+        reason: `Please wait ${remainingSeconds} seconds before starting another import.`
+      };
+    }
+  }
+  
+  return { allowed: true };
 }
 
 const startSchema = z.object({
@@ -32,6 +72,15 @@ const testSchema = z.object({
 
 router.post("/start", requireAuth, requireRole(["admin", "super-admin"]), async (req, res, next) => {
   try {
+    const userId = String(req.user?.sub || req.user?.id || "");
+    const username = String(req.user?.username || req.user?.name || "unknown");
+    
+    // Check rate limit
+    const rateLimitCheck = await checkRateLimit(userId);
+    if (!rateLimitCheck.allowed) {
+      return res.status(429).json({ error: { message: rateLimitCheck.reason } });
+    }
+
     const parsed = startSchema.safeParse(req.body);
     if (!parsed.success) {
       return res.status(400).json({ error: { message: "Invalid payload" } });
@@ -63,16 +112,36 @@ router.post("/start", requireAuth, requireRole(["admin", "super-admin"]), async 
     }
 
     const jobId = newJobId();
-    const job = {
-      id: jobId,
+    
+    // Create job in MongoDB
+    const job = await AsanaJob.create({
+      jobId,
+      userId,
+      username,
       status: "running",
       stage: "queued",
-      startedAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-      error: null,
-      result: null,
-    };
-    jobs.set(jobId, job);
+      startedAt: new Date(),
+      updatedAt: new Date(),
+      token,
+      workspaceId,
+      progress: {},
+    });
+
+    // Set up timeout
+    const timeoutId = setTimeout(async () => {
+      const currentJob = await AsanaJob.findOne({ jobId });
+      if (currentJob && currentJob.status === "running") {
+        await AsanaJob.findOneAndUpdate(
+          { jobId },
+          { 
+            status: "timeout", 
+            error: "Import timed out after 30 minutes",
+            completedAt: new Date(),
+            updatedAt: new Date()
+          }
+        );
+      }
+    }, JOB_TIMEOUT_MS);
 
     setImmediate(async () => {
       try {
@@ -80,25 +149,45 @@ router.post("/start", requireAuth, requireRole(["admin", "super-admin"]), async 
           token,
           workspaceId,
           onProgress: ({ stage }) => {
-            const j = jobs.get(jobId);
-            if (!j) return;
-            j.stage = String(stage || "");
-            j.updatedAt = new Date().toISOString();
+            // Update progress in MongoDB (fire and forget)
+            AsanaJob.findOneAndUpdate(
+              { jobId },
+              { 
+                stage: String(stage || ""),
+                updatedAt: new Date(),
+                [`progress.${stage}`]: new Date()
+              }
+            ).catch(() => {});
           },
         });
 
-        const j = jobs.get(jobId);
-        if (!j) return;
-        j.status = "completed";
-        j.stage = "done";
-        j.result = result;
-        j.updatedAt = new Date().toISOString();
+        // Clear timeout if completed
+        clearTimeout(timeoutId);
+
+        // Update job as completed
+        await AsanaJob.findOneAndUpdate(
+          { jobId },
+          {
+            status: "completed",
+            stage: "done",
+            result,
+            completedAt: new Date(),
+            updatedAt: new Date(),
+          }
+        );
       } catch (e) {
-        const j = jobs.get(jobId);
-        if (!j) return;
-        j.status = "failed";
-        j.error = e instanceof Error ? e.message : "Import failed";
-        j.updatedAt = new Date().toISOString();
+        // Clear timeout on error
+        clearTimeout(timeoutId);
+        
+        await AsanaJob.findOneAndUpdate(
+          { jobId },
+          {
+            status: "failed",
+            error: e instanceof Error ? e.message : "Import failed",
+            completedAt: new Date(),
+            updatedAt: new Date(),
+          }
+        );
       }
     });
 
@@ -109,12 +198,38 @@ router.post("/start", requireAuth, requireRole(["admin", "super-admin"]), async 
 });
 
 router.get("/status/:jobId", requireAuth, requireRole(["admin", "super-admin"]), async (req, res) => {
-  const jobId = String(req.params.jobId || "").trim();
-  const job = jobs.get(jobId);
-  if (!job) {
-    return res.status(404).json({ error: { message: "Job not found" } });
+  try {
+    const jobId = String(req.params.jobId || "").trim();
+    const userId = String(req.user?.sub || req.user?.id || "");
+    
+    const job = await AsanaJob.findOne({ jobId });
+    if (!job) {
+      return res.status(404).json({ error: { message: "Job not found" } });
+    }
+    
+    // Security: only allow user to check their own job (unless super-admin)
+    const userRole = String(req.user?.role || "").toLowerCase();
+    if (job.userId !== userId && userRole !== "super-admin") {
+      return res.status(403).json({ error: { message: "Access denied" } });
+    }
+    
+    return res.json({ 
+      ok: true, 
+      job: {
+        id: job.jobId,
+        status: job.status,
+        stage: job.stage,
+        startedAt: job.startedAt,
+        updatedAt: job.updatedAt,
+        completedAt: job.completedAt,
+        error: job.error,
+        result: job.result,
+        progress: job.progress,
+      }
+    });
+  } catch (err) {
+    return res.status(500).json({ error: { message: "Failed to get job status" } });
   }
-  return res.json({ ok: true, job });
 });
 
 router.post("/test", requireAuth, requireRole(["admin", "super-admin"]), async (req, res) => {
