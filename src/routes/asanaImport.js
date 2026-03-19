@@ -80,46 +80,53 @@ router.post("/start", requireAuth, requireRole(["admin", "super-admin"]), async 
     res.json({ ok: true, jobId });
 
     // Run import in background (after response is sent)
-    setImmediate(async () => {
-      try {
-        const result = await importAsanaData({
-          token,
-          workspaceId,
-          onProgress: async ({ stage }) => {
-            try {
-              await ImportJob.updateOne(
-                { jobId },
-                { $set: { stage: String(stage || ""), updatedAt: new Date() } }
-              );
-            } catch {
-              // ignore progress-update failures
-            }
-          },
-        });
+    setImmediate(() => {
+      console.log(`[ASANA-IMPORT] Background import started for job ${jobId}`);
 
-        await ImportJob.updateOne(
-          { jobId },
-          {
-            $set: {
-              status: "completed",
-              stage: "done",
-              result,
-              updatedAt: new Date(),
-            },
+      importAsanaData({
+        token,
+        workspaceId,
+        onProgress: async ({ stage }) => {
+          console.log(`[ASANA-IMPORT] Job ${jobId} progress: ${stage}`);
+          try {
+            await ImportJob.updateOne(
+              { jobId },
+              { $set: { stage: String(stage || ""), updatedAt: new Date() } }
+            );
+          } catch (err) {
+            console.error(`[ASANA-IMPORT] Failed to update progress for ${jobId}:`, err.message);
           }
-        );
-      } catch (e) {
-        await ImportJob.updateOne(
-          { jobId },
-          {
-            $set: {
-              status: "failed",
-              error: e instanceof Error ? e.message : "Import failed",
-              updatedAt: new Date(),
-            },
-          }
-        ).catch(() => {});
-      }
+        },
+      })
+        .then(async (result) => {
+          console.log(`[ASANA-IMPORT] Job ${jobId} completed successfully`);
+          await ImportJob.updateOne(
+            { jobId },
+            {
+              $set: {
+                status: "completed",
+                stage: "done",
+                result,
+                updatedAt: new Date(),
+              },
+            }
+          );
+        })
+        .catch(async (e) => {
+          console.error(`[ASANA-IMPORT] Job ${jobId} FAILED:`, e.message || e);
+          await ImportJob.updateOne(
+            { jobId },
+            {
+              $set: {
+                status: "failed",
+                error: e instanceof Error ? e.message : "Import failed",
+                updatedAt: new Date(),
+              },
+            }
+          ).catch((dbErr) => {
+            console.error(`[ASANA-IMPORT] Failed to save error status for ${jobId}:`, dbErr.message);
+          });
+        });
     });
 
   } catch (err) {
