@@ -1,6 +1,5 @@
 const fs = require("fs");
 const path = require("path");
-const pLimit = require("p-limit");
 
 const AsanaUser = require("../models/AsanaUser");
 const AsanaWorkspace = require("../models/AsanaWorkspace");
@@ -46,9 +45,10 @@ async function importAsanaData({ token, workspaceId, onProgress }) {
     client,
     "/users",
     { workspace: workspaceId, opt_fields: "gid,name,email" },
-    { delayMs: 450, pageSize: 100 }
+    { delayMs: 600, pageSize: 100 }
   );
   progress("users_fetch_done", { count: users.length });
+  await sleep(1000); // 1 second delay between phases
 
   progress("users_save_start");
   for (const u of users) {
@@ -59,15 +59,17 @@ async function importAsanaData({ token, workspaceId, onProgress }) {
     );
   }
   progress("users_save_done");
+  await sleep(1000); // Delay before next phase
 
   progress("workspaces_fetch_start");
   const workspaces = await fetchAllPaginated(
     client,
     "/workspaces",
     { opt_fields: "gid,name" },
-    { delayMs: 450, pageSize: 100 }
+    { delayMs: 600, pageSize: 100 }
   );
   progress("workspaces_fetch_done", { count: workspaces.length });
+  await sleep(1000);
 
   progress("workspaces_save_start");
   for (const w of workspaces) {
@@ -78,15 +80,17 @@ async function importAsanaData({ token, workspaceId, onProgress }) {
     );
   }
   progress("workspaces_save_done");
+  await sleep(1000);
 
   progress("projects_fetch_start");
   const projects = await fetchAllPaginated(
     client,
     "/projects",
     { workspace: workspaceId, opt_fields: "gid,name,created_at" },
-    { delayMs: 450, pageSize: 100 }
+    { delayMs: 600, pageSize: 100 }
   );
   progress("projects_fetch_done", { count: projects.length });
+  await sleep(1000);
 
   progress("projects_save_start");
   for (const p of projects) {
@@ -104,6 +108,7 @@ async function importAsanaData({ token, workspaceId, onProgress }) {
     );
   }
   progress("projects_save_done");
+  await sleep(1000);
 
   progress("tasks_fetch_start");
   const tasks = [];
@@ -116,12 +121,13 @@ async function importAsanaData({ token, workspaceId, onProgress }) {
         project: projectId,
         opt_fields: "gid,name,notes,due_on,completed,parent.gid",
       },
-      { delayMs: 450, pageSize: 100 }
+      { delayMs: 600, pageSize: 100 }
     );
     tasks.push(...projectTasks.map((t) => ({ ...t, __projectGid: projectId })));
-    await sleep(450);
+    await sleep(600); // 600ms delay between each project
   }
   progress("tasks_fetch_done", { count: tasks.length });
+  await sleep(1000);
 
   progress("tasks_save_start");
   for (const t of tasks) {
@@ -142,6 +148,7 @@ async function importAsanaData({ token, workspaceId, onProgress }) {
     );
   }
   progress("tasks_save_done");
+  await sleep(1000);
 
   // subtasks are included via parent.gid, but Asana also has explicit endpoint.
   // We'll fetch subtasks per task to satisfy the required sequence.
@@ -153,12 +160,13 @@ async function importAsanaData({ token, workspaceId, onProgress }) {
       client,
       `/tasks/${encodeURIComponent(taskId)}/subtasks`,
       { opt_fields: "gid,name,notes,due_on,completed,parent.gid" },
-      { delayMs: 450, pageSize: 100 }
+      { delayMs: 600, pageSize: 100 }
     );
     subtasks.push(...st.map((s) => ({ ...s, __parentGid: taskId })));
-    await sleep(450);
+    await sleep(600); // Sequential: one task at a time
   }
   progress("subtasks_fetch_done", { count: subtasks.length });
+  await sleep(1000);
 
   progress("subtasks_save_start");
   for (const s of subtasks) {
@@ -179,6 +187,7 @@ async function importAsanaData({ token, workspaceId, onProgress }) {
     );
   }
   progress("subtasks_save_done");
+  await sleep(1000);
 
   progress("comments_fetch_start");
   const comments = [];
@@ -188,15 +197,16 @@ async function importAsanaData({ token, workspaceId, onProgress }) {
       client,
       `/tasks/${encodeURIComponent(taskId)}/stories`,
       { opt_fields: "gid,type,text,created_at,created_by.gid" },
-      { delayMs: 450, pageSize: 100 }
+      { delayMs: 600, pageSize: 100 }
     );
     for (const s of stories) {
       if (String(s.type) !== "comment") continue;
       comments.push({ ...s, __taskGid: taskId });
     }
-    await sleep(450);
+    await sleep(600); // Sequential: one task at a time
   }
   progress("comments_fetch_done", { count: comments.length });
+  await sleep(1000);
 
   progress("comments_save_start");
   for (const c of comments) {
@@ -215,6 +225,7 @@ async function importAsanaData({ token, workspaceId, onProgress }) {
     );
   }
   progress("comments_save_done");
+  await sleep(1000);
 
   progress("attachments_fetch_start");
   const attachments = [];
@@ -224,25 +235,26 @@ async function importAsanaData({ token, workspaceId, onProgress }) {
       client,
       `/tasks/${encodeURIComponent(taskId)}/attachments`,
       { opt_fields: "gid,name,download_url,permanent_url,host,size" },
-      { delayMs: 450, pageSize: 100 }
+      { delayMs: 600, pageSize: 100 }
     );
     attachments.push(...atts.map((a) => ({ ...a, __taskGid: taskId })));
-    await sleep(450);
+    await sleep(600); // Sequential: one task at a time
   }
   progress("attachments_fetch_done", { count: attachments.length });
+  await sleep(1000);
 
   const baseUploads = path.resolve(__dirname, "..", "..", "uploads");
 
   progress("attachments_download_start");
   let downloaded = 0;
-  const limit = pLimit(2);
 
-  const downloadOne = async (a) => {
+  // Download attachments SEQUENTIALLY (one at a time) - no concurrency
+  for (const a of attachments) {
     const asanaId = String(a.gid);
 
     const exists = await AsanaAttachment.findOne({ asanaId }).lean();
     if (exists?.filePath) {
-      return;
+      continue;
     }
 
     const downloadUrl = String(a.download_url || "");
@@ -261,50 +273,55 @@ async function importAsanaData({ token, workspaceId, onProgress }) {
         },
         { upsert: true, new: true }
       );
-      return;
+      continue;
     }
 
     const fileName = safeFileName(a.name || `${asanaId}`);
 
-    // NOTE: Asana download_url is short-lived; we must download immediately.
-    const response = await client.get(downloadUrl, { responseType: "arraybuffer" });
-    const mimeType = String(response.headers?.["content-type"] || "");
-    const size = Number(response.headers?.["content-length"] || 0) || Number(a.size || 0) || 0;
+    try {
+      // NOTE: Asana download_url is short-lived; we must download immediately.
+      const response = await client.get(downloadUrl, { responseType: "arraybuffer" });
+      const mimeType = String(response.headers?.["content-type"] || "");
+      const size = Number(response.headers?.["content-length"] || 0) || Number(a.size || 0) || 0;
 
-    const dirName = pickUploadDir(fileName, mimeType);
-    const dir = path.join(baseUploads, dirName);
-    ensureDir(dir);
+      const dirName = pickUploadDir(fileName, mimeType);
+      const dir = path.join(baseUploads, dirName);
+      ensureDir(dir);
 
-    const filePathAbs = path.join(dir, `${Date.now()}_${fileName}`);
-    fs.writeFileSync(filePathAbs, Buffer.from(response.data));
+      const filePathAbs = path.join(dir, `${Date.now()}_${fileName}`);
+      fs.writeFileSync(filePathAbs, Buffer.from(response.data));
 
-    // store relative path so it can be served under /uploads
-    const relative = path.relative(baseUploads, filePathAbs).split(path.sep).join("/");
+      // store relative path so it can be served under /uploads
+      const relative = path.relative(baseUploads, filePathAbs).split(path.sep).join("/");
 
-    await AsanaAttachment.findOneAndUpdate(
-      { asanaId },
-      {
-        $set: {
-          asanaId,
-          taskAsanaId: String(a.__taskGid),
-          fileName,
-          filePath: `/uploads/${relative}`,
-          mimeType,
-          size,
+      await AsanaAttachment.findOneAndUpdate(
+        { asanaId },
+        {
+          $set: {
+            asanaId,
+            taskAsanaId: String(a.__taskGid),
+            fileName,
+            filePath: `/uploads/${relative}`,
+            mimeType,
+            size,
+          },
         },
-      },
-      { upsert: true, new: true }
-    );
+        { upsert: true, new: true }
+      );
 
-    downloaded += 1;
-    if (downloaded % 5 === 0) {
-      progress("attachments_download_progress", { downloaded });
+      downloaded += 1;
+      if (downloaded % 5 === 0) {
+        progress("attachments_download_progress", { downloaded });
+      }
+    } catch (err) {
+      // Skip failed downloads, log but continue
+      console.error(`Failed to download attachment ${asanaId}:`, err.message);
     }
 
-    await sleep(450);
-  };
+    // 600ms delay between each download - SEQUENTIAL
+    await sleep(600);
+  }
 
-  await Promise.all(attachments.map((a) => limit(() => downloadOne(a))));
   progress("attachments_download_done", { downloaded });
 
   return {
