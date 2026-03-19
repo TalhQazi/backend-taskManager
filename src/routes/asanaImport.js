@@ -63,7 +63,7 @@ router.post("/start", requireAuth, requireRole(["admin", "super-admin"]), async 
 
     const jobId = newJobId();
 
-    // Persist the job in MongoDB so any serverless instance can read it
+    // Persist the job in MongoDB so polling always finds it
     await ImportJob.create({
       jobId,
       status: "running",
@@ -74,52 +74,54 @@ router.post("/start", requireAuth, requireRole(["admin", "super-admin"]), async 
       result: null,
     });
 
-    // Run the import directly in this request (NOT in setImmediate).
-    // On Vercel, setImmediate + async work gets killed when the response is sent.
-    // We run the import to completion, updating MongoDB as we go.
-    try {
-      const result = await importAsanaData({
-        token,
-        workspaceId,
-        onProgress: async ({ stage }) => {
-          try {
-            await ImportJob.updateOne(
-              { jobId },
-              { $set: { stage: String(stage || ""), updatedAt: new Date() } }
-            );
-          } catch {
-            // ignore progress-update failures
+    // Return jobId immediately — the import runs in the background.
+    // On EC2 the Node process stays alive, so setImmediate works perfectly.
+    // Progress is tracked in MongoDB so /status/:jobId always finds the job.
+    res.json({ ok: true, jobId });
+
+    // Run import in background (after response is sent)
+    setImmediate(async () => {
+      try {
+        const result = await importAsanaData({
+          token,
+          workspaceId,
+          onProgress: async ({ stage }) => {
+            try {
+              await ImportJob.updateOne(
+                { jobId },
+                { $set: { stage: String(stage || ""), updatedAt: new Date() } }
+              );
+            } catch {
+              // ignore progress-update failures
+            }
+          },
+        });
+
+        await ImportJob.updateOne(
+          { jobId },
+          {
+            $set: {
+              status: "completed",
+              stage: "done",
+              result,
+              updatedAt: new Date(),
+            },
           }
-        },
-      });
+        );
+      } catch (e) {
+        await ImportJob.updateOne(
+          { jobId },
+          {
+            $set: {
+              status: "failed",
+              error: e instanceof Error ? e.message : "Import failed",
+              updatedAt: new Date(),
+            },
+          }
+        ).catch(() => {});
+      }
+    });
 
-      await ImportJob.updateOne(
-        { jobId },
-        {
-          $set: {
-            status: "completed",
-            stage: "done",
-            result,
-            updatedAt: new Date(),
-          },
-        }
-      );
-    } catch (e) {
-      await ImportJob.updateOne(
-        { jobId },
-        {
-          $set: {
-            status: "failed",
-            error: e instanceof Error ? e.message : "Import failed",
-            updatedAt: new Date(),
-          },
-        }
-      ).catch(() => {});
-    }
-
-    // Return the final job state
-    const finalJob = await ImportJob.findOne({ jobId }).lean();
-    return res.json({ ok: true, jobId, job: finalJob || { jobId, status: "completed" } });
   } catch (err) {
     return next(err);
   }
