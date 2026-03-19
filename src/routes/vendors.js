@@ -65,6 +65,7 @@ router.post("/", requireAuth, async (req, res, next) => {
       resourceType: "vendor",
       resourceName: created.name,
       details: created.serviceType ? `Service: ${created.serviceType}` : "",
+      resourceId: String(created._id),
     });
     
     res.status(201).json({ item: created.toObject() });
@@ -102,6 +103,7 @@ router.put("/:id", requireAuth, async (req, res, next) => {
       resourceType: "vendor",
       resourceName: updated.name,
       details: parsed.data.status ? `Status: ${parsed.data.status}` : "",
+      resourceId: String(req.params.id),
     });
 
     res.json({ item: updated });
@@ -123,6 +125,7 @@ router.delete("/:id", requireAuth, async (req, res, next) => {
       action: "deleted",
       resourceType: "vendor",
       resourceName: deleted.name,
+      resourceId: String(req.params.id),
     });
     
     res.status(204).send();

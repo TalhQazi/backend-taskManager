@@ -9,8 +9,19 @@ const Message = require("../models/Message");
  * @param {string} options.resourceType - The type of resource (e.g., "employee", "task", "company")
  * @param {string} options.resourceName - The name of the resource affected
  * @param {string} [options.details] - Additional details about the action
+ * @param {string} [options.resourceId] - The ID of the resource affected
+ * @param {string} [options.link] - Optional UI link (if you want to force a specific frontend path)
  */
-async function createNotification({ actor, actorRole, action, resourceType, resourceName, details = "" }) {
+async function createNotification({
+  actor,
+  actorRole,
+  action,
+  resourceType,
+  resourceName,
+  details = "",
+  resourceId = "",
+  link = "",
+}) {
   try {
     const timestamp = new Date().toISOString();
     
@@ -34,6 +45,11 @@ async function createNotification({ actor, actorRole, action, resourceType, reso
       timestamp: timestamp,
       type: "broadcast",
       status: "sent",
+      meta: {
+        resourceType: String(resourceType || ""),
+        resourceId: String(resourceId || ""),
+        link: String(link || ""),
+      },
     });
 
     console.log(`[Notification] Created: ${content}`);

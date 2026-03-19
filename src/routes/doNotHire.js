@@ -61,6 +61,7 @@ router.post("/", requireAuth, async (req, res, next) => {
         resourceType: "do not hire entry",
         resourceName: created.fullName,
         details: `Reason: ${created.reason}`,
+        resourceId: String(created._id),
       });
       
       return res.status(201).json({ item: withId(created.toObject()) });
@@ -79,6 +80,7 @@ router.post("/", requireAuth, async (req, res, next) => {
       resourceType: "do not hire entry",
       resourceName: created.fullName,
       details: `Reason: ${created.reason}`,
+      resourceId: String(created._id),
     });
     
     res.status(201).json({ item: withId(created.toObject()) });
@@ -107,6 +109,7 @@ router.put("/:id", requireAuth, async (req, res, next) => {
         action: "updated",
         resourceType: "do not hire entry",
         resourceName: updated.fullName,
+        resourceId: String(req.params.id),
       });
       
       return res.json({ item: withId(updated) });
@@ -125,6 +128,7 @@ router.put("/:id", requireAuth, async (req, res, next) => {
       action: "updated",
       resourceType: "do not hire entry",
       resourceName: updated.fullName,
+      resourceId: String(req.params.id),
     });
 
     res.json({ item: withId(updated) });
@@ -145,6 +149,7 @@ router.delete("/:id", requireAuth, async (req, res, next) => {
       action: "deleted",
       resourceType: "do not hire entry",
       resourceName: deleted.fullName,
+      resourceId: String(req.params.id),
     });
     
     res.status(204).send();

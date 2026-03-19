@@ -115,6 +115,7 @@ router.post("/", requireAuth, async (req, res, next) => {
         resourceType: "location",
         resourceName: createdObj.name,
         details: createdObj.city ? `City: ${createdObj.city}` : "",
+        resourceId: String(createdObj.id),
       });
       
       return res.status(201).json({ item: withId(created.toObject()) });
@@ -143,6 +144,7 @@ router.post("/", requireAuth, async (req, res, next) => {
       resourceType: "location",
       resourceName: createdObj.name,
       details: createdObj.city ? `City: ${createdObj.city}` : "",
+      resourceId: String(createdObj.id),
     });
     
     res.status(201).json({ item: withId(created.toObject()) });
@@ -196,6 +198,7 @@ router.put("/:id", requireAuth, async (req, res, next) => {
         resourceType: "location",
         resourceName: updatedObj.name,
         details: patch.status ? `Status: ${patch.status}` : "",
+        resourceId: String(updatedObj.id),
       });
       
       return res.json({ item: updatedObj });
@@ -227,6 +230,7 @@ router.put("/:id", requireAuth, async (req, res, next) => {
       action: "updated",
       resourceType: "location",
       resourceName: updatedObj.name,
+      resourceId: String(updatedObj.id),
     });
     
     res.json({ item: updatedObj });
@@ -260,6 +264,7 @@ router.delete("/:id", requireAuth, async (req, res, next) => {
       action: "deleted",
       resourceType: "location",
       resourceName: deletedObj.name,
+      resourceId: String(deletedObj.id),
     });
     
     res.status(204).send();

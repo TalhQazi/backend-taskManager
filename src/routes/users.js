@@ -100,6 +100,7 @@ router.post("/", requireAuth, requireRole(["super-admin", "admin"]), async (req,
       resourceType: "user",
       resourceName: created.name || created.username || created.email,
       details: `Role: ${created.role}`,
+      resourceId: String(created._id),
     });
 
     return res.status(201).json({ item: sanitizeUser(created.toObject()) });
@@ -144,6 +145,7 @@ router.put("/:id", requireAuth, requireRole(["super-admin", "admin"]), async (re
       resourceType: "user",
       resourceName: updated.name || updated.username || updated.email,
       details: patch.status ? `Status: ${patch.status}` : "",
+      resourceId: String(req.params.id),
     });
 
     return res.json({ item: sanitizeUser(updated) });
@@ -169,6 +171,7 @@ router.delete("/:id", requireAuth, requireRole(["super-admin", "admin"]), async 
       action: "deleted",
       resourceType: "user",
       resourceName: deleted.name || deleted.username || deleted.email,
+      resourceId: String(req.params.id),
     });
 
     return res.status(204).send();

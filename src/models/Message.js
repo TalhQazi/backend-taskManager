@@ -12,6 +12,11 @@ const MessageSchema = new mongoose.Schema(
     createdAt: { type: String, default: "" },
     type: { type: String, enum: ["direct", "broadcast"], required: true },
     status: { type: String, enum: ["sent", "delivered", "read"], default: "sent" },
+    meta: {
+      resourceType: { type: String, default: "" },
+      resourceId: { type: String, default: "" },
+      link: { type: String, default: "" },
+    },
   },
   { timestamps: true }
 );

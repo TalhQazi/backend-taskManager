@@ -222,6 +222,7 @@ router.put("/:id", requireAuth, async (req, res, next) => {
       resourceType: "appliance",
       resourceName: updated.name,
       details: data.status ? `Status: ${data.status}` : "",
+      resourceId: String(req.params.id),
     });
     
     res.json({ item: updated });
@@ -269,6 +270,7 @@ router.post("/upload", requireAuth, upload.single("tagPhotoFile"), async (req, r
       resourceType: "appliance",
       resourceName: created.name,
       details: created.category ? `Category: ${created.category}` : "",
+      resourceId: String(created._id),
     });
     
     return res.status(201).json({ item: created.toObject() });
@@ -292,6 +294,7 @@ router.delete("/:id", requireAuth, async (req, res, next) => {
       action: "deleted",
       resourceType: "appliance",
       resourceName: deleted.name,
+      resourceId: String(req.params.id),
     });
     
     res.status(204).send();

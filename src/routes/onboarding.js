@@ -118,6 +118,7 @@ router.post("/", requireAuth, async (req, res, next) => {
         resourceType: "onboarding",
         resourceName: created.employeeName,
         details: `Status: ${created.approvalStatus}`,
+        resourceId: String(created._id),
       });
 
       return res.status(201).json({ item: withId(created.toObject()) });
@@ -136,6 +137,7 @@ router.post("/", requireAuth, async (req, res, next) => {
       resourceType: "onboarding",
       resourceName: created.employeeName,
       details: `Status: ${created.approvalStatus}`,
+      resourceId: String(created._id),
     });
     
     res.status(201).json({ item: withId(created.toObject()) });
@@ -177,6 +179,7 @@ router.put("/:id", requireAuth, async (req, res, next) => {
         resourceType: "onboarding",
         resourceName: updated.employeeName,
         details: patch.approvalStatus ? `Status: ${patch.approvalStatus}` : "",
+        resourceId: String(req.params.id),
       });
       
       return res.json({ item: withId(updated) });
@@ -195,6 +198,7 @@ router.put("/:id", requireAuth, async (req, res, next) => {
       action: "updated",
       resourceType: "onboarding",
       resourceName: updated.employeeName,
+      resourceId: String(req.params.id),
     });
 
     res.json({ item: withId(updated) });
@@ -267,6 +271,7 @@ router.post("/upload", requireAuth, upload.fields([
       resourceType: "onboarding",
       resourceName: created.employeeName,
       details: `With attachments, Status: ${created.approvalStatus}`,
+      resourceId: String(created._id),
     });
 
     return res.status(201).json({ item: withId(created.toObject()) });
@@ -287,6 +292,7 @@ router.delete("/:id", requireAuth, async (req, res, next) => {
       action: "deleted",
       resourceType: "onboarding",
       resourceName: deleted.employeeName,
+      resourceId: String(req.params.id),
     });
     
     res.status(204).send();

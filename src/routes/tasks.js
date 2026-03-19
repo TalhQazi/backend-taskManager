@@ -9,6 +9,7 @@ const TaskComment = require("../models/TaskComment");
 const ActivityLog = require("../models/ActivityLog");
 const { requireAuth } = require("../middleware/auth");
 const { checkAndFlagOffTheClock } = require("../lib/offTheClockWork");
+const { createNotification } = require("../utils/notifications");
 
 const router = express.Router();
 // Middleware to skip body parsing for multipart/form-data (must be before other middleware)
@@ -154,6 +155,15 @@ router.post("/", requireAuth, async (req, res, next) => {
     
     // Log activity
     await logActivity(req, "TASK_CREATE", "task", created._id, created.title, `Created task: ${created.title}`);
+
+    await createNotification({
+      actor: req.user?.username || req.user?.name || "System",
+      actorRole: req.user?.role || "",
+      action: "created",
+      resourceType: "task",
+      resourceName: created.title,
+      resourceId: String(created._id),
+    });
     
     return res.status(201).json({ item: withId(obj) });
   } catch (err) {
@@ -357,6 +367,16 @@ router.patch("/:id/status", requireAuth, async (req, res, next) => {
 
     await logActivity(req, "TASK_STATUS_UPDATE", "task", req.params.id, updated.title, `Updated task status: ${updated.title} -> ${status}`);
 
+    await createNotification({
+      actor: req.user?.username || req.user?.name || "System",
+      actorRole: req.user?.role || "",
+      action: "status changed",
+      resourceType: "task",
+      resourceName: updated.title,
+      details: `Status -> ${status}`,
+      resourceId: String(req.params.id),
+    });
+
     return res.json({ item: withId(updated) });
   } catch (err) {
     return next(err);
@@ -403,6 +423,15 @@ router.put("/:id", requireAuth, async (req, res, next) => {
     // Log activity
     await logActivity(req, "TASK_UPDATE", "task", req.params.id, updated.title, `Updated task: ${updated.title}`);
 
+    await createNotification({
+      actor: req.user?.username || req.user?.name || "System",
+      actorRole: req.user?.role || "",
+      action: "updated",
+      resourceType: "task",
+      resourceName: updated.title,
+      resourceId: String(req.params.id),
+    });
+
     return res.json({ item: withId(updated) });
   } catch (err) {
     return next(err);
@@ -418,6 +447,15 @@ router.delete("/:id", requireAuth, async (req, res, next) => {
     
     // Log activity
     await logActivity(req, "TASK_DELETE", "task", req.params.id, deleted.title, `Deleted task: ${deleted.title}`);
+
+    await createNotification({
+      actor: req.user?.username || req.user?.name || "System",
+      actorRole: req.user?.role || "",
+      action: "deleted",
+      resourceType: "task",
+      resourceName: deleted.title,
+      resourceId: String(req.params.id),
+    });
     
     return res.status(204).send();
   } catch (err) {

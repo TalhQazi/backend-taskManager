@@ -245,6 +245,7 @@ router.post("/", requireAuth, async (req, res, next) => {
         resourceType: "time entry",
         resourceName: adminParsed.data.employee,
         details: `Date: ${adminParsed.data.date}`,
+        resourceId: String(created._id),
       });
       
       return res.status(201).json({ item: withId(created.toObject()) });
@@ -278,6 +279,7 @@ router.post("/", requireAuth, async (req, res, next) => {
       resourceType: "time entry",
       resourceName: parsed.data.employee,
       details: `Date: ${parsed.data.date}`,
+      resourceId: String(created._id),
     });
     
     return res.status(201).json({ item: withId(obj) });
@@ -483,6 +485,7 @@ router.put("/:id", requireAuth, async (req, res, next) => {
         resourceType: "time entry",
         resourceName: updated.employee,
         details: patch.status ? `Status: ${patch.status}` : "",
+        resourceId: String(req.params.id),
       });
       
       return res.json({ item: withId(updated) });
@@ -553,6 +556,7 @@ router.put("/:id", requireAuth, async (req, res, next) => {
       action: "updated",
       resourceType: "time entry",
       resourceName: updated.employee,
+      resourceId: String(req.params.id),
     });
 
     if (updated.clockOutAt || updated.clockOut) {
@@ -601,6 +605,7 @@ router.delete("/:id", requireAuth, async (req, res, next) => {
       action: "deleted",
       resourceType: "time entry",
       resourceName: deleted.employee,
+      resourceId: String(req.params.id),
     });
     
     return res.status(204).send();

@@ -252,6 +252,7 @@ router.post("/", requireAuth, async (req, res, next) => {
         resourceType: "vehicle",
         resourceName: created.name,
         details: `License: ${created.licensePlate}`,
+        resourceId: String(created._id),
       });
       
       return res.status(201).json({ item: withId(obj) });
@@ -385,6 +386,7 @@ router.put("/:id", requireAuth, async (req, res, next) => {
         resourceType: "vehicle",
         resourceName: updated.name,
         details: patch.status ? `Status: ${patch.status}` : "",
+        resourceId: String(req.params.id),
       });
       
       return res.json({ item: withId(updated) });
@@ -420,6 +422,7 @@ router.put("/:id", requireAuth, async (req, res, next) => {
       action: "updated",
       resourceType: "vehicle",
       resourceName: updated.name,
+      resourceId: String(req.params.id),
     });
 
     return res.json({ item: withId(updated) });
@@ -445,6 +448,7 @@ router.delete("/:id", requireAuth, async (req, res, next) => {
       action: "deleted",
       resourceType: "vehicle",
       resourceName: deleted.name,
+      resourceId: String(req.params.id),
     });
     
     return res.status(204).send();

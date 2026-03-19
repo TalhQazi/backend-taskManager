@@ -136,6 +136,7 @@ router.post("/", requireAuth, async (req, res, next) => {
       action: "created",
       resourceType: "employee",
       resourceName: created.name,
+      resourceId: String(created._id),
     });
     
     return res.status(201).json({ item: withId(obj) });
@@ -190,6 +191,7 @@ router.put("/:id", requireAuth, async (req, res, next) => {
       action: "updated",
       resourceType: "employee",
       resourceName: updated.name,
+      resourceId: String(req.params.id),
     });
 
     return res.json({ item: withId(updated) });
@@ -215,6 +217,7 @@ router.delete("/:id", requireAuth, async (req, res, next) => {
       action: "deleted",
       resourceType: "employee",
       resourceName: deleted.name,
+      resourceId: String(req.params.id),
     });
     
     return res.status(204).send();

@@ -141,6 +141,7 @@ router.post("/", requireAuth, requireRole(["super-admin", "admin"]), async (req,
       resourceType: "company",
       resourceName: created.name,
       details: `Code: ${created.code}`,
+      resourceId: String(created._id),
     });
 
     return res.status(201).json({ item: withId(created) });
@@ -186,6 +187,7 @@ router.put("/:id", requireAuth, requireRole(["super-admin", "admin"]), async (re
       action: "updated",
       resourceType: "company",
       resourceName: updated.name,
+      resourceId: String(req.params.id),
     });
 
     return res.json({ item: withId(updated) });
@@ -209,6 +211,7 @@ router.delete("/:id", requireAuth, requireRole(["super-admin", "admin"]), async 
       action: "deleted",
       resourceType: "company",
       resourceName: deleted.name,
+      resourceId: String(req.params.id),
     });
 
     return res.status(204).send();
