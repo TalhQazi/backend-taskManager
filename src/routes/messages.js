@@ -59,8 +59,14 @@ router.get("/", requireAuth, async (req, res, next) => {
     } else {
       // Otherwise apply individual filters
       if (sender) query.sender = sender;
-      if (recipient) query.recipient = recipient;
       if (type) query.type = type;
+
+      if (recipient) {
+        query.recipient = recipient;
+      } else if (String(type || "").toLowerCase() === "broadcast") {
+        const role = String(req.user?.role || "").trim();
+        query.recipient = role ? { $in: ["all", role] } : "all";
+      }
     }
 
     const items = await Message.find(query).sort({ createdAt: -1 }).lean();

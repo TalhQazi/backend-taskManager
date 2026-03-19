@@ -17,6 +17,7 @@ async function main() {
 
   await seedUser({ username: "admin", password: "admin123", role: "admin" });
   await seedUser({ username: "manager", password: "manager123", role: "manager" });
+  await seedUser({ username: "developer", password: "developer123", role: "developer" });
 
  
   console.log("Seed complete");

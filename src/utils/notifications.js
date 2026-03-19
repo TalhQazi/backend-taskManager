@@ -21,6 +21,8 @@ async function createNotification({
   details = "",
   resourceId = "",
   link = "",
+  recipient = "all",
+  audience = "all",
 }) {
   try {
     const timestamp = new Date().toISOString();
@@ -39,8 +41,8 @@ async function createNotification({
       title: `${action.charAt(0).toUpperCase() + action.slice(1)} ${resourceType}`,
       sender: actor,
       senderAvatar: "",
-      recipient: "all", // Broadcast to all
-      audience: "all",
+      recipient: String(recipient || "all"),
+      audience: String(audience || "all"),
       content: content,
       timestamp: timestamp,
       type: "broadcast",
