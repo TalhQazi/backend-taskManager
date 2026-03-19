@@ -9,10 +9,9 @@ const AsanaProject = require("../models/AsanaProject");
 const AsanaTask = require("../models/AsanaTask");
 const AsanaComment = require("../models/AsanaComment");
 const AsanaAttachment = require("../models/AsanaAttachment");
+const ImportJob = require("../models/ImportJob");
 
 const router = express.Router();
-
-const jobs = new Map();
 
 function newJobId() {
   return `job_${Date.now()}_${Math.random().toString(16).slice(2)}`;
@@ -63,46 +62,64 @@ router.post("/start", requireAuth, requireRole(["admin", "super-admin"]), async 
     }
 
     const jobId = newJobId();
-    const job = {
-      id: jobId,
+
+    // Persist the job in MongoDB so any serverless instance can read it
+    await ImportJob.create({
+      jobId,
       status: "running",
       stage: "queued",
-      startedAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
+      startedAt: new Date(),
+      updatedAt: new Date(),
       error: null,
       result: null,
-    };
-    jobs.set(jobId, job);
-
-    setImmediate(async () => {
-      try {
-        const result = await importAsanaData({
-          token,
-          workspaceId,
-          onProgress: ({ stage }) => {
-            const j = jobs.get(jobId);
-            if (!j) return;
-            j.stage = String(stage || "");
-            j.updatedAt = new Date().toISOString();
-          },
-        });
-
-        const j = jobs.get(jobId);
-        if (!j) return;
-        j.status = "completed";
-        j.stage = "done";
-        j.result = result;
-        j.updatedAt = new Date().toISOString();
-      } catch (e) {
-        const j = jobs.get(jobId);
-        if (!j) return;
-        j.status = "failed";
-        j.error = e instanceof Error ? e.message : "Import failed";
-        j.updatedAt = new Date().toISOString();
-      }
     });
 
-    return res.json({ ok: true, jobId });
+    // Run the import directly in this request (NOT in setImmediate).
+    // On Vercel, setImmediate + async work gets killed when the response is sent.
+    // We run the import to completion, updating MongoDB as we go.
+    try {
+      const result = await importAsanaData({
+        token,
+        workspaceId,
+        onProgress: async ({ stage }) => {
+          try {
+            await ImportJob.updateOne(
+              { jobId },
+              { $set: { stage: String(stage || ""), updatedAt: new Date() } }
+            );
+          } catch {
+            // ignore progress-update failures
+          }
+        },
+      });
+
+      await ImportJob.updateOne(
+        { jobId },
+        {
+          $set: {
+            status: "completed",
+            stage: "done",
+            result,
+            updatedAt: new Date(),
+          },
+        }
+      );
+    } catch (e) {
+      await ImportJob.updateOne(
+        { jobId },
+        {
+          $set: {
+            status: "failed",
+            error: e instanceof Error ? e.message : "Import failed",
+            updatedAt: new Date(),
+          },
+        }
+      ).catch(() => {});
+    }
+
+    // Return the final job state
+    const finalJob = await ImportJob.findOne({ jobId }).lean();
+    return res.json({ ok: true, jobId, job: finalJob || { jobId, status: "completed" } });
   } catch (err) {
     return next(err);
   }
@@ -110,11 +127,25 @@ router.post("/start", requireAuth, requireRole(["admin", "super-admin"]), async 
 
 router.get("/status/:jobId", requireAuth, requireRole(["admin", "super-admin"]), async (req, res) => {
   const jobId = String(req.params.jobId || "").trim();
-  const job = jobs.get(jobId);
+
+  // Look up the job from MongoDB instead of in-memory Map
+  const job = await ImportJob.findOne({ jobId }).lean();
   if (!job) {
     return res.status(404).json({ error: { message: "Job not found" } });
   }
-  return res.json({ ok: true, job });
+
+  return res.json({
+    ok: true,
+    job: {
+      id: job.jobId,
+      status: job.status,
+      stage: job.stage,
+      startedAt: job.startedAt,
+      updatedAt: job.updatedAt,
+      error: job.error,
+      result: job.result,
+    },
+  });
 });
 
 router.post("/test", requireAuth, requireRole(["admin", "super-admin"]), async (req, res) => {

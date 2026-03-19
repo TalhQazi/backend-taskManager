@@ -48,7 +48,7 @@ async function importAsanaData({ token, workspaceId, onProgress }) {
     { delayMs: 600, pageSize: 100 }
   );
   progress("users_fetch_done", { count: users.length });
-  await sleep(1000); // 1 second delay between phases
+  await sleep(200);
 
   progress("users_save_start");
   for (const u of users) {
@@ -59,7 +59,7 @@ async function importAsanaData({ token, workspaceId, onProgress }) {
     );
   }
   progress("users_save_done");
-  await sleep(1000); // Delay before next phase
+  await sleep(200);
 
   progress("workspaces_fetch_start");
   const workspaces = await fetchAllPaginated(
@@ -69,7 +69,7 @@ async function importAsanaData({ token, workspaceId, onProgress }) {
     { delayMs: 600, pageSize: 100 }
   );
   progress("workspaces_fetch_done", { count: workspaces.length });
-  await sleep(1000);
+  await sleep(200);
 
   progress("workspaces_save_start");
   for (const w of workspaces) {
@@ -80,7 +80,7 @@ async function importAsanaData({ token, workspaceId, onProgress }) {
     );
   }
   progress("workspaces_save_done");
-  await sleep(1000);
+  await sleep(200);
 
   progress("projects_fetch_start");
   const projects = await fetchAllPaginated(
@@ -90,7 +90,7 @@ async function importAsanaData({ token, workspaceId, onProgress }) {
     { delayMs: 600, pageSize: 100 }
   );
   progress("projects_fetch_done", { count: projects.length });
-  await sleep(1000);
+  await sleep(200);
 
   progress("projects_save_start");
   for (const p of projects) {
@@ -108,7 +108,7 @@ async function importAsanaData({ token, workspaceId, onProgress }) {
     );
   }
   progress("projects_save_done");
-  await sleep(1000);
+  await sleep(200);
 
   progress("tasks_fetch_start");
   const tasks = [];
@@ -127,7 +127,7 @@ async function importAsanaData({ token, workspaceId, onProgress }) {
     await sleep(600); // 600ms delay between each project
   }
   progress("tasks_fetch_done", { count: tasks.length });
-  await sleep(1000);
+  await sleep(200);
 
   progress("tasks_save_start");
   for (const t of tasks) {
@@ -148,7 +148,7 @@ async function importAsanaData({ token, workspaceId, onProgress }) {
     );
   }
   progress("tasks_save_done");
-  await sleep(1000);
+  await sleep(200);
 
   // subtasks are included via parent.gid, but Asana also has explicit endpoint.
   // We'll fetch subtasks per task to satisfy the required sequence.
@@ -166,7 +166,7 @@ async function importAsanaData({ token, workspaceId, onProgress }) {
     await sleep(600); // Sequential: one task at a time
   }
   progress("subtasks_fetch_done", { count: subtasks.length });
-  await sleep(1000);
+  await sleep(200);
 
   progress("subtasks_save_start");
   for (const s of subtasks) {
@@ -187,7 +187,7 @@ async function importAsanaData({ token, workspaceId, onProgress }) {
     );
   }
   progress("subtasks_save_done");
-  await sleep(1000);
+  await sleep(200);
 
   progress("comments_fetch_start");
   const comments = [];
@@ -206,7 +206,7 @@ async function importAsanaData({ token, workspaceId, onProgress }) {
     await sleep(600); // Sequential: one task at a time
   }
   progress("comments_fetch_done", { count: comments.length });
-  await sleep(1000);
+  await sleep(200);
 
   progress("comments_save_start");
   for (const c of comments) {
@@ -225,7 +225,7 @@ async function importAsanaData({ token, workspaceId, onProgress }) {
     );
   }
   progress("comments_save_done");
-  await sleep(1000);
+  await sleep(200);
 
   progress("attachments_fetch_start");
   const attachments = [];
@@ -241,7 +241,7 @@ async function importAsanaData({ token, workspaceId, onProgress }) {
     await sleep(600); // Sequential: one task at a time
   }
   progress("attachments_fetch_done", { count: attachments.length });
-  await sleep(1000);
+  await sleep(200);
 
   const baseUploads = path.resolve(__dirname, "..", "..", "uploads");
 
