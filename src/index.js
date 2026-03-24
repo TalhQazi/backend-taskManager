@@ -3,6 +3,8 @@ const cors = require("cors");
 const morgan = require("morgan");
 const path = require("path");
 const fs = require("fs");
+const { createServer } = require("http");
+const { Server } = require("socket.io");
 require("dotenv").config();
 
 const { connectDb } = require("./lib/db");
@@ -32,6 +34,75 @@ const asanaImportRoutes = require("./routes/asanaImport");
 const bugsRoutes = require("./routes/bugs");
 //going to express now
 const app = express();
+const httpServer = createServer(app);
+
+// Socket.io setup
+const io = new Server(httpServer, {
+  cors: {
+    origin: (origin, callback) => {
+      const configuredOrigins = (process.env.CORS_ORIGIN || "")
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean);
+      
+      if (!origin) return callback(null, true);
+      if (configuredOrigins.length === 0) return callback(null, true);
+      if (configuredOrigins.includes("*")) return callback(null, true);
+      if (configuredOrigins.includes(origin)) return callback(null, true);
+      
+      // Always allow localhost/127.0.0.1 for local development
+      try {
+        const { hostname } = new URL(origin);
+        if (hostname === "localhost" || hostname === "127.0.0.1") {
+          return callback(null, true);
+        }
+      } catch {
+        // ignore invalid origins
+      }
+      
+      return callback(new Error(`CORS blocked for origin: ${origin}`));
+    },
+    credentials: true,
+  },
+});
+
+// Store io instance globally so routes can access it
+global.io = io;
+
+// Socket.io connection handling
+io.on("connection", (socket) => {
+  console.log("Client connected:", socket.id);
+  
+  // Join task-specific room for receiving real-time comments
+  socket.on("join-task", (taskId) => {
+    if (taskId) {
+      socket.join(`task-${taskId}`);
+      console.log(`Socket ${socket.id} joined task-${taskId}`);
+    }
+  });
+  
+  // Leave task room
+  socket.on("leave-task", (taskId) => {
+    if (taskId) {
+      socket.leave(`task-${taskId}`);
+      console.log(`Socket ${socket.id} left task-${taskId}`);
+    }
+  });
+  
+  // Handle typing indicator
+  socket.on("typing", ({ taskId, username }) => {
+    socket.to(`task-${taskId}`).emit("typing", { taskId, username });
+  });
+  
+  // Handle stop typing
+  socket.on("stop-typing", ({ taskId }) => {
+    socket.to(`task-${taskId}`).emit("stop-typing", { taskId });
+  });
+  
+  socket.on("disconnect", () => {
+    console.log("Client disconnected:", socket.id);
+  });
+});
 
 const uploadsDir = path.resolve(__dirname, "..", "uploads");
 try {
@@ -121,9 +192,10 @@ const port = Number(process.env.PORT || 5000);
 
 connectDb()
   .then(() => {
-    app.listen(port, () => {
+    httpServer.listen(port, () => {
     
       console.log(`Backend listening on http://localhost:${port}`);
+      console.log(`WebSocket server ready`);
     });
   })
   .catch((err) => {
