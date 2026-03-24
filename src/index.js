@@ -40,6 +40,7 @@ const httpServer = createServer(app);
 
 // Socket.io setup
 const io = new Server(httpServer, {
+  path: "/api/socket.io/",
   cors: {
     origin: (origin, callback) => {
       const configuredOrigins = (process.env.CORS_ORIGIN || "")
