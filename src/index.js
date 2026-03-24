@@ -40,6 +40,7 @@ const httpServer = createServer(app);
 
 // Socket.io setup
 const io = new Server(httpServer, {
+  path: "/api/socket.io/",
   cors: {
     origin: (origin, callback) => {
       const configuredOrigins = (process.env.CORS_ORIGIN || "")
@@ -47,7 +48,11 @@ const io = new Server(httpServer, {
         .map((s) => s.trim())
         .filter(Boolean);
       
-      configuredOrigins.push("https://bug-panel.vercel.app", "http://localhost:3001");
+      configuredOrigins.push(
+        "https://bug-panel.vercel.app", 
+        "http://localhost:3001",
+        "https://task.se7eninc.com"
+      );
       
       if (!origin) return callback(null, true);
       if (configuredOrigins.length === 0) return callback(null, true);
@@ -120,7 +125,11 @@ const configuredOrigins = (process.env.CORS_ORIGIN || "")
   .map((s) => s.trim())
   .filter(Boolean);
 
-configuredOrigins.push("https://bug-panel.vercel.app", "http://localhost:3001");
+configuredOrigins.push(
+  "https://bug-panel.vercel.app", 
+  "http://localhost:3001",
+  "https://task.se7eninc.com"
+);
 
 const isDev = String(process.env.NODE_ENV || "").toLowerCase() !== "production";
 
