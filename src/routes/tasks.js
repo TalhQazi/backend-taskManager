@@ -264,6 +264,16 @@ router.post("/upload", requireAuth, upload.single("file"), async (req, res, next
     
     // Log activity
     await logActivity(req, "TASK_CREATE", "task", created._id, created.title, `Created task with attachment: ${created.title}`);
+
+    // Create notification for task creation
+    await createNotification({
+      actor: req.user?.username || req.user?.name || "System",
+      actorRole: req.user?.role || "",
+      action: "created",
+      resourceType: "task",
+      resourceName: created.title,
+      resourceId: String(created._id),
+    });
     
     return res.status(201).json({ item: withId(obj) });
   } catch (err) {

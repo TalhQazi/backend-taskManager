@@ -3,6 +3,7 @@ const { z } = require("zod");
 const bcrypt = require("bcryptjs");
 
 const Employee = require("../models/Employee");
+const User = require("../models/User");
 const ActivityLog = require("../models/ActivityLog");
 const Settings = require("../models/Settings");
 const { createNotification } = require("../utils/notifications");
@@ -124,6 +125,23 @@ router.post("/", requireAuth, async (req, res, next) => {
       passwordHash,
     });
 
+    // Create corresponding user account for login
+    try {
+      // Use email as username (or generate from name if no email)
+      const userUsername = parsed.data.email || parsed.data.name.toLowerCase().replace(/\s+/g, '.');
+      await User.create({
+        name: parsed.data.name,
+        email: parsed.data.email || "",
+        username: userUsername,
+        passwordHash: passwordHash,
+        role: "employee",
+        status: "active",
+      });
+    } catch (userErr) {
+      // Log but don't fail - employee was created successfully
+      console.error("Failed to create user account for employee:", userErr.message);
+    }
+
     const obj = created.toObject();
     
     // Log activity
@@ -184,6 +202,18 @@ router.put("/:id", requireAuth, async (req, res, next) => {
     // Log activity
     await logActivity(req, "EMPLOYEE_UPDATE", "employee", req.params.id, updated.name, `Updated employee: ${updated.name}`);
 
+    // Sync user account if password was updated
+    if (patch.passwordHash) {
+      try {
+        await User.findOneAndUpdate(
+          { email: updated.email },
+          { passwordHash: patch.passwordHash }
+        );
+      } catch (userErr) {
+        console.error("Failed to update user password:", userErr.message);
+      }
+    }
+
     // Create notification for all admin/manager users
     await createNotification({
       actor: req.user?.username || req.user?.name || "Admin",
@@ -205,6 +235,13 @@ router.delete("/:id", requireAuth, async (req, res, next) => {
     const deleted = await Employee.findByIdAndDelete(req.params.id).lean();
     if (!deleted) {
       return res.status(404).json({ error: { message: "Employee not found" } });
+    }
+    
+    // Also delete corresponding user account
+    try {
+      await User.deleteOne({ email: deleted.email });
+    } catch (userErr) {
+      console.error("Failed to delete user account:", userErr.message);
     }
     
     // Log activity
@@ -258,6 +295,16 @@ router.post("/:id/reset-password", requireAuth, requireRole(["super-admin"]), as
 
     if (!updated) {
       return res.status(404).json({ error: { message: "Employee not found" } });
+    }
+
+    // Also update user account password
+    try {
+      await User.findOneAndUpdate(
+        { email: updated.email },
+        { passwordHash: passwordHash }
+      );
+    } catch (userErr) {
+      console.error("Failed to update user password:", userErr.message);
     }
 
     return res.json({ success: true, message: "Password reset successfully" });
