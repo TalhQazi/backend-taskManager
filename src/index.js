@@ -47,6 +47,8 @@ const io = new Server(httpServer, {
         .map((s) => s.trim())
         .filter(Boolean);
       
+      configuredOrigins.push("https://bug-panel.vercel.app", "http://localhost:3001");
+      
       if (!origin) return callback(null, true);
       if (configuredOrigins.length === 0) return callback(null, true);
       if (configuredOrigins.includes("*")) return callback(null, true);
@@ -117,6 +119,8 @@ const configuredOrigins = (process.env.CORS_ORIGIN || "")
   .split(",")
   .map((s) => s.trim())
   .filter(Boolean);
+
+configuredOrigins.push("https://bug-panel.vercel.app", "http://localhost:3001");
 
 const isDev = String(process.env.NODE_ENV || "").toLowerCase() !== "production";
 
