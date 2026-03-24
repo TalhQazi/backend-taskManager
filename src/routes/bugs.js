@@ -97,6 +97,22 @@ router.put("/:id", requireAuth, async (req, res, next) => {
 
     const updated = await BugReport.findByIdAndUpdate(req.params.id, patch, { new: true }).lean();
     if (!updated) return res.status(404).json({ error: { message: "Bug not found" } });
+
+    // Send notification if status was changed to closed
+    if (patch.status === "closed" && updated.createdByUserId) {
+      void createNotification({
+        actor: String(req.user?.username || req.user?.name || "System"),
+        actorRole: String(req.user?.role || ""),
+        action: "resolved your bug report",
+        resourceType: "bug",
+        resourceName: updated.title,
+        details: "Your bug report has been reviewed and solved.",
+        resourceId: String(updated._id),
+        recipient: updated.createdByUserId,
+        audience: "specific", // Notify the specific user who created it
+      });
+    }
+
     return res.json({ item: withId(updated) });
   } catch (err) {
     return next(err);
