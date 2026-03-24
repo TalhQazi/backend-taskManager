@@ -56,8 +56,11 @@ const io = new Server(httpServer, {
       
       if (!origin) return callback(null, true);
       if (configuredOrigins.length === 0) return callback(null, true);
-      if (configuredOrigins.includes("*")) return callback(null, true);
-      if (configuredOrigins.includes(origin)) return callback(null, true);
+      const isAllowed = 
+        configuredOrigins.includes("*") || 
+        configuredOrigins.some(o => origin === o || origin.replace(/\/$/, "") === o.replace(/\/$/, ""));
+
+      if (isAllowed) return callback(null, true);
       
       // Always allow localhost/127.0.0.1 for local development
       try {
@@ -139,8 +142,11 @@ app.use(
       if (!origin) return callback(null, true);
 
       if (configuredOrigins.length === 0) return callback(null, true);
-      if (configuredOrigins.includes("*")) return callback(null, true);
-      if (configuredOrigins.includes(origin)) return callback(null, true);
+      const isAllowed = 
+        configuredOrigins.includes("*") || 
+        configuredOrigins.some(o => origin === o || origin.replace(/\/$/, "") === o.replace(/\/$/, ""));
+
+      if (isAllowed) return callback(null, true);
 
       // Always allow localhost/127.0.0.1 for local development against any backend
       try {
