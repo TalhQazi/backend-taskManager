@@ -32,6 +32,8 @@ const activityLogsRoutes = require("./routes/activityLogs");
 const companiesRoutes = require("./routes/companies");
 const asanaImportRoutes = require("./routes/asanaImport");
 const bugsRoutes = require("./routes/bugs");
+const projectsRoutes = require("./routes/projects");
+
 //going to express now
 const app = express();
 const httpServer = createServer(app);
@@ -184,6 +186,7 @@ app.use("/api/activity-logs", activityLogsRoutes);
 app.use("/api/companies", companiesRoutes);
 app.use("/api/asana-import", asanaImportRoutes);
 app.use("/api/bugs", bugsRoutes);
+app.use("/api/projects", projectsRoutes);
 
 app.use(notFoundHandler);
 app.use(errorHandler);
