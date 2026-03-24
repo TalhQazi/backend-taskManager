@@ -4,6 +4,7 @@ const TaskSchema = new mongoose.Schema(
   {
     title: { type: String, required: true },
     description: { type: String, default: "" },
+    projectId: { type: mongoose.Schema.Types.ObjectId, ref: "Project", required: false, index: true },
     assignees: { type: [String], default: [] },
     priority: { type: String, enum: ["high", "medium", "low"], default: "medium" },
     status: { type: String, enum: ["pending", "in-progress", "completed", "overdue"], default: "pending" },

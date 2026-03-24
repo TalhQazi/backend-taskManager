@@ -115,6 +115,23 @@ router.get("/", requireAuth, async (_req, res, next) => {
   }
 });
 
+router.get("/:id", requireAuth, async (req, res, next) => {
+  try {
+    const task = await Task.findById(req.params.id).lean();
+    if (!task) {
+      return res.status(404).json({ error: { message: "Task not found" } });
+    }
+
+    if (!canAccessTask(req.user, task)) {
+      return res.status(403).json({ error: { message: "Forbidden" } });
+    }
+
+    return res.json({ item: withId(task) });
+  } catch (err) {
+    return next(err);
+  }
+});
+
 router.post("/", requireAuth, async (req, res, next) => {
   try {
     // Manual validation for title and description
@@ -264,6 +281,16 @@ router.post("/upload", requireAuth, upload.single("file"), async (req, res, next
     
     // Log activity
     await logActivity(req, "TASK_CREATE", "task", created._id, created.title, `Created task with attachment: ${created.title}`);
+
+    // Create notification for task creation
+    await createNotification({
+      actor: req.user?.username || req.user?.name || "System",
+      actorRole: req.user?.role || "",
+      action: "created",
+      resourceType: "task",
+      resourceName: created.title,
+      resourceId: String(created._id),
+    });
     
     return res.status(201).json({ item: withId(obj) });
   } catch (err) {
@@ -327,16 +354,24 @@ router.post("/:id/comments", requireAuth, async (req, res, next) => {
 
     await logActivity(req, "TASK_COMMENT_CREATE", "task", task._id, task.title, `Comment added on task: ${task.title}`);
 
+    // Broadcast to all clients in the task room via WebSocket
+    const commentData = {
+      id: String(created._id),
+      taskId: String(created.taskId),
+      message: String(created.message || ""),
+      authorUserId: String(created.authorUserId || ""),
+      authorUsername: String(created.authorUsername || ""),
+      authorRole: String(created.authorRole || ""),
+      createdAt: created.createdAt,
+    };
+    
+    // Emit to all sockets in the task room except the sender
+    if (global.io) {
+      global.io.to(`task-${task._id}`).emit("new-comment", commentData);
+    }
+
     return res.status(201).json({
-      item: {
-        id: String(created._id),
-        taskId: String(created.taskId),
-        message: String(created.message || ""),
-        authorUserId: String(created.authorUserId || ""),
-        authorUsername: String(created.authorUsername || ""),
-        authorRole: String(created.authorRole || ""),
-        createdAt: created.createdAt,
-      },
+      item: commentData,
     });
   } catch (err) {
     return next(err);

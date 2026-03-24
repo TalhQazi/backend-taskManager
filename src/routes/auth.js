@@ -75,6 +75,66 @@ router.post("/login", async (req, res, next) => {
   }
 });
 
+// Employee-specific login endpoint
+router.post("/employee-login", async (req, res, next) => {
+  try {
+    const parsed = loginSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ error: { message: "Invalid payload" } });
+    }
+
+    const identifier = String(parsed.data.username || parsed.data.email || "").trim();
+    const password = parsed.data.password;
+    if (!identifier) {
+      return res.status(400).json({ error: { message: "Invalid payload" } });
+    }
+
+    const user = await User.findOne({
+      $or: [{ username: identifier }, { email: identifier }],
+    }).lean();
+    if (!user) {
+      await logLoginFailure(identifier, req, "User not found");
+      return res.status(401).json({ error: { message: "Invalid credentials" } });
+    }
+
+    // Check if user is an employee
+    if (user.role !== "employee") {
+      await logLoginFailure(user.username, req, "Not an employee account");
+      return res.status(403).json({ error: { message: "This account is not authorized for employee portal. Please use admin/manager login." } });
+    }
+
+    const ok = await bcrypt.compare(password, user.passwordHash);
+    if (!ok) {
+      await logLoginFailure(user.username, req, "Invalid password");
+      return res.status(401).json({ error: { message: "Invalid credentials" } });
+    }
+
+    const secret = process.env.JWT_SECRET;
+    if (!secret) {
+      return res.status(500).json({ error: { message: "JWT_SECRET is not set" } });
+    }
+
+    const token = jwt.sign(
+      { sub: String(user._id), role: user.role, username: user.username },
+      secret,
+      { expiresIn: "7d" }
+    );
+
+    await logLoginSuccess(user, req);
+
+    return res.json({
+      item: {
+        token,
+        role: user.role,
+        username: user.username,
+        name: user.name || user.username,
+      },
+    });
+  } catch (err) {
+    return next(err);
+  }
+});
+
 const changePasswordSchema = z.object({
   currentPassword: z.string().min(1),
   newPassword: z.string().min(6),

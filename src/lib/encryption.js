@@ -37,26 +37,28 @@ function decryptString(value) {
 
   const key = getKey();
   if (!key) {
-    throw new Error(
-      "MESSAGE_ENCRYPTION_KEY is missing or invalid (must be 32-byte base64 for AES-256-GCM)"
-    );
+    return "[System: Decryption key missing]";
   }
 
   const payload = raw.slice(4);
   const parts = payload.split(".");
   if (parts.length !== 3) {
-    throw new Error("Invalid encrypted payload");
+    return "[System: Invalid encrypted payload format]";
   }
 
-  const [ivB64, tagB64, ctB64] = parts;
-  const iv = Buffer.from(ivB64, "base64");
-  const tag = Buffer.from(tagB64, "base64");
-  const ciphertext = Buffer.from(ctB64, "base64");
+  try {
+    const [ivB64, tagB64, ctB64] = parts;
+    const iv = Buffer.from(ivB64, "base64");
+    const tag = Buffer.from(tagB64, "base64");
+    const ciphertext = Buffer.from(ctB64, "base64");
 
-  const decipher = crypto.createDecipheriv("aes-256-gcm", key, iv);
-  decipher.setAuthTag(tag);
-  const plaintext = Buffer.concat([decipher.update(ciphertext), decipher.final()]);
-  return plaintext.toString("utf8");
+    const decipher = crypto.createDecipheriv("aes-256-gcm", key, iv);
+    decipher.setAuthTag(tag);
+    const plaintext = Buffer.concat([decipher.update(ciphertext), decipher.final()]);
+    return plaintext.toString("utf8");
+  } catch (err) {
+    return "[System: Decryption failed]";
+  }
 }
 
 module.exports = {

@@ -95,9 +95,25 @@ router.put("/:id", requireAuth, async (req, res, next) => {
       patch.status = status;
     }
 
-    const updated = await BugReport.findByIdAndUpdate(req.params.id, patch, { new: true }).lean();
+    const updated = await BugReport.findByIdAndUpdate(req.params.id, patch, { new: false }).lean();
     if (!updated) return res.status(404).json({ error: { message: "Bug not found" } });
-    return res.json({ item: withId(updated) });
+
+    if (patch.status === "closed" && updated.status !== "closed") {
+      void createNotification({
+        actor: String(req.user?.username || req.user?.name || "Developer"),
+        actorRole: String(req.user?.role || ""),
+        action: "resolved",
+        resourceType: "bug",
+        resourceName: String(updated.title || ""),
+        details: "Your bug report has been solved",
+        resourceId: String(updated._id),
+        recipient: updated.createdByUsername || updated.createdByUserId || "admin",
+        audience: updated.createdByRole || "admin",
+      });
+    }
+
+    const finalUpdated = await BugReport.findById(req.params.id).lean();
+    return res.json({ item: withId(finalUpdated) });
   } catch (err) {
     return next(err);
   }

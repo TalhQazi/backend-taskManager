@@ -3,6 +3,11 @@ const { z } = require("zod");
 const bcrypt = require("bcryptjs");
 
 const Employee = require("../models/Employee");
+const User = require("../models/User");
+const Task = require("../models/Task");
+const Event = require("../models/Event");
+const TimeEntry = require("../models/TimeEntry");
+const Message = require("../models/Message");
 const ActivityLog = require("../models/ActivityLog");
 const Settings = require("../models/Settings");
 const { createNotification } = require("../utils/notifications");
@@ -38,6 +43,347 @@ function withId(doc) {
   const { password, passwordHash, ...rest } = doc;
   return { ...rest, id: String(doc._id) };
 }
+
+function escapeRegExp(s) {
+  return String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+ function getDayRange(d = new Date()) {
+   const start = new Date(d);
+   start.setHours(0, 0, 0, 0);
+   const end = new Date(d);
+   end.setHours(23, 59, 59, 999);
+   return { start, end };
+ }
+
+ async function requireEmployeeSelf(req, res) {
+   const role = String(req.user?.role || "").trim();
+   if (role !== "employee") {
+     res.status(403).json({ error: { message: "Forbidden" } });
+     return null;
+   }
+
+   const userId = String(req.user?.sub || "").trim();
+   if (!userId) {
+     res.status(401).json({ error: { message: "Unauthorized" } });
+     return null;
+   }
+
+   const user = await User.findById(userId, { name: 1, username: 1, email: 1, role: 1 }).lean();
+   if (!user) {
+     res.status(401).json({ error: { message: "Unauthorized" } });
+     return null;
+   }
+
+   const email = String(user.email || "").trim();
+   const employee = email
+     ? await Employee.findOne({ email }, { passwordHash: 0 }).lean()
+     : null;
+
+   if (!employee) {
+     res.status(404).json({ error: { message: "Employee profile not found" } });
+     return null;
+   }
+
+   return { user, employee };
+ }
+
+ // Employee self endpoints
+ router.get("/me", requireAuth, async (req, res, next) => {
+   try {
+     const ctx = await requireEmployeeSelf(req, res);
+     if (!ctx) return;
+     const { user, employee } = ctx;
+     res.json({
+       item: {
+         id: String(employee._id),
+         name: employee.name,
+         email: employee.email,
+         phone: employee.phone || "",
+         company: employee.company || "",
+         location: employee.location || "",
+         status: employee.status || "active",
+         username: user.username || user.email || "",
+         role: "employee",
+       },
+     });
+   } catch (err) {
+     next(err);
+   }
+ });
+
+router.get("/me/tasks", requireAuth, async (req, res, next) => {
+  try {
+    const ctx = await requireEmployeeSelf(req, res);
+    if (!ctx) return;
+    const { user, employee } = ctx;
+
+    const candidates = [employee.name, employee.email, user.username]
+      .map((s) => String(s || "").trim())
+      .filter(Boolean);
+
+    console.log("[DEBUG] /me/tasks - Employee:", employee.name, "Email:", employee.email, "User:", user.username);
+    console.log("[DEBUG] /me/tasks - Candidates:", candidates);
+
+    // Build case-insensitive regex conditions for assignees array matching
+    const assigneeConditions = candidates.flatMap((c) => [
+      { assignees: { $elemMatch: { $regex: new RegExp(`^${escapeRegExp(c)}$`, "i") } } },
+      { assignee: { $regex: new RegExp(`^${escapeRegExp(c)}$`, "i") } },
+    ]);
+
+    const query = assigneeConditions.length > 0 ? { $or: assigneeConditions } : { _id: null };
+
+    console.log("[DEBUG] /me/tasks - MongoDB query:", JSON.stringify(query));
+
+    const tasks = await Task.find(query)
+      .sort({ updatedAt: -1 })
+      .lean();
+
+    console.log("[DEBUG] /me/tasks - Found tasks:", tasks.length);
+    if (tasks.length > 0) {
+      console.log("[DEBUG] /me/tasks - First task assignees:", tasks[0].assignees);
+    }
+
+    // Also fetch all tasks to see what's in the database (for debugging)
+    const allTasks = await Task.find({}).limit(5).lean();
+    console.log("[DEBUG] /me/tasks - Sample tasks in DB:");
+    allTasks.forEach(t => {
+      console.log(`  Task: ${t.title}, assignees: ${JSON.stringify(t.assignees)}, assignee: ${t.assignee}`);
+    });
+
+    res.json({
+      items: tasks.map((t) => ({
+        id: String(t._id),
+        title: t.title,
+        description: t.description || "",
+        status: t.status,
+        priority: t.priority,
+        dueDate: t.dueDate ? new Date(t.dueDate).toISOString().slice(0, 10) : "",
+        createdAt: t.createdAt || "",
+        dueTime: t.dueTime || "",
+        assignees: Array.isArray(t.assignees)
+          ? t.assignees
+          : typeof t.assignee === "string" && t.assignee.trim()
+            ? [t.assignee.trim()]
+            : [],
+        attachmentFileName: t.attachmentFileName || "",
+        attachment: t.attachment || null,
+      })),
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get("/me/schedule", requireAuth, async (req, res, next) => {
+  try {
+    const ctx = await requireEmployeeSelf(req, res);
+    if (!ctx) return;
+    const { employee } = ctx;
+
+    const items = await Event.find({ assignee: employee.name }).sort({ createdAt: -1 }).lean();
+
+    res.json({
+      items: items.map((e) => ({
+        id: String(e._id),
+        title: e.title,
+        day: e.day,
+        location: e.location,
+        startTime: e.startTime,
+        endTime: e.endTime,
+        type: e.type,
+      })),
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get("/me/time-entry/today", requireAuth, async (req, res, next) => {
+  try {
+    const ctx = await requireEmployeeSelf(req, res);
+    if (!ctx) return;
+    const { employee, user } = ctx;
+    const { start, end } = getDayRange(new Date());
+
+    const entry = await TimeEntry.findOne({
+      employee: employee.name,
+      date: { $gte: start, $lte: end },
+    })
+      .sort({ createdAt: -1 })
+      .lean();
+
+    if (!entry) {
+      return res.json({ item: null });
+    }
+
+    res.json({
+      item: {
+        id: String(entry._id),
+        employee: entry.employee,
+        date: entry.date ? new Date(entry.date).toISOString().slice(0, 10) : "",
+        clockIn: entry.clockIn || "",
+        clockOut: entry.clockOut || "",
+        clockInAt: entry.clockInAt || null,
+        clockOutAt: entry.clockOutAt || null,
+        totalHours: Number(entry.totalHours || 0),
+        status: entry.status || "",
+        userId: entry.userId || String(user._id),
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post("/me/clock-in", requireAuth, async (req, res, next) => {
+  try {
+    const ctx = await requireEmployeeSelf(req, res);
+    if (!ctx) return;
+    const { employee, user } = ctx;
+
+    const { start, end } = getDayRange(new Date());
+    const existing = await TimeEntry.findOne({ employee: employee.name, date: { $gte: start, $lte: end } })
+      .sort({ createdAt: -1 })
+      .lean();
+
+    if (existing && (existing.clockInAt || existing.clockIn)) {
+      return res.status(400).json({ error: { message: "Already clocked in for today" } });
+    }
+
+    const now = new Date();
+    const hhmm = now.toTimeString().slice(0, 5);
+
+    const created = await TimeEntry.create({
+      userId: String(user._id),
+      employee: employee.name,
+      date: now,
+      clockIn: hhmm,
+      clockInAt: now,
+      clockOut: "",
+      status: "incomplete",
+      location: employee.location || "",
+    });
+
+    res.status(201).json({
+      item: {
+        id: String(created._id),
+        date: created.date ? new Date(created.date).toISOString().slice(0, 10) : "",
+        clockIn: created.clockIn || "",
+        clockOut: created.clockOut || "",
+        status: created.status || "",
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post("/me/clock-out", requireAuth, async (req, res, next) => {
+  try {
+    const ctx = await requireEmployeeSelf(req, res);
+    if (!ctx) return;
+    const { employee } = ctx;
+
+    const { start, end } = getDayRange(new Date());
+    const entry = await TimeEntry.findOne({ employee: employee.name, date: { $gte: start, $lte: end } }).sort({ createdAt: -1 });
+
+    if (!entry) {
+      return res.status(400).json({ error: { message: "No active time entry for today" } });
+    }
+
+    if ((entry.clockOutAt || entry.clockOut) && String(entry.clockOut || "").trim()) {
+      return res.status(400).json({ error: { message: "Already clocked out for today" } });
+    }
+
+    const now = new Date();
+    entry.clockOutAt = now;
+    entry.clockOut = now.toTimeString().slice(0, 5);
+    entry.status = "complete";
+    await entry.save();
+
+    res.json({
+      item: {
+        id: String(entry._id),
+        date: entry.date ? new Date(entry.date).toISOString().slice(0, 10) : "",
+        clockIn: entry.clockIn || "",
+        clockOut: entry.clockOut || "",
+        status: entry.status || "",
+        totalHours: Number(entry.totalHours || 0),
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get("/me/dashboard", requireAuth, async (req, res, next) => {
+  try {
+    const ctx = await requireEmployeeSelf(req, res);
+    if (!ctx) return;
+    const { employee, user } = ctx;
+
+    const candidates = [employee.name, employee.email, user.username]
+      .map((s) => String(s || "").trim())
+      .filter(Boolean);
+
+    const candidateRegexes = candidates.map((c) => new RegExp(`^${escapeRegExp(c)}$`, "i"));
+
+    const { start, end } = getDayRange(new Date());
+
+    const [tasks, schedule, todayEntry, unreadMessages] = await Promise.all([
+      Task.find({
+        $or: [
+          { assignees: { $in: candidates } },
+          { assignees: { $in: candidateRegexes } },
+          { assignee: { $in: candidates } },
+          { assignee: { $in: candidateRegexes } },
+        ],
+      })
+        .sort({ updatedAt: -1 })
+        .lean(),
+      Event.find({ assignee: employee.name }).sort({ createdAt: -1 }).limit(10).lean(),
+      TimeEntry.findOne({ employee: employee.name, date: { $gte: start, $lte: end } }).sort({ createdAt: -1 }).lean(),
+      Message.countDocuments({ type: "direct", recipient: employee.name, status: { $ne: "read" } }),
+    ]);
+
+    const totalTasks = tasks.length;
+    const completedTasks = tasks.filter((t) => String(t.status || "").toLowerCase() === "completed").length;
+    const pendingTasks = tasks.filter((t) => String(t.status || "").toLowerCase() === "pending").length;
+    const inProgressTasks = tasks.filter((t) => String(t.status || "").toLowerCase() === "in-progress").length;
+
+    res.json({
+      item: {
+        tasks: {
+          total: totalTasks,
+          completed: completedTasks,
+          pending: pendingTasks,
+          inProgress: inProgressTasks,
+        },
+        clock: {
+          clockIn: todayEntry?.clockIn || "",
+          clockOut: todayEntry?.clockOut || "",
+          status: todayEntry?.status || "",
+        },
+        scheduleCount: schedule.length,
+        unreadMessages: Number(unreadMessages || 0),
+        recentTasks: tasks
+          .slice()
+          .sort((a, b) => new Date(b.updatedAt || b.createdAt || 0) - new Date(a.updatedAt || a.createdAt || 0))
+          .slice(0, 5)
+          .map((t) => ({
+            id: String(t._id),
+            title: t.title,
+            status: t.status,
+            priority: t.priority,
+            dueDate: t.dueDate ? new Date(t.dueDate).toISOString().slice(0, 10) : "",
+          })),
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+});
 
 // Helper to log activity
 async function logActivity(req, action, resourceType, resourceId, resourceName, description) {
@@ -124,6 +470,23 @@ router.post("/", requireAuth, async (req, res, next) => {
       passwordHash,
     });
 
+    // Create corresponding user account for login
+    try {
+      // Use email as username (or generate from name if no email)
+      const userUsername = parsed.data.email || parsed.data.name.toLowerCase().replace(/\s+/g, '.');
+      await User.create({
+        name: parsed.data.name,
+        email: parsed.data.email || "",
+        username: userUsername,
+        passwordHash: passwordHash,
+        role: "employee",
+        status: "active",
+      });
+    } catch (userErr) {
+      // Log but don't fail - employee was created successfully
+      console.error("Failed to create user account for employee:", userErr.message);
+    }
+
     const obj = created.toObject();
     
     // Log activity
@@ -184,6 +547,18 @@ router.put("/:id", requireAuth, async (req, res, next) => {
     // Log activity
     await logActivity(req, "EMPLOYEE_UPDATE", "employee", req.params.id, updated.name, `Updated employee: ${updated.name}`);
 
+    // Sync user account if password was updated
+    if (patch.passwordHash) {
+      try {
+        await User.findOneAndUpdate(
+          { email: updated.email },
+          { passwordHash: patch.passwordHash }
+        );
+      } catch (userErr) {
+        console.error("Failed to update user password:", userErr.message);
+      }
+    }
+
     // Create notification for all admin/manager users
     await createNotification({
       actor: req.user?.username || req.user?.name || "Admin",
@@ -205,6 +580,13 @@ router.delete("/:id", requireAuth, async (req, res, next) => {
     const deleted = await Employee.findByIdAndDelete(req.params.id).lean();
     if (!deleted) {
       return res.status(404).json({ error: { message: "Employee not found" } });
+    }
+    
+    // Also delete corresponding user account
+    try {
+      await User.deleteOne({ email: deleted.email });
+    } catch (userErr) {
+      console.error("Failed to delete user account:", userErr.message);
     }
     
     // Log activity
@@ -258,6 +640,16 @@ router.post("/:id/reset-password", requireAuth, requireRole(["super-admin"]), as
 
     if (!updated) {
       return res.status(404).json({ error: { message: "Employee not found" } });
+    }
+
+    // Also update user account password
+    try {
+      await User.findOneAndUpdate(
+        { email: updated.email },
+        { passwordHash: passwordHash }
+      );
+    } catch (userErr) {
+      console.error("Failed to update user password:", userErr.message);
     }
 
     return res.json({ success: true, message: "Password reset successfully" });
