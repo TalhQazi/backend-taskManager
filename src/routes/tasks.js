@@ -115,6 +115,23 @@ router.get("/", requireAuth, async (_req, res, next) => {
   }
 });
 
+router.get("/:id", requireAuth, async (req, res, next) => {
+  try {
+    const task = await Task.findById(req.params.id).lean();
+    if (!task) {
+      return res.status(404).json({ error: { message: "Task not found" } });
+    }
+
+    if (!canAccessTask(req.user, task)) {
+      return res.status(403).json({ error: { message: "Forbidden" } });
+    }
+
+    return res.json({ item: withId(task) });
+  } catch (err) {
+    return next(err);
+  }
+});
+
 router.post("/", requireAuth, async (req, res, next) => {
   try {
     // Manual validation for title and description
