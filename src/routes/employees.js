@@ -4,6 +4,10 @@ const bcrypt = require("bcryptjs");
 
 const Employee = require("../models/Employee");
 const User = require("../models/User");
+const Task = require("../models/Task");
+const Event = require("../models/Event");
+const TimeEntry = require("../models/TimeEntry");
+const Message = require("../models/Message");
 const ActivityLog = require("../models/ActivityLog");
 const Settings = require("../models/Settings");
 const { createNotification } = require("../utils/notifications");
@@ -39,6 +43,295 @@ function withId(doc) {
   const { password, passwordHash, ...rest } = doc;
   return { ...rest, id: String(doc._id) };
 }
+
+ function getDayRange(d = new Date()) {
+   const start = new Date(d);
+   start.setHours(0, 0, 0, 0);
+   const end = new Date(d);
+   end.setHours(23, 59, 59, 999);
+   return { start, end };
+ }
+
+ async function requireEmployeeSelf(req, res) {
+   const role = String(req.user?.role || "").trim();
+   if (role !== "employee") {
+     res.status(403).json({ error: { message: "Forbidden" } });
+     return null;
+   }
+
+   const userId = String(req.user?.sub || "").trim();
+   if (!userId) {
+     res.status(401).json({ error: { message: "Unauthorized" } });
+     return null;
+   }
+
+   const user = await User.findById(userId, { name: 1, username: 1, email: 1, role: 1 }).lean();
+   if (!user) {
+     res.status(401).json({ error: { message: "Unauthorized" } });
+     return null;
+   }
+
+   const email = String(user.email || "").trim();
+   const employee = email
+     ? await Employee.findOne({ email }, { passwordHash: 0 }).lean()
+     : null;
+
+   if (!employee) {
+     res.status(404).json({ error: { message: "Employee profile not found" } });
+     return null;
+   }
+
+   return { user, employee };
+ }
+
+ // Employee self endpoints
+ router.get("/me", requireAuth, async (req, res, next) => {
+   try {
+     const ctx = await requireEmployeeSelf(req, res);
+     if (!ctx) return;
+     const { user, employee } = ctx;
+     res.json({
+       item: {
+         id: String(employee._id),
+         name: employee.name,
+         email: employee.email,
+         phone: employee.phone || "",
+         company: employee.company || "",
+         location: employee.location || "",
+         status: employee.status || "active",
+         username: user.username || user.email || "",
+         role: "employee",
+       },
+     });
+   } catch (err) {
+     next(err);
+   }
+ });
+
+ router.get("/me/tasks", requireAuth, async (req, res, next) => {
+   try {
+     const ctx = await requireEmployeeSelf(req, res);
+     if (!ctx) return;
+     const { user, employee } = ctx;
+
+     const candidates = [employee.name, employee.email, user.username]
+       .map((s) => String(s || "").trim())
+       .filter(Boolean);
+
+     const tasks = await Task.find({ assignees: { $in: candidates } }).sort({ updatedAt: -1 }).lean();
+
+     res.json({
+       items: tasks.map((t) => ({
+         id: String(t._id),
+         title: t.title,
+         status: t.status,
+         priority: t.priority,
+         dueDate: t.dueDate ? new Date(t.dueDate).toISOString().slice(0, 10) : "",
+       })),
+     });
+   } catch (err) {
+     next(err);
+   }
+ });
+
+ router.get("/me/schedule", requireAuth, async (req, res, next) => {
+   try {
+     const ctx = await requireEmployeeSelf(req, res);
+     if (!ctx) return;
+     const { employee } = ctx;
+
+     const items = await Event.find({ assignee: employee.name }).sort({ createdAt: -1 }).lean();
+
+     res.json({
+       items: items.map((e) => ({
+         id: String(e._id),
+         title: e.title,
+         day: e.day,
+         location: e.location,
+         startTime: e.startTime,
+         endTime: e.endTime,
+         type: e.type,
+       })),
+     });
+   } catch (err) {
+     next(err);
+   }
+ });
+
+ router.get("/me/time-entry/today", requireAuth, async (req, res, next) => {
+   try {
+     const ctx = await requireEmployeeSelf(req, res);
+     if (!ctx) return;
+     const { employee, user } = ctx;
+     const { start, end } = getDayRange(new Date());
+
+     const entry = await TimeEntry.findOne({
+       employee: employee.name,
+       date: { $gte: start, $lte: end },
+     })
+       .sort({ createdAt: -1 })
+       .lean();
+
+     if (!entry) {
+       return res.json({ item: null });
+     }
+
+     res.json({
+       item: {
+         id: String(entry._id),
+         employee: entry.employee,
+         date: entry.date ? new Date(entry.date).toISOString().slice(0, 10) : "",
+         clockIn: entry.clockIn || "",
+         clockOut: entry.clockOut || "",
+         clockInAt: entry.clockInAt || null,
+         clockOutAt: entry.clockOutAt || null,
+         totalHours: Number(entry.totalHours || 0),
+         status: entry.status || "",
+         userId: entry.userId || String(user._id),
+       },
+     });
+   } catch (err) {
+     next(err);
+   }
+ });
+
+ router.post("/me/clock-in", requireAuth, async (req, res, next) => {
+   try {
+     const ctx = await requireEmployeeSelf(req, res);
+     if (!ctx) return;
+     const { employee, user } = ctx;
+
+     const { start, end } = getDayRange(new Date());
+     const existing = await TimeEntry.findOne({ employee: employee.name, date: { $gte: start, $lte: end } })
+       .sort({ createdAt: -1 })
+       .lean();
+
+     if (existing && (existing.clockInAt || existing.clockIn)) {
+       return res.status(400).json({ error: { message: "Already clocked in for today" } });
+     }
+
+     const now = new Date();
+     const hhmm = now.toTimeString().slice(0, 5);
+
+     const created = await TimeEntry.create({
+       userId: String(user._id),
+       employee: employee.name,
+       date: now,
+       clockIn: hhmm,
+       clockInAt: now,
+       clockOut: "",
+       status: "incomplete",
+       location: employee.location || "",
+     });
+
+     res.status(201).json({
+       item: {
+         id: String(created._id),
+         date: created.date ? new Date(created.date).toISOString().slice(0, 10) : "",
+         clockIn: created.clockIn || "",
+         clockOut: created.clockOut || "",
+         status: created.status || "",
+       },
+     });
+   } catch (err) {
+     next(err);
+   }
+ });
+
+ router.post("/me/clock-out", requireAuth, async (req, res, next) => {
+   try {
+     const ctx = await requireEmployeeSelf(req, res);
+     if (!ctx) return;
+     const { employee } = ctx;
+
+     const { start, end } = getDayRange(new Date());
+     const entry = await TimeEntry.findOne({ employee: employee.name, date: { $gte: start, $lte: end } }).sort({ createdAt: -1 });
+
+     if (!entry) {
+       return res.status(400).json({ error: { message: "No active time entry for today" } });
+     }
+
+     if ((entry.clockOutAt || entry.clockOut) && String(entry.clockOut || "").trim()) {
+       return res.status(400).json({ error: { message: "Already clocked out for today" } });
+     }
+
+     const now = new Date();
+     entry.clockOutAt = now;
+     entry.clockOut = now.toTimeString().slice(0, 5);
+     entry.status = "complete";
+     await entry.save();
+
+     res.json({
+       item: {
+         id: String(entry._id),
+         date: entry.date ? new Date(entry.date).toISOString().slice(0, 10) : "",
+         clockIn: entry.clockIn || "",
+         clockOut: entry.clockOut || "",
+         status: entry.status || "",
+         totalHours: Number(entry.totalHours || 0),
+       },
+     });
+   } catch (err) {
+     next(err);
+   }
+ });
+
+ router.get("/me/dashboard", requireAuth, async (req, res, next) => {
+   try {
+     const ctx = await requireEmployeeSelf(req, res);
+     if (!ctx) return;
+     const { employee, user } = ctx;
+
+     const candidates = [employee.name, employee.email, user.username]
+       .map((s) => String(s || "").trim())
+       .filter(Boolean);
+
+     const { start, end } = getDayRange(new Date());
+
+     const [tasks, schedule, todayEntry, unreadMessages] = await Promise.all([
+       Task.find({ assignees: { $in: candidates } }).lean(),
+       Event.find({ assignee: employee.name }).sort({ createdAt: -1 }).limit(10).lean(),
+       TimeEntry.findOne({ employee: employee.name, date: { $gte: start, $lte: end } }).sort({ createdAt: -1 }).lean(),
+       Message.countDocuments({ type: "direct", recipient: employee.name, status: { $ne: "read" } }),
+     ]);
+
+     const totalTasks = tasks.length;
+     const completedTasks = tasks.filter((t) => String(t.status || "").toLowerCase() === "completed").length;
+     const pendingTasks = tasks.filter((t) => String(t.status || "").toLowerCase() === "pending").length;
+     const inProgressTasks = tasks.filter((t) => String(t.status || "").toLowerCase() === "in-progress").length;
+
+     res.json({
+       item: {
+         tasks: {
+           total: totalTasks,
+           completed: completedTasks,
+           pending: pendingTasks,
+           inProgress: inProgressTasks,
+         },
+         clock: {
+           clockIn: todayEntry?.clockIn || "",
+           clockOut: todayEntry?.clockOut || "",
+           status: todayEntry?.status || "",
+         },
+         scheduleCount: schedule.length,
+         unreadMessages: Number(unreadMessages || 0),
+         recentTasks: tasks
+           .slice()
+           .sort((a, b) => new Date(b.updatedAt || b.createdAt || 0) - new Date(a.updatedAt || a.createdAt || 0))
+           .slice(0, 5)
+           .map((t) => ({
+             id: String(t._id),
+             title: t.title,
+             status: t.status,
+             priority: t.priority,
+             dueDate: t.dueDate ? new Date(t.dueDate).toISOString().slice(0, 10) : "",
+           })),
+       },
+     });
+   } catch (err) {
+     next(err);
+   }
+ });
 
 // Helper to log activity
 async function logActivity(req, action, resourceType, resourceId, resourceName, description) {
