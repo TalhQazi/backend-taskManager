@@ -65,7 +65,9 @@ router.get("/", requireAuth, async (req, res, next) => {
         query.recipient = recipient;
       } else if (String(type || "").toLowerCase() === "broadcast") {
         const role = String(req.user?.role || "").trim();
-        query.recipient = role ? { $in: ["all", role] } : "all";
+        const username = String(req.user?.username || req.user?.name || "").trim();
+        const userId = String(req.user?.sub || req.user?.id || "").trim();
+        query.recipient = { $in: ["all", role, username, userId].filter(Boolean) };
       }
     }
 
