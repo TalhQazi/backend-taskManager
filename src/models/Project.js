@@ -4,6 +4,13 @@ const ProjectSchema = new mongoose.Schema(
   {
     name: { type: String, required: true, trim: true, index: true },
     description: { type: String, default: "" },
+    assignees: { type: [String], default: [] },
+    logo: {
+      fileName: { type: String, default: "" },
+      url: { type: String, default: "" },
+      mimeType: { type: String, default: "" },
+      size: { type: Number, default: 0 },
+    },
     createdByUserId: { type: String, default: "" },
     createdByUsername: { type: String, default: "" },
     createdByRole: { type: String, default: "" },

@@ -38,6 +38,7 @@ const upload = multer({
 const createSchema = z.object({
   title: z.string().min(1, "Task title is required"),
   description: z.string().min(1, "Task description is required"),
+  projectId: z.string().optional(),
   assignees: z.array(z.string()).optional().default([]),
   priority: z.enum(["high", "medium", "low"]).optional(),
   status: z.enum(["pending", "in-progress", "completed", "overdue"]).optional(),

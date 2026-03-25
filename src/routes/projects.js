@@ -71,9 +71,18 @@ const taskCreateSchema = z.object({
     .optional(),
 });
 
+const logoSchema = z.object({
+  fileName: z.string().optional().default(""),
+  url: z.string().optional().default(""),
+  mimeType: z.string().optional().default(""),
+  size: z.number().optional().default(0),
+}).optional();
+
 const projectCreateSchema = z.object({
   name: z.string().min(1, "Project name is required"),
   description: z.string().optional().default(""),
+  assignees: z.array(z.string()).optional().default([]),
+  logo: logoSchema,
   tasks: z.array(taskCreateSchema).min(1, "At least one task is required"),
 });
 
@@ -96,6 +105,8 @@ router.post("/", requireAuth, async (req, res, next) => {
     const createdProject = await Project.create({
       name: parsed.data.name,
       description: parsed.data.description || "",
+      assignees: parsed.data.assignees || [],
+      logo: parsed.data.logo || { fileName: "", url: "", mimeType: "", size: 0 },
       createdByUserId: String(req.user?.sub || req.user?.id || ""),
       createdByUsername: String(req.user?.username || req.user?.name || ""),
       createdByRole: String(req.user?.role || ""),
@@ -153,7 +164,42 @@ router.post("/", requireAuth, async (req, res, next) => {
 router.get("/", requireAuth, async (_req, res, next) => {
   try {
     const items = await Project.find().sort({ createdAt: -1 }).lean();
-    return res.json({ items: items.map(withId) });
+
+    const itemsWithStats = await Promise.all(
+      items.map(async (project) => {
+        const taskCount = await Task.countDocuments({ projectId: project._id });
+        const tasks = taskCount > 0
+          ? await Task.find({ projectId: project._id }).select("status").lean()
+          : [];
+
+        let status = "No tasks";
+        if (tasks.length > 0) {
+          const statuses = tasks.map((t) => t.status);
+          if (statuses.every((s) => s === "completed")) {
+            status = "Completed";
+          } else if (statuses.some((s) => s === "in-progress")) {
+            status = "In Progress";
+          } else if (statuses.some((s) => s === "pending")) {
+            status = "Pending";
+          } else if (statuses.some((s) => s === "overdue")) {
+            status = "Overdue";
+          } else {
+            status = "Active";
+          }
+        }
+
+        const projectObj = withId(project);
+        return {
+          ...projectObj,
+          assignees: Array.isArray(project.assignees) ? project.assignees : [],
+          logo: project.logo || { fileName: "", url: "", mimeType: "", size: 0 },
+          taskCount,
+          status,
+        };
+      })
+    );
+
+    return res.json({ items: itemsWithStats });
   } catch (err) {
     return next(err);
   }
@@ -166,10 +212,32 @@ router.get("/:id", requireAuth, async (req, res, next) => {
 
     const tasks = await Task.find({ projectId: project._id }).sort({ createdAt: -1 }).lean();
 
+    // Calculate status based on tasks
+    let status = "No tasks";
+    if (tasks.length > 0) {
+      const statuses = tasks.map((t) => t.status);
+      if (statuses.every((s) => s === "completed")) {
+        status = "Completed";
+      } else if (statuses.some((s) => s === "in-progress")) {
+        status = "In Progress";
+      } else if (statuses.some((s) => s === "pending")) {
+        status = "Pending";
+      } else if (statuses.some((s) => s === "overdue")) {
+        status = "Overdue";
+      } else {
+        status = "Active";
+      }
+    }
+
+    const projectObj = withId(project);
     return res.json({
       item: {
-        ...withId(project),
+        ...projectObj,
+        assignees: Array.isArray(project.assignees) ? project.assignees : [],
+        logo: project.logo || { fileName: "", url: "", mimeType: "", size: 0 },
         tasks: tasks.map(withId),
+        status,
+        taskCount: tasks.length,
       },
     });
   } catch (err) {
