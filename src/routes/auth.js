@@ -55,7 +55,12 @@ router.post("/login", async (req, res, next) => {
     }
 
     const token = jwt.sign(
-      { sub: String(user._id), role: user.role, username: user.username },
+      {
+        sub: String(user._id),
+        role: user.role,
+        username: user.username,
+        name: user.name || user.username,
+      },
       secret,
       { expiresIn: "7d" }
     );
@@ -115,7 +120,12 @@ router.post("/employee-login", async (req, res, next) => {
     }
 
     const token = jwt.sign(
-      { sub: String(user._id), role: user.role, username: user.username },
+      {
+        sub: String(user._id),
+        role: user.role,
+        username: user.username,
+        name: user.name || user.username,
+      },
       secret,
       { expiresIn: "7d" }
     );

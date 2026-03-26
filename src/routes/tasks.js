@@ -7,6 +7,7 @@ const fs = require("fs");
 const Task = require("../models/Task");
 const TaskComment = require("../models/TaskComment");
 const ActivityLog = require("../models/ActivityLog");
+const User = require("../models/User");
 const { requireAuth } = require("../middleware/auth");
 const { checkAndFlagOffTheClock } = require("../lib/offTheClockWork");
 const { createNotification } = require("../utils/notifications");
@@ -75,15 +76,99 @@ function normalizeAssignees(input) {
 function canAccessTask(user, task) {
   const role = String(user?.role || "").trim().toLowerCase();
   const username = String(user?.username || "").trim();
+  const name = String(user?.name || "").trim();
+  const fullName = String(user?.fullName || "").trim();
 
   if (role === "super-admin" || role === "admin" || role === "manager") return true;
   if (role === "employee") {
-    if (!username) return false;
     const assignees = Array.isArray(task?.assignees) ? task.assignees : [];
-    return assignees.includes(username);
+
+    const identCandidates = [username, name, fullName]
+      .map((v) => String(v || "").trim())
+      .filter(Boolean);
+
+    if (identCandidates.length === 0) return false;
+
+    const normalizedAssignees = assignees
+      .filter((a) => typeof a === "string")
+      .map((a) => a.trim().toLowerCase())
+      .filter(Boolean);
+
+    // Allow match by username OR name/fullName since admin might save either.
+    return identCandidates.some((cand) => normalizedAssignees.includes(cand.toLowerCase()));
   }
 
   return false;
+}
+
+async function canAccessTaskAsync(user, task) {
+  const role = String(user?.role || "").trim().toLowerCase();
+
+  if (role === "super-admin" || role === "admin" || role === "manager") return true;
+  if (role !== "employee") return false;
+
+  const legacyAssignee = typeof task?.assignee === "string" ? task.assignee : "";
+  const legacyEmployee = typeof task?.employee === "string" ? task.employee : "";
+
+  const assignees = Array.isArray(task?.assignees) ? task.assignees : [];
+  const normalizedAssignees = [...assignees, legacyAssignee, legacyEmployee]
+    .filter((a) => typeof a === "string")
+    .map((a) => a.trim().toLowerCase())
+    .filter(Boolean);
+
+  if (normalizedAssignees.length === 0) return false;
+
+  const candidates = [];
+  const pushCandidate = (v) => {
+    const s = String(v || "").trim();
+    if (s) candidates.push(s);
+  };
+
+  pushCandidate(user?.username);
+  pushCandidate(user?.name);
+  pushCandidate(user?.fullName);
+  pushCandidate(user?.email);
+
+  // If JWT payload doesn't include name/fullName/email, fetch from DB using sub.
+  if (candidates.length <= 1) {
+    const userId = String(user?.sub || user?.id || "").trim();
+    if (userId) {
+      try {
+        const dbUser = await User.findById(userId).lean();
+        pushCandidate(dbUser?.username);
+        pushCandidate(dbUser?.name);
+        pushCandidate(dbUser?.email);
+      } catch {
+        // ignore
+      }
+    }
+  }
+
+  const normalizedCandidates = Array.from(
+    new Set(
+      candidates
+        .map((c) => String(c).trim().toLowerCase())
+        .filter(Boolean),
+    ),
+  );
+
+  // Add name tokens (e.g. "Ali Raza" -> ["ali", "raza"]) to handle assignments saved as parts.
+  const tokenCandidates = normalizedCandidates
+    .flatMap((c) => c.split(/\s+/g))
+    .map((t) => t.trim())
+    .filter((t) => t.length >= 2);
+
+  const allCandidates = Array.from(new Set([...normalizedCandidates, ...tokenCandidates]));
+
+  if (allCandidates.length === 0) return false;
+
+  // Exact match
+  if (allCandidates.some((c) => normalizedAssignees.includes(c))) return true;
+
+  // Fuzzy match: allow partial contains in either direction (handles "ali raza" vs "ali")
+  return allCandidates.some((c) =>
+    normalizedAssignees.some((a) => a.includes(c) || c.includes(a)),
+  );
 }
 
 // Helper to log activity
@@ -123,7 +208,20 @@ router.get("/:id", requireAuth, async (req, res, next) => {
       return res.status(404).json({ error: { message: "Task not found" } });
     }
 
-    if (!canAccessTask(req.user, task)) {
+    const allowed = await canAccessTaskAsync(req.user, task);
+    if (!allowed) {
+      console.log("[tasks/:id] Forbidden", {
+        taskId: String(req.params.id),
+        user: {
+          sub: req.user?.sub,
+          role: req.user?.role,
+          username: req.user?.username,
+          name: req.user?.name,
+          fullName: req.user?.fullName,
+          email: req.user?.email,
+        },
+        assignees: Array.isArray(task?.assignees) ? task.assignees : [],
+      });
       return res.status(403).json({ error: { message: "Forbidden" } });
     }
 
@@ -307,7 +405,7 @@ router.get("/:id/comments", requireAuth, async (req, res, next) => {
       return res.status(404).json({ error: { message: "Task not found" } });
     }
 
-    if (!canAccessTask(req.user, task)) {
+    if (!(await canAccessTaskAsync(req.user, task))) {
       return res.status(403).json({ error: { message: "Forbidden" } });
     }
 
@@ -336,7 +434,7 @@ router.post("/:id/comments", requireAuth, async (req, res, next) => {
       return res.status(404).json({ error: { message: "Task not found" } });
     }
 
-    if (!canAccessTask(req.user, task)) {
+    if (!(await canAccessTaskAsync(req.user, task))) {
       return res.status(403).json({ error: { message: "Forbidden" } });
     }
 
@@ -386,7 +484,7 @@ router.patch("/:id/status", requireAuth, async (req, res, next) => {
       return res.status(404).json({ error: { message: "Task not found" } });
     }
 
-    if (!canAccessTask(req.user, task)) {
+    if (!(await canAccessTaskAsync(req.user, task))) {
       return res.status(403).json({ error: { message: "Forbidden" } });
     }
 
