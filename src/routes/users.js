@@ -48,6 +48,66 @@ const updateSchema = z
   })
   .partial();
 
+// Get all users for messaging (includes employees, managers, admins, super-admins)
+// Accessible by all authenticated users including employees
+router.get("/all", requireAuth, async (_req, res, next) => {
+  try {
+    // Get all users from User collection
+    const users = await User.find().sort({ name: 1 }).lean();
+    
+    // Get all employees to merge with users
+    const employees = await Employee.find().sort({ name: 1 }).lean();
+    
+    // Fetch settings for avatar data
+    const userIds = users.map(u => String(u._id));
+    const settings = await Settings.find({ userId: { $in: userIds } }).lean();
+    const settingsMap = new Map(settings.map(s => [String(s.userId), s]));
+    
+    // Create a map of existing user emails to avoid duplicates
+    const existingEmails = new Set(users.map(u => String(u.email || '').toLowerCase()));
+    const existingUsernames = new Set(users.map(u => String(u.username || '').toLowerCase()));
+    
+    // Convert employees to user format and add to list if not already present
+    const employeeUsers = employees
+      .filter(e => {
+        const email = String(e.email || '').toLowerCase();
+        const name = String(e.name || '').toLowerCase();
+        return !existingEmails.has(email) && !existingUsernames.has(name);
+      })
+      .map(e => ({
+        id: String(e._id),
+        name: e.name,
+        username: e.email || e.name.toLowerCase().replace(/\s+/g, '.'),
+        email: e.email,
+        role: 'employee',
+        status: e.status || 'active',
+        avatarUrl: '',
+      }));
+    
+    // Format users
+    const formattedUsers = users.map(u => {
+      const userSettings = settingsMap.get(String(u._id));
+      const avatarUrl = userSettings?.avatarDataUrl || userSettings?.avatarUrl || '';
+      return {
+        id: String(u._id),
+        name: u.name || u.username,
+        username: u.username,
+        email: u.email,
+        role: u.role,
+        status: u.status || 'active',
+        avatarUrl: avatarUrl,
+      };
+    });
+    
+    // Combine users and employees
+    const allUsers = [...formattedUsers, ...employeeUsers];
+    
+    res.json({ items: allUsers });
+  } catch (err) {
+    next(err);
+  }
+});
+
 router.get("/", requireAuth, requireRole(["super-admin", "admin", "manager"]), async (_req, res, next) => {
   try {
     const items = await User.find().sort({ createdAt: -1 }).lean();
