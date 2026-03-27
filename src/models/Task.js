@@ -19,6 +19,15 @@ const TaskSchema = new mongoose.Schema(
       mimeType: { type: String, default: "" },
       size: { type: Number, default: 0 },
     },
+    attachments: [
+      {
+        fileName: { type: String, default: "" },
+        url: { type: String, default: "" },
+        mimeType: { type: String, default: "" },
+        size: { type: Number, default: 0 },
+        uploadedAt: { type: Date, default: Date.now },
+      },
+    ],
   },
   { timestamps: true }
 );

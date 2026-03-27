@@ -34,6 +34,11 @@ const asanaImportRoutes = require("./routes/asanaImport");
 const bugsRoutes = require("./routes/bugs");
 const projectsRoutes = require("./routes/projects");
 const headerSettingsRoutes = require("./routes/headerSettings");
+const adminInfoRoutes = require("./routes/adminInfo");
+const websitesRoutes = require("./routes/websites");
+const socialMediaRoutes = require("./routes/socialMedia");
+const patentsRoutes = require("./routes/patents");
+const credentialsRoutes = require("./routes/credentials");
 
 //going to express now
 const app = express();
@@ -208,6 +213,11 @@ app.use("/api/asana-import", asanaImportRoutes);
 app.use("/api/bugs", bugsRoutes);
 app.use("/api/projects", projectsRoutes);
 app.use("/api/header-settings", headerSettingsRoutes);
+app.use("/api/admin-info", adminInfoRoutes);
+app.use("/api/websites", websitesRoutes);
+app.use("/api/social-media", socialMediaRoutes);
+app.use("/api/patents", patentsRoutes);
+app.use("/api/credentials", credentialsRoutes);
 
 app.use(notFoundHandler);
 app.use(errorHandler);

@@ -48,6 +48,13 @@ const createSchema = z.object({
   createdAt: z.string().optional().default(""),
   attachmentFileName: z.string().optional().default(""),
   attachmentNote: z.string().optional().default(""),
+  attachments: z.array(z.object({
+    fileName: z.string().optional().default(""),
+    url: z.string().optional().default(""),
+    mimeType: z.string().optional().default(""),
+    size: z.number().optional().default(0),
+    uploadedAt: z.date().optional(),
+  })).optional().default([]),
 });
 
 const updateSchema = createSchema.partial();
