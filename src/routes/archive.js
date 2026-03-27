@@ -36,12 +36,12 @@ router.get("/", requireAuth, async (req, res, next) => {
   }
 });
 
-// DELETE permanently from archive (super-admin only)
+// DELETE permanently from archive (admin or super-admin)
 router.delete("/:id", requireAuth, async (req, res, next) => {
   try {
     const role = String(req.user?.role || "").toLowerCase();
-    if (role !== "super-admin") {
-      return res.status(403).json({ error: { message: "Forbidden: Super-admin access required" } });
+    if (role !== "admin" && role !== "super-admin") {
+      return res.status(403).json({ error: { message: "Forbidden: Admin access required" } });
     }
 
     const deleted = await Archive.findByIdAndDelete(req.params.id).lean();
@@ -81,6 +81,76 @@ router.post("/:id/restore", requireAuth, async (req, res, next) => {
         authorUsername: data.authorUsername,
         authorRole: data.authorRole,
       });
+    } else if (itemType === "task") {
+      const Task = require("../models/Task");
+      const data = archived.itemData || {};
+      
+      // Rebuild the task from archived data
+      const taskData = {
+        title: data.title,
+        description: data.description,
+        assignees: data.assignees || [],
+        priority: data.priority || "medium",
+        status: data.status || "pending",
+        dueDate: data.dueDate,
+        dueTime: data.dueTime || "",
+        location: data.location || "",
+        attachment: data.attachment,
+        attachments: data.attachments || [],
+        createdAt: data.createdAt || new Date(),
+      };
+      
+      // If the task belonged to a project, re-link it
+      if (data.projectId) {
+        taskData.projectId = data.projectId;
+      }
+      
+      await Task.create(taskData);
+
+      // Also restore any comments that were archived with this task (same parentId)
+      const archivedComments = await Archive.find({
+        itemType: "comment",
+        parentId: archived.parentId,
+        parentType: "task",
+      }).lean();
+
+      if (archivedComments.length > 0) {
+        const TaskComment = require("../models/TaskComment");
+        for (const ac of archivedComments) {
+          const cd = ac.itemData || {};
+          await TaskComment.create({
+            taskId: cd.taskId,
+            message: cd.message,
+            authorUserId: cd.authorUserId,
+            authorUsername: cd.authorUsername,
+            authorRole: cd.authorRole,
+          });
+          await Archive.findByIdAndDelete(ac._id);
+        }
+      }
+    } else if (itemType === "attachment") {
+      const Task = require("../models/Task");
+      const data = archived.itemData || {};
+      const taskId = data.taskId;
+      
+      if (taskId) {
+        const task = await Task.findById(taskId);
+        if (task) {
+          // Re-add the attachment to the task's attachments array
+          const attachmentObj = {
+            fileName: data.fileName,
+            url: data.url,
+            mimeType: data.mimeType,
+            size: data.size,
+          };
+          
+          if (!Array.isArray(task.attachments)) {
+            task.attachments = [];
+          }
+          task.attachments.push(attachmentObj);
+          await task.save();
+        }
+      }
     }
 
     // Remove from archive after restore
