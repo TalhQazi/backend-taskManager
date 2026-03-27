@@ -48,6 +48,13 @@ const createSchema = z.object({
   createdAt: z.string().optional().default(""),
   attachmentFileName: z.string().optional().default(""),
   attachmentNote: z.string().optional().default(""),
+  attachments: z.array(z.object({
+    fileName: z.string().optional().default(""),
+    url: z.string().optional().default(""),
+    mimeType: z.string().optional().default(""),
+    size: z.number().optional().default(0),
+    uploadedAt: z.date().optional(),
+  })).optional().default([]),
 });
 
 const updateSchema = createSchema.partial();
@@ -472,6 +479,194 @@ router.post("/:id/comments", requireAuth, async (req, res, next) => {
     return res.status(201).json({
       item: commentData,
     });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// Archive a comment (instead of deleting)
+router.post("/:id/comments/:commentId/archive", requireAuth, async (req, res, next) => {
+  try {
+    const role = String(req.user?.role || "").toLowerCase();
+    if (role !== "admin" && role !== "super-admin") {
+      return res.status(403).json({ error: { message: "Forbidden: Admin access required" } });
+    }
+
+    const task = await Task.findById(req.params.id).lean();
+    if (!task) {
+      return res.status(404).json({ error: { message: "Task not found" } });
+    }
+
+    const comment = await TaskComment.findById(req.params.commentId).lean();
+    if (!comment) {
+      return res.status(404).json({ error: { message: "Comment not found" } });
+    }
+
+    const Archive = require("../models/Archive");
+    await Archive.create({
+      itemType: "comment",
+      itemData: {
+        originalId: String(comment._id),
+        taskId: String(comment.taskId),
+        message: comment.message,
+        authorUserId: comment.authorUserId,
+        authorUsername: comment.authorUsername,
+        authorRole: comment.authorRole,
+        createdAt: comment.createdAt,
+      },
+      parentType: "task",
+      parentId: String(task._id),
+      parentName: task.title,
+      archivedByUserId: String(req.user?.sub || req.user?.id || ""),
+      archivedByUsername: String(req.user?.username || ""),
+      archivedByRole: String(req.user?.role || ""),
+    });
+
+    await TaskComment.findByIdAndDelete(req.params.commentId);
+    await logActivity(req, "COMMENT_ARCHIVE", "task", task._id, task.title, `Archived comment on task: ${task.title}`);
+
+    return res.json({ ok: true, message: "Comment archived" });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// Archive an attachment from a task
+router.post("/:id/attachments/:attachmentIndex/archive", requireAuth, async (req, res, next) => {
+  try {
+    const role = String(req.user?.role || "").toLowerCase();
+    if (role !== "admin" && role !== "super-admin") {
+      return res.status(403).json({ error: { message: "Forbidden: Admin access required" } });
+    }
+
+    const task = await Task.findById(req.params.id).lean();
+    if (!task) {
+      return res.status(404).json({ error: { message: "Task not found" } });
+    }
+
+    const idx = parseInt(req.params.attachmentIndex, 10);
+    const attachments = Array.isArray(task.attachments) ? task.attachments : [];
+    
+    // Also handle single attachment field
+    let archivedAttachment = null;
+    if (idx === -1 && task.attachment) {
+      archivedAttachment = task.attachment;
+    } else if (idx >= 0 && idx < attachments.length) {
+      archivedAttachment = attachments[idx];
+    }
+
+    if (!archivedAttachment) {
+      return res.status(404).json({ error: { message: "Attachment not found" } });
+    }
+
+    const Archive = require("../models/Archive");
+    await Archive.create({
+      itemType: "attachment",
+      itemData: {
+        fileName: archivedAttachment.fileName,
+        url: archivedAttachment.url,
+        mimeType: archivedAttachment.mimeType,
+        size: archivedAttachment.size,
+        taskId: String(task._id),
+      },
+      parentType: "task",
+      parentId: String(task._id),
+      parentName: task.title,
+      archivedByUserId: String(req.user?.sub || req.user?.id || ""),
+      archivedByUsername: String(req.user?.username || ""),
+      archivedByRole: String(req.user?.role || ""),
+    });
+
+    // Remove the attachment from the task
+    const update = {};
+    if (idx === -1 && task.attachment) {
+      update.$unset = { attachment: 1, attachmentFileName: 1 };
+    } else {
+      const newAttachments = [...attachments];
+      newAttachments.splice(idx, 1);
+      update.$set = { attachments: newAttachments };
+    }
+    await Task.findByIdAndUpdate(req.params.id, update);
+
+    await logActivity(req, "ATTACHMENT_ARCHIVE", "task", task._id, task.title, `Archived attachment on task: ${task.title}`);
+
+    return res.json({ ok: true, message: "Attachment archived" });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// Archive an entire task (instead of deleting)
+router.post("/:id/archive", requireAuth, async (req, res, next) => {
+  try {
+    const role = String(req.user?.role || "").toLowerCase();
+    if (role !== "admin" && role !== "super-admin") {
+      return res.status(403).json({ error: { message: "Forbidden: Admin access required" } });
+    }
+
+    const task = await Task.findById(req.params.id).lean();
+    if (!task) {
+      return res.status(404).json({ error: { message: "Task not found" } });
+    }
+
+    const Archive = require("../models/Archive");
+
+    // Archive task comments first
+    const taskComments = await TaskComment.find({ taskId: String(task._id) }).lean();
+    for (const comment of taskComments) {
+      await Archive.create({
+        itemType: "comment",
+        itemData: {
+          originalId: String(comment._id),
+          taskId: String(comment.taskId),
+          message: comment.message,
+          authorUserId: comment.authorUserId,
+          authorUsername: comment.authorUsername,
+          authorRole: comment.authorRole,
+          createdAt: comment.createdAt,
+        },
+        parentType: "task",
+        parentId: String(task._id),
+        parentName: task.title,
+        archivedByUserId: String(req.user?.sub || req.user?.id || ""),
+        archivedByUsername: String(req.user?.username || ""),
+        archivedByRole: String(req.user?.role || ""),
+      });
+    }
+
+    // Archive the task itself
+    await Archive.create({
+      itemType: "task",
+      itemData: {
+        originalId: String(task._id),
+        title: task.title,
+        description: task.description,
+        assignees: task.assignees,
+        priority: task.priority,
+        status: task.status,
+        dueDate: task.dueDate,
+        dueTime: task.dueTime,
+        location: task.location,
+        projectId: task.projectId,
+        attachment: task.attachment,
+        attachments: task.attachments,
+        createdAt: task.createdAt,
+      },
+      parentType: task.projectId ? "project" : "standalone",
+      parentId: String(task.projectId || task._id),
+      parentName: task.title,
+      archivedByUserId: String(req.user?.sub || req.user?.id || ""),
+      archivedByUsername: String(req.user?.username || ""),
+      archivedByRole: String(req.user?.role || ""),
+    });
+
+    // Delete comments and the task
+    await TaskComment.deleteMany({ taskId: String(task._id) });
+    await Task.findByIdAndDelete(req.params.id);
+
+    await logActivity(req, "TASK_ARCHIVE", "task", task._id, task.title, `Archived task: ${task.title}`);
+
+    return res.json({ ok: true, message: "Task archived" });
   } catch (err) {
     return next(err);
   }

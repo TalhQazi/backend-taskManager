@@ -69,6 +69,13 @@ const taskCreateSchema = z.object({
       size: z.number().optional().default(0),
     })
     .optional(),
+  attachments: z.array(z.object({
+    fileName: z.string().optional().default(""),
+    url: z.string().optional().default(""),
+    mimeType: z.string().optional().default(""),
+    size: z.number().optional().default(0),
+    uploadedAt: z.date().optional(),
+  })).optional().default([]),
 });
 
 const logoSchema = z.object({
@@ -83,6 +90,13 @@ const projectCreateSchema = z.object({
   description: z.string().optional().default(""),
   assignees: z.array(z.string()).optional().default([]),
   logo: logoSchema,
+  attachments: z.array(z.object({
+    fileName: z.string().optional().default(""),
+    url: z.string().optional().default(""),
+    mimeType: z.string().optional().default(""),
+    size: z.number().optional().default(0),
+    uploadedAt: z.date().optional(),
+  })).optional().default([]),
   tasks: z.array(taskCreateSchema).min(1, "At least one task is required"),
 });
 
@@ -107,6 +121,7 @@ router.post("/", requireAuth, async (req, res, next) => {
       description: parsed.data.description || "",
       assignees: parsed.data.assignees || [],
       logo: parsed.data.logo || { fileName: "", url: "", mimeType: "", size: 0 },
+      attachments: parsed.data.attachments || [],
       createdByUserId: String(req.user?.sub || req.user?.id || ""),
       createdByUsername: String(req.user?.username || req.user?.name || ""),
       createdByRole: String(req.user?.role || ""),
@@ -126,6 +141,7 @@ router.post("/", requireAuth, async (req, res, next) => {
       attachmentFileName: t.attachmentFileName || t.attachment?.fileName || "",
       attachmentNote: t.attachmentNote || "",
       attachment: t.attachment,
+      attachments: t.attachments || [],
       projectId: createdProject._id,
     }));
 

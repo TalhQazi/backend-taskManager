@@ -9,6 +9,7 @@ const AsanaProject = require("../models/AsanaProject");
 const AsanaTask = require("../models/AsanaTask");
 const AsanaComment = require("../models/AsanaComment");
 const AsanaAttachment = require("../models/AsanaAttachment");
+const AsanaUser = require("../models/AsanaUser");
 const ImportJob = require("../models/ImportJob");
 
 const router = express.Router();
@@ -260,7 +261,21 @@ router.get("/task/:asanaId/comments", requireAuth, requireRole(["admin", "super-
   try {
     const asanaId = String(req.params.asanaId || "").trim();
     const items = await AsanaComment.find({ taskAsanaId: asanaId }).sort({ createdAtAsana: 1 }).lean();
-    return res.json({ ok: true, items });
+    
+    // Resolve author names from AsanaUser collection
+    const authorIds = [...new Set(items.map(c => c.authorAsanaId).filter(Boolean))];
+    const users = authorIds.length > 0 
+      ? await AsanaUser.find({ asanaId: { $in: authorIds } }).lean() 
+      : [];
+    const userMap = new Map(users.map(u => [u.asanaId, u]));
+    
+    const enriched = items.map(c => ({
+      ...c,
+      authorName: userMap.get(c.authorAsanaId)?.name || "",
+      authorEmail: userMap.get(c.authorAsanaId)?.email || "",
+    }));
+    
+    return res.json({ ok: true, items: enriched });
   } catch (err) {
     return next(err);
   }
@@ -270,6 +285,16 @@ router.get("/task/:asanaId/attachments", requireAuth, requireRole(["admin", "sup
   try {
     const asanaId = String(req.params.asanaId || "").trim();
     const items = await AsanaAttachment.find({ taskAsanaId: asanaId }).sort({ fileName: 1 }).lean();
+    return res.json({ ok: true, items });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// Get all imported Asana users
+router.get("/users", requireAuth, requireRole(["admin", "super-admin"]), async (_req, res, next) => {
+  try {
+    const items = await AsanaUser.find({}).sort({ name: 1 }).lean();
     return res.json({ ok: true, items });
   } catch (err) {
     return next(err);
