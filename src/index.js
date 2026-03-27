@@ -39,6 +39,7 @@ const websitesRoutes = require("./routes/websites");
 const socialMediaRoutes = require("./routes/socialMedia");
 const patentsRoutes = require("./routes/patents");
 const credentialsRoutes = require("./routes/credentials");
+const archiveRoutes = require("./routes/archive");
 
 //going to express now
 const app = express();
@@ -218,6 +219,7 @@ app.use("/api/websites", websitesRoutes);
 app.use("/api/social-media", socialMediaRoutes);
 app.use("/api/patents", patentsRoutes);
 app.use("/api/credentials", credentialsRoutes);
+app.use("/api/archive", archiveRoutes);
 
 app.use(notFoundHandler);
 app.use(errorHandler);

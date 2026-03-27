@@ -484,6 +484,118 @@ router.post("/:id/comments", requireAuth, async (req, res, next) => {
   }
 });
 
+// Archive a comment (instead of deleting)
+router.post("/:id/comments/:commentId/archive", requireAuth, async (req, res, next) => {
+  try {
+    const role = String(req.user?.role || "").toLowerCase();
+    if (role !== "admin" && role !== "super-admin") {
+      return res.status(403).json({ error: { message: "Forbidden: Admin access required" } });
+    }
+
+    const task = await Task.findById(req.params.id).lean();
+    if (!task) {
+      return res.status(404).json({ error: { message: "Task not found" } });
+    }
+
+    const comment = await TaskComment.findById(req.params.commentId).lean();
+    if (!comment) {
+      return res.status(404).json({ error: { message: "Comment not found" } });
+    }
+
+    const Archive = require("../models/Archive");
+    await Archive.create({
+      itemType: "comment",
+      itemData: {
+        originalId: String(comment._id),
+        taskId: String(comment.taskId),
+        message: comment.message,
+        authorUserId: comment.authorUserId,
+        authorUsername: comment.authorUsername,
+        authorRole: comment.authorRole,
+        createdAt: comment.createdAt,
+      },
+      parentType: "task",
+      parentId: String(task._id),
+      parentName: task.title,
+      archivedByUserId: String(req.user?.sub || req.user?.id || ""),
+      archivedByUsername: String(req.user?.username || ""),
+      archivedByRole: String(req.user?.role || ""),
+    });
+
+    await TaskComment.findByIdAndDelete(req.params.commentId);
+    await logActivity(req, "COMMENT_ARCHIVE", "task", task._id, task.title, `Archived comment on task: ${task.title}`);
+
+    return res.json({ ok: true, message: "Comment archived" });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// Archive an attachment from a task
+router.post("/:id/attachments/:attachmentIndex/archive", requireAuth, async (req, res, next) => {
+  try {
+    const role = String(req.user?.role || "").toLowerCase();
+    if (role !== "admin" && role !== "super-admin") {
+      return res.status(403).json({ error: { message: "Forbidden: Admin access required" } });
+    }
+
+    const task = await Task.findById(req.params.id).lean();
+    if (!task) {
+      return res.status(404).json({ error: { message: "Task not found" } });
+    }
+
+    const idx = parseInt(req.params.attachmentIndex, 10);
+    const attachments = Array.isArray(task.attachments) ? task.attachments : [];
+    
+    // Also handle single attachment field
+    let archivedAttachment = null;
+    if (idx === -1 && task.attachment) {
+      archivedAttachment = task.attachment;
+    } else if (idx >= 0 && idx < attachments.length) {
+      archivedAttachment = attachments[idx];
+    }
+
+    if (!archivedAttachment) {
+      return res.status(404).json({ error: { message: "Attachment not found" } });
+    }
+
+    const Archive = require("../models/Archive");
+    await Archive.create({
+      itemType: "attachment",
+      itemData: {
+        fileName: archivedAttachment.fileName,
+        url: archivedAttachment.url,
+        mimeType: archivedAttachment.mimeType,
+        size: archivedAttachment.size,
+        taskId: String(task._id),
+      },
+      parentType: "task",
+      parentId: String(task._id),
+      parentName: task.title,
+      archivedByUserId: String(req.user?.sub || req.user?.id || ""),
+      archivedByUsername: String(req.user?.username || ""),
+      archivedByRole: String(req.user?.role || ""),
+    });
+
+    // Remove the attachment from the task
+    const update = {};
+    if (idx === -1 && task.attachment) {
+      update.$unset = { attachment: 1, attachmentFileName: 1 };
+    } else {
+      const newAttachments = [...attachments];
+      newAttachments.splice(idx, 1);
+      update.$set = { attachments: newAttachments };
+    }
+    await Task.findByIdAndUpdate(req.params.id, update);
+
+    await logActivity(req, "ATTACHMENT_ARCHIVE", "task", task._id, task.title, `Archived attachment on task: ${task.title}`);
+
+    return res.json({ ok: true, message: "Attachment archived" });
+  } catch (err) {
+    return next(err);
+  }
+});
+
 router.patch("/:id/status", requireAuth, async (req, res, next) => {
   try {
     const task = await Task.findById(req.params.id).lean();
