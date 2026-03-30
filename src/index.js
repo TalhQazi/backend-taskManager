@@ -7,6 +7,9 @@ const { createServer } = require("http");
 const { Server } = require("socket.io");
 require("dotenv").config();
 
+const http = require("http");
+
+
 const { connectDb } = require("./lib/db");
 const { notFoundHandler, errorHandler } = require("./middleware/error");
 const { auditLogMiddleware } = require("./middleware/auditLog");
@@ -45,6 +48,8 @@ const archiveRoutes = require("./routes/archive");
 const app = express();
 const httpServer = createServer(app);
 
+
+
 // Socket.io setup
 const io = new Server(httpServer, {
   path: "/api/socket.io/",
@@ -58,7 +63,9 @@ const io = new Server(httpServer, {
       configuredOrigins.push(
         "https://bug-panel.vercel.app", 
         "http://localhost:3001",
-        "https://task.se7eninc.com"
+        "https://task.se7eninc.com",
+        "http://localhost:8080",
+        "http://192.168.31.13:8080"
       );
       
       if (!origin) return callback(null, true);
