@@ -33,7 +33,7 @@ const storage = multer.memoryStorage();
 
 const upload = multer({
   storage,
-  limits: { fileSize: 10 * 1024 * 1024 },
+  limits: { fileSize: 16 * 1024 * 1024 }, // 16MB - MongoDB max document size
 });
 
 const createSchema = z.object({
@@ -294,10 +294,11 @@ router.post("/", requireAuth, async (req, res, next) => {
   }
 });
 
-router.post("/upload", requireAuth, upload.single("file"), async (req, res, next) => {
+// Upload endpoint with multiple file support (up to 16MB each, MongoDB limit)
+router.post("/upload", requireAuth, upload.array("files", 10), async (req, res, next) => {
   try {
     console.log("Upload endpoint hit");
-    console.log("Request file:", req.file ? { name: req.file.originalname, size: req.file.size, mimetype: req.file.mimetype } : "No file");
+    console.log("Request files:", req.files ? req.files.map(f => ({ name: f.originalname, size: f.size, mimetype: f.mimetype })) : "No files");
     
     const body = req.body || {};
 
@@ -343,35 +344,43 @@ router.post("/upload", requireAuth, upload.single("file"), async (req, res, next
     const createdAt = parsed.data.createdAt || new Date().toISOString().split("T")[0];
     const firstAssignee = parsed.data.assignees?.[0] || "";
 
-    const f = req.file;
+    // Process multiple files as attachments
+    const files = req.files || [];
+    let attachments = [];
     let attachment = undefined;
     
-    if (f) {
-      console.log("Processing file:", f.originalname, "Size:", f.size);
-      if (f.buffer) {
-        const base64Data = f.buffer.toString("base64");
-        console.log("Base64 length:", base64Data.length);
-        attachment = {
-          fileName: f.originalname,
-          url: `data:${f.mimetype};base64,${base64Data}`,
-          mimeType: f.mimetype,
-          size: f.size,
-        };
-        console.log("Attachment created with URL length:", attachment.url.length);
-      } else {
-        console.error("File has no buffer!");
-      }
+    if (files.length > 0) {
+      console.log("Processing files:", files.length);
+      attachments = files.map(f => {
+        if (f.buffer) {
+          const base64Data = f.buffer.toString("base64");
+          console.log(`File ${f.originalname} - Base64 length:`, base64Data.length);
+          return {
+            fileName: f.originalname,
+            url: `data:${f.mimetype};base64,${base64Data}`,
+            mimeType: f.mimetype,
+            size: f.size,
+            uploadedAt: new Date(),
+          };
+        }
+        return null;
+      }).filter(Boolean);
+      
+      // Set first attachment as legacy single attachment
+      attachment = attachments[0];
+      console.log("Attachments created:", attachments.length, "First attachment URL length:", attachment?.url?.length);
     } else {
-      console.log("No file uploaded");
+      console.log("No files uploaded");
     }
 
-    console.log("Creating task with attachment:", attachment ? "yes" : "no");
+    console.log("Creating task with attachments:", attachments.length);
     const created = await Task.create({
       ...parsed.data,
       createdAt,
       dueDate,
-      attachmentFileName: f?.originalname || parsed.data.attachmentFileName || "",
+      attachmentFileName: attachments[0]?.fileName || parsed.data.attachmentFileName || "",
       attachment,
+      attachments: attachments.length > 0 ? attachments : undefined,
     });
 
     await checkAndFlagOffTheClock({
