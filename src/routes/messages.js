@@ -200,7 +200,7 @@ router.post("/mark-read", requireAuth, async (req, res, next) => {
 
     const { sender, recipient } = parsed.data;
 
-    // Mark all messages from sender to recipient as read
+   
     await Message.updateMany(
       {
         sender: sender,
@@ -216,7 +216,7 @@ router.post("/mark-read", requireAuth, async (req, res, next) => {
   }
 });
 
-// Create new message
+
 router.post("/", requireAuth, async (req, res, next) => {
   try {
     const notificationParsed = notificationSchema.safeParse(req.body);
@@ -234,7 +234,22 @@ router.post("/", requireAuth, async (req, res, next) => {
         type: "broadcast",
         status: "sent",
       });
-      return res.status(201).json({ item: withId(decryptOut(created.toObject())) });
+     const io = global.io;
+  
+     const finalData = withId(decryptOut(created.toObject()));
+
+    
+      if (io) {
+        io.emit("new-notification", {
+          ...finalData,
+          message: finalData.content || finalData.message, 
+          type: "task", 
+        });
+      }
+
+      return res.status(201).json({ item: finalData });
+
+     //return res.status(201).json({ item: withId(decryptOut(created.toObject())) });
     }
 
     const parsed = createSchema.safeParse(req.body);
@@ -248,12 +263,27 @@ router.post("/", requireAuth, async (req, res, next) => {
       metadata: { recipient: parsed.data.recipient, type: parsed.data.type },
     });
 
+   /* const created = await Message.create({
+      ...parsed.data,
+      title: typeof parsed.data.title === "string" ? encryptString(parsed.data.title) : "",
+      content: encryptString(parsed.data.content),
+    });
+    return res.status(201).json({ item: withId(decryptOut(created.toObject())) });*/
     const created = await Message.create({
       ...parsed.data,
       title: typeof parsed.data.title === "string" ? encryptString(parsed.data.title) : "",
       content: encryptString(parsed.data.content),
     });
-    return res.status(201).json({ item: withId(decryptOut(created.toObject())) });
+
+    const finalData = withId(decryptOut(created.toObject()));
+    const io = global.io;
+
+    if (io) {
+      io.emit("new-message", finalData);
+    }
+
+    return res.status(201).json({ item: finalData });
+
   } catch (err) {
     next(err);
   }

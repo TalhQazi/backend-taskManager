@@ -2,15 +2,15 @@ const mongoose = require("mongoose");
 
 const TaskSchema = new mongoose.Schema(
   {
-    title: { type: String, required: true },
+    title: { type: String, required: true, index: true },
     description: { type: String, default: "" },
     projectId: { type: mongoose.Schema.Types.ObjectId, ref: "Project", required: false, index: true },
-    assignees: { type: [String], default: [] },
-    priority: { type: String, enum: ["high", "medium", "low"], default: "medium" },
-    status: { type: String, enum: ["pending", "in-progress", "completed", "overdue"], default: "pending" },
-    dueDate: { type: Date },
+    assignees: { type: [String], default: [], index: true },
+    priority: { type: String, enum: ["high", "medium", "low"], default: "medium", index: true },
+    status: { type: String, enum: ["pending", "in-progress", "completed", "overdue"], default: "pending", index: true },
+    dueDate: { type: Date, index: true },
     dueTime: { type: String, default: "" },
-    createdAt: { type: String, default: "" },
+    createdAt: { type: String, default: "", index: true },
     attachmentFileName: { type: String, default: "" },
     attachmentNote: { type: String, default: "" },
     attachment: {
@@ -31,5 +31,11 @@ const TaskSchema = new mongoose.Schema(
   },
   { timestamps: true }
 );
+
+// Compound indexes for common query patterns
+TaskSchema.index({ projectId: 1, status: 1 });
+TaskSchema.index({ assignees: 1, status: 1 });
+TaskSchema.index({ createdAt: -1, status: 1 });
+TaskSchema.index({ projectId: 1, createdAt: -1 });
 
 module.exports = mongoose.model("Task", TaskSchema);
