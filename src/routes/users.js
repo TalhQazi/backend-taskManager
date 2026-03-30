@@ -146,9 +146,9 @@ router.post("/", requireAuth, requireRole(["super-admin", "admin"]), async (req,
             ? parsed.data.name.trim().toLowerCase().replace(/\s+/g, ".")
             : "user";
 
-    const passwordHash = await bcrypt.hash(parsed.data.password, 10);
     const created = await User.create({
       ...parsed.data,
+      username: derivedUsername,
       passwordHash: await bcrypt.hash(parsed.data.password, 10),
     });
 
