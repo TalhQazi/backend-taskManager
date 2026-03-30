@@ -261,4 +261,158 @@ router.get("/:id", requireAuth, async (req, res, next) => {
   }
 });
 
+const projectUpdateSchema = z.object({
+  name: z.string().min(1, "Project name is required").optional(),
+  description: z.string().optional(),
+  assignees: z.array(z.string()).optional().default([]),
+  logo: logoSchema,
+  attachments: z.array(z.object({
+    fileName: z.string().optional().default(""),
+    url: z.string().optional().default(""),
+    mimeType: z.string().optional().default(""),
+    size: z.number().optional().default(0),
+    uploadedAt: z.date().optional(),
+  })).optional().default([]),
+  status: z.string().optional(),
+});
+
+router.put("/:id", requireAuth, async (req, res, next) => {
+  try {
+    const parsed = projectUpdateSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ error: { message: "Invalid payload", details: parsed.error.errors } });
+    }
+
+    const project = await Project.findById(req.params.id);
+    if (!project) {
+      return res.status(404).json({ error: { message: "Project not found" } });
+    }
+
+    // Update fields
+    if (parsed.data.name !== undefined) project.name = parsed.data.name;
+    if (parsed.data.description !== undefined) project.description = parsed.data.description;
+    if (parsed.data.assignees !== undefined) project.assignees = parsed.data.assignees;
+    if (parsed.data.logo !== undefined) project.logo = parsed.data.logo;
+    if (parsed.data.attachments !== undefined) project.attachments = parsed.data.attachments;
+
+    await project.save();
+
+    await logActivity(
+      req,
+      "PROJECT_UPDATE",
+      "project",
+      project._id,
+      project.name,
+      `Updated project: ${project.name}`
+    );
+
+    void createNotification({
+      actor: String(req.user?.username || req.user?.name || "System"),
+      actorRole: String(req.user?.role || ""),
+      action: "updated",
+      resourceType: "project",
+      resourceName: project.name,
+      resourceId: String(project._id),
+    });
+
+    return res.json({ item: withId(project.toObject()) });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+router.delete("/:id", requireAuth, async (req, res, next) => {
+  try {
+    const role = String(req.user?.role || "").toLowerCase();
+    if (role !== "admin" && role !== "super-admin") {
+      return res.status(403).json({ error: { message: "Forbidden: Admin access required" } });
+    }
+
+    const project = await Project.findById(req.params.id);
+    if (!project) {
+      return res.status(404).json({ error: { message: "Project not found" } });
+    }
+
+    // Archive project (soft delete)
+    await Archive.create({
+      itemType: "project",
+      itemData: {
+        originalId: String(project._id),
+        name: project.name,
+        description: project.description,
+        assignees: project.assignees,
+        logo: project.logo,
+        attachments: project.attachments,
+        createdAt: project.createdAt,
+        createdByUserId: project.createdByUserId,
+        createdByUsername: project.createdByUsername,
+        createdByRole: project.createdByRole,
+      },
+      parentType: "standalone",
+      parentId: String(project._id),
+      parentName: project.name,
+      archivedByUserId: String(req.user?.sub || req.user?.id || ""),
+      archivedByUsername: String(req.user?.username || req.user?.name || ""),
+      archivedByRole: String(req.user?.role || ""),
+    });
+
+    // Archive associated tasks
+    const projectTasks = await Task.find({ projectId: project._id }).lean();
+    for (const task of projectTasks) {
+      await Archive.create({
+        itemType: "task",
+        itemData: {
+          originalId: String(task._id),
+          title: task.title,
+          description: task.description,
+          assignees: task.assignees,
+          priority: task.priority,
+          status: task.status,
+          dueDate: task.dueDate,
+          dueTime: task.dueTime,
+          location: task.location,
+          projectId: task.projectId,
+          attachment: task.attachment,
+          attachments: task.attachments,
+          createdAt: task.createdAt,
+        },
+        parentType: "project",
+        parentId: String(project._id),
+        parentName: project.name,
+        archivedByUserId: String(req.user?.sub || req.user?.id || ""),
+        archivedByUsername: String(req.user?.username || ""),
+        archivedByRole: String(req.user?.role || ""),
+      });
+    }
+
+    // Delete associated tasks
+    await Task.deleteMany({ projectId: project._id });
+
+    // Delete the project
+    await Project.findByIdAndDelete(req.params.id);
+
+    await logActivity(
+      req,
+      "PROJECT_ARCHIVE",
+      "project",
+      project._id,
+      project.name,
+      `Archived project: ${project.name}`
+    );
+
+    void createNotification({
+      actor: String(req.user?.username || req.user?.name || "System"),
+      actorRole: String(req.user?.role || ""),
+      action: "archived",
+      resourceType: "project",
+      resourceName: project.name,
+      resourceId: String(project._id),
+    });
+
+    return res.json({ success: true, message: "Project archived successfully" });
+  } catch (err) {
+    return next(err);
+  }
+});
+
 module.exports = router;
