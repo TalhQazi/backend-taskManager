@@ -1,3 +1,4 @@
+const mongoose = require("mongoose");
 const express = require("express");
 const { z } = require("zod");
 
@@ -177,85 +178,139 @@ router.post("/", requireAuth, async (req, res, next) => {
   }
 });
 
+// Optimized GET all projects with task stats using aggregation
 router.get("/", requireAuth, async (_req, res, next) => {
   try {
-    const items = await Project.find().sort({ createdAt: -1 }).lean();
-
-    const itemsWithStats = await Promise.all(
-      items.map(async (project) => {
-        const taskCount = await Task.countDocuments({ projectId: project._id });
-        const tasks = taskCount > 0
-          ? await Task.find({ projectId: project._id }).select("status").lean()
-          : [];
-
-        let status = "No tasks";
-        if (tasks.length > 0) {
-          const statuses = tasks.map((t) => t.status);
-          if (statuses.every((s) => s === "completed")) {
-            status = "Completed";
-          } else if (statuses.some((s) => s === "in-progress")) {
-            status = "In Progress";
-          } else if (statuses.some((s) => s === "pending")) {
-            status = "Pending";
-          } else if (statuses.some((s) => s === "overdue")) {
-            status = "Overdue";
-          } else {
-            status = "Active";
+    const items = await Project.aggregate([
+      { $sort: { createdAt: -1 } },
+      {
+        $lookup: {
+          from: "tasks",
+          localField: "_id",
+          foreignField: "projectId",
+          as: "tasks",
+          pipeline: [
+            { $project: { status: 1, _id: 0 } }
+          ]
+        }
+      },
+      {
+        $addFields: {
+          id: { $toString: "$_id" },
+          taskCount: { $size: "$tasks" },
+          status: {
+            $switch: {
+              branches: [
+                { case: { $eq: [{ $size: "$tasks" }, 0] }, then: "No tasks" },
+                { case: { $allElementsTrue: { $map: { input: "$tasks", as: "t", in: { $eq: ["$$t.status", "completed"] } } } }, then: "Completed" },
+                { case: { $anyElementTrue: { $map: { input: "$tasks", as: "t", in: { $eq: ["$$t.status", "in-progress"] } } } }, then: "In Progress" },
+                { case: { $anyElementTrue: { $map: { input: "$tasks", as: "t", in: { $eq: ["$$t.status", "overdue"] } } } }, then: "Overdue" },
+                { case: { $anyElementTrue: { $map: { input: "$tasks", as: "t", in: { $eq: ["$$t.status", "pending"] } } } }, then: "Pending" }
+              ],
+              default: "Active"
+            }
           }
         }
+      },
+      {
+        $project: {
+          _id: 0,
+          id: 1,
+          name: 1,
+          description: 1,
+          assignees: 1,
+          logo: { $ifNull: ["$logo", { fileName: "", url: "", mimeType: "", size: 0 }] },
+          taskCount: 1,
+          status: 1,
+          createdAt: 1,
+          createdByUserId: 1,
+          createdByUsername: 1,
+          createdByRole: 1
+        }
+      }
+    ]);
 
-        const projectObj = withId(project);
-        return {
-          ...projectObj,
-          assignees: Array.isArray(project.assignees) ? project.assignees : [],
-          logo: project.logo || { fileName: "", url: "", mimeType: "", size: 0 },
-          taskCount,
-          status,
-        };
-      })
-    );
-
-    return res.json({ items: itemsWithStats });
+    return res.json({ items });
   } catch (err) {
     return next(err);
   }
 });
 
+// Optimized GET single project with tasks using aggregation
 router.get("/:id", requireAuth, async (req, res, next) => {
   try {
-    const project = await Project.findById(req.params.id).lean();
-    if (!project) return res.status(404).json({ error: { message: "Project not found" } });
-
-    const tasks = await Task.find({ projectId: project._id }).sort({ createdAt: -1 }).lean();
-
-    // Calculate status based on tasks
-    let status = "No tasks";
-    if (tasks.length > 0) {
-      const statuses = tasks.map((t) => t.status);
-      if (statuses.every((s) => s === "completed")) {
-        status = "Completed";
-      } else if (statuses.some((s) => s === "in-progress")) {
-        status = "In Progress";
-      } else if (statuses.some((s) => s === "pending")) {
-        status = "Pending";
-      } else if (statuses.some((s) => s === "overdue")) {
-        status = "Overdue";
-      } else {
-        status = "Active";
+    const projectResult = await Project.aggregate([
+      { $match: { _id: new mongoose.Types.ObjectId(req.params.id) } },
+      {
+        $lookup: {
+          from: "tasks",
+          localField: "_id",
+          foreignField: "projectId",
+          as: "tasks",
+          pipeline: [
+            { $sort: { createdAt: -1 } },
+            {
+              $project: {
+                _id: 0,
+                id: { $toString: "$_id" },
+                title: 1,
+                description: 1,
+                assignees: 1,
+                priority: 1,
+                status: 1,
+                dueDate: 1,
+                dueTime: 1,
+                location: 1,
+                createdAt: 1,
+                attachmentFileName: 1,
+                attachmentNote: 1
+              }
+            }
+          ]
+        }
+      },
+      {
+        $addFields: {
+          id: { $toString: "$_id" },
+          taskCount: { $size: "$tasks" },
+          status: {
+            $switch: {
+              branches: [
+                { case: { $eq: [{ $size: "$tasks" }, 0] }, then: "No tasks" },
+                { case: { $allElementsTrue: { $map: { input: "$tasks", as: "t", in: { $eq: ["$$t.status", "completed"] } } } }, then: "Completed" },
+                { case: { $anyElementTrue: { $map: { input: "$tasks", as: "t", in: { $eq: ["$$t.status", "in-progress"] } } } }, then: "In Progress" },
+                { case: { $anyElementTrue: { $map: { input: "$tasks", as: "t", in: { $eq: ["$$t.status", "overdue"] } } } }, then: "Overdue" },
+                { case: { $anyElementTrue: { $map: { input: "$tasks", as: "t", in: { $eq: ["$$t.status", "pending"] } } } }, then: "Pending" }
+              ],
+              default: "Active"
+            }
+          }
+        }
+      },
+      {
+        $project: {
+          _id: 0,
+          id: 1,
+          name: 1,
+          description: 1,
+          assignees: 1,
+          logo: { $ifNull: ["$logo", { fileName: "", url: "", mimeType: "", size: 0 }] },
+          tasks: 1,
+          taskCount: 1,
+          status: 1,
+          createdAt: 1,
+          createdByUserId: 1,
+          createdByUsername: 1,
+          createdByRole: 1
+        }
       }
+    ]);
+
+    if (projectResult.length === 0) {
+      return res.status(404).json({ error: { message: "Project not found" } });
     }
 
-    const projectObj = withId(project);
-    return res.json({
-      item: {
-        ...projectObj,
-        assignees: Array.isArray(project.assignees) ? project.assignees : [],
-        logo: project.logo || { fileName: "", url: "", mimeType: "", size: 0 },
-        tasks: tasks.map(withId),
-        status,
-        taskCount: tasks.length,
-      },
-    });
+    return res.json({ item: projectResult[0] });
   } catch (err) {
     return next(err);
   }
@@ -313,6 +368,46 @@ router.put("/:id", requireAuth, async (req, res, next) => {
       resourceType: "project",
       resourceName: project.name,
       resourceId: String(project._id),
+    });
+
+    return res.json({ item: withId(project.toObject()) });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// Reassign project endpoint
+router.put("/:id/reassign", requireAuth, async (req, res, next) => {
+  try {
+    const role = String(req.user?.role || "").toLowerCase();
+    if (role !== "admin" && role !== "super-admin") {
+      return res.status(403).json({ error: { message: "Forbidden: Admin access required" } });
+    }
+
+    const project = await Project.findById(req.params.id);
+    if (!project) {
+      return res.status(404).json({ error: { message: "Project not found" } });
+    }
+
+    const assignees = normalizeAssignees(req.body?.assignees);
+    if (assignees.length === 0) {
+      return res.status(400).json({ error: { message: "At least one assignee is required" } });
+    }
+
+    project.assignees = assignees;
+    await project.save();
+
+    // Log activity
+    await logActivity(req, "PROJECT_REASSIGN", "project", req.params.id, project.name, `Reassigned project: ${project.name} to ${assignees.join(", ")}`);
+
+    await createNotification({
+      actor: req.user?.username || req.user?.name || "System",
+      actorRole: req.user?.role || "",
+      action: "reassigned",
+      resourceType: "project",
+      resourceName: project.name,
+      resourceId: String(req.params.id),
+      details: `New assignees: ${assignees.join(", ")}`,
     });
 
     return res.json({ item: withId(project.toObject()) });

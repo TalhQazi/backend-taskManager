@@ -776,6 +776,66 @@ router.put("/:id", requireAuth, async (req, res, next) => {
   }
 });
 
+// Optimized reassign endpoint - use updateOne instead of findByIdAndUpdate
+router.put("/:id/reassign", requireAuth, async (req, res, next) => {
+  try {
+    const role = String(req.user?.role || "").toLowerCase();
+    if (role !== "admin" && role !== "super-admin") {
+      return res.status(403).json({ error: { message: "Forbidden: Admin access required" } });
+    }
+
+    const assignees = normalizeAssignees(req.body?.assignees);
+    if (assignees.length === 0) {
+      return res.status(400).json({ error: { message: "At least one assignee is required" } });
+    }
+
+    // Use updateOne for better performance - only updates, doesn't fetch full document
+    const result = await Task.updateOne(
+      { _id: req.params.id },
+      { $set: { assignees } }
+    );
+
+    if (result.matchedCount === 0) {
+      return res.status(404).json({ error: { message: "Task not found" } });
+    }
+
+    // Fetch minimal data for response
+    const updated = await Task.findById(req.params.id, {
+      title: 1,
+      description: 1,
+      projectId: 1,
+      assignees: 1,
+      priority: 1,
+      status: 1,
+      dueDate: 1,
+      dueTime: 1,
+      location: 1,
+      createdAt: 1,
+    }).lean();
+
+    if (!updated) {
+      return res.status(404).json({ error: { message: "Task not found" } });
+    }
+
+    // Log activity
+    await logActivity(req, "TASK_REASSIGN", "task", req.params.id, updated.title, `Reassigned task: ${updated.title} to ${assignees.join(", ")}`);
+
+    await createNotification({
+      actor: req.user?.username || req.user?.name || "System",
+      actorRole: req.user?.role || "",
+      action: "reassigned",
+      resourceType: "task",
+      resourceName: updated.title,
+      resourceId: String(req.params.id),
+      details: `New assignees: ${assignees.join(", ")}`,
+    });
+
+    return res.json({ item: withId(updated) });
+  } catch (err) {
+    return next(err);
+  }
+});
+
 router.delete("/:id", requireAuth, async (req, res, next) => {
   try {
     const deleted = await Task.findByIdAndDelete(req.params.id).lean();
