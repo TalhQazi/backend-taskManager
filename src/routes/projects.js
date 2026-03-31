@@ -4,6 +4,7 @@ const { z } = require("zod");
 
 const Project = require("../models/Project");
 const Task = require("../models/Task");
+const Archive = require("../models/Archive");
 const ActivityLog = require("../models/ActivityLog");
 const { requireAuth } = require("../middleware/auth");
 const { createNotification } = require("../utils/notifications");
