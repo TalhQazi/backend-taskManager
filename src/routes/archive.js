@@ -1,6 +1,7 @@
 const express = require("express");
 const Archive = require("../models/Archive");
 const { requireAuth } = require("../middleware/auth");
+const bcrypt = require("bcryptjs");
 
 const router = express.Router();
 
@@ -151,6 +152,32 @@ router.post("/:id/restore", requireAuth, async (req, res, next) => {
           await task.save();
         }
       }
+    }
+
+    else if (itemType === "user") {
+      const User = require("../models/User");
+      const data = archived.itemData || {};
+      let passwordHash = data.passwordHash;
+
+/*
+ let passwordHash = data.passwordHash;
+if (!passwordHash) {
+        const defaultPassword = "123456";
+        passwordHash = await bcrypt.hash(defaultPassword, 10);
+      }
+*/
+      if (!passwordHash) {
+        const defaultPassword = "123456";
+        passwordHash = await bcrypt.hash(defaultPassword, 10);
+      }
+      await User.create({
+        name: data.name || "",
+        email: data.email || "",
+        username: data.username,          
+        passwordHash: data.passwordHash,  
+        role: data.role || "employee",
+        status: "active",
+      });
     }
 
     // Remove from archive after restore

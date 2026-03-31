@@ -5,7 +5,7 @@ const { z } = require("zod");
 const User = require("../models/User");
 const Settings = require("../models/Settings");
 const { createNotification } = require("../utils/notifications");
-const { requireAuth, requireRole } = require("../middleware/auth");
+const { requireAuth, requireRole } = require("../middleware/auth"); 
 
 const router = express.Router();
 
@@ -235,6 +235,57 @@ router.delete("/:id", requireAuth, requireRole(["super-admin", "admin"]), async 
     });
 
     return res.status(204).send();
+  } catch (err) {
+    return next(err);
+  }
+});
+
+//Archive user instead of deleting permanently, only accessible by super-admin and admin
+router.post("/:id/archive", requireAuth, requireRole(["super-admin", "admin"]), async (req, res, next) => {
+  try {
+   const user = await User.findById(req.params.id)
+  .select("+passwordHash") 
+  .lean();
+
+    if (!user) {
+      return res.status(404).json({ error: { message: "User not found" } });
+    }
+
+    const Archive = require("../models/Archive");
+
+    await Archive.create({
+      itemType: "user",
+      itemData: {
+        originalId: String(user._id),
+        name: user.name,
+        email: user.email,
+        username: user.username,
+        passwordHash: user.passwordHash,
+        role: user.role,
+        status: user.status,
+        createdAt: user.createdAt,
+      },
+      parentType: "system",
+      parentId: String(user._id),
+      parentName: user.name || user.email,
+      archivedByUserId: String(req.user?.sub || req.user?.id || ""),
+      archivedByUsername: String(req.user?.username || ""),
+      archivedByRole: String(req.user?.role || ""),
+    });
+
+    await User.findByIdAndDelete(req.params.id);
+
+    await createNotification({
+      actor: req.user?.username || "Admin",
+      actorRole: req.user?.role || "admin",
+      action: "archived",
+      resourceType: "user",
+      resourceName: user.name || user.email,
+      resourceId: String(user._id),
+    });
+
+    return res.json({ ok: true, message: "User archived successfully" });
+
   } catch (err) {
     return next(err);
   }
