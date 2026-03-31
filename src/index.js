@@ -43,6 +43,7 @@ const socialMediaRoutes = require("./routes/socialMedia");
 const patentsRoutes = require("./routes/patents");
 const credentialsRoutes = require("./routes/credentials");
 const archiveRoutes = require("./routes/archive");
+const { router: founderMessagesRoutes, initializeMessages } = require("./routes/founderMessages");
 
 //going to express now
 const app = express();
@@ -226,7 +227,7 @@ app.use("/api/websites", websitesRoutes);
 app.use("/api/social-media", socialMediaRoutes);
 app.use("/api/patents", patentsRoutes);
 app.use("/api/credentials", credentialsRoutes);
-app.use("/api/archive", archiveRoutes);
+app.use("/api/founder-messages", founderMessagesRoutes);
 
 app.use(notFoundHandler);
 app.use(errorHandler);
@@ -234,7 +235,10 @@ app.use(errorHandler);
 const port = Number(process.env.PORT || 5000);
 
 connectDb()
-  .then(() => {
+  .then(async () => {
+    // Initialize default founder messages
+    await initializeMessages();
+    
     httpServer.listen(port, () => {
     
       console.log(`Backend listening on http://localhost:${port}`);
