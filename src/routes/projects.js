@@ -220,15 +220,8 @@ router.get("/", requireAuth, async (_req, res, next) => {
           name: 1,
           description: 1,
           assignees: 1,
-          // Exclude logo/attachment URLs (base64) from list to prevent massive payloads
-          logo: { $ifNull: [{ $mergeObjects: ["$logo", { url: "" }] }, { fileName: "", url: "", mimeType: "", size: 0 }] },
-          attachments: {
-            $map: {
-              input: { $ifNull: ["$attachments", []] },
-              as: "att",
-              in: { fileName: "$$att.fileName", mimeType: "$$att.mimeType", size: "$$att.size", url: "" }
-            }
-          },
+          logo: { $ifNull: ["$logo", { fileName: "", url: "", mimeType: "", size: 0 }] },
+          attachments: 1,
           taskCount: 1,
           status: 1,
           createdAt: 1,
