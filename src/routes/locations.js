@@ -66,7 +66,6 @@ const updateSchema = createSchema.partial();
 
 router.get("/", requireAuth, async (_req, res, next) => {
   try {
-    // Exclude photoDataUrl from list to avoid massive payloads (base64 images can be several MB each)
     const items = await Location.find().select("-photoDataUrl").sort({ createdAt: -1 }).lean();
     res.json({ items: items.map(withId) });
   } catch (err) {
@@ -150,6 +149,16 @@ router.post("/", requireAuth, async (req, res, next) => {
     });
     
     res.status(201).json({ item: withId(created.toObject()) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get("/:id/photo", requireAuth, async (req, res, next) => {
+  try {
+    const loc = await Location.findById(req.params.id).select("photoDataUrl photoFileName").lean();
+    if (!loc) return res.status(404).json({ error: { message: "Location not found" } });
+    res.json({ photoDataUrl: loc.photoDataUrl || "", photoFileName: loc.photoFileName || "" });
   } catch (err) {
     next(err);
   }
