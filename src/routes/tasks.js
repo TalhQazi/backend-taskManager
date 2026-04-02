@@ -201,7 +201,11 @@ async function logActivity(req, action, resourceType, resourceId, resourceName, 
 
 router.get("/", requireAuth, async (_req, res, next) => {
   try {
-    const items = await Task.find().sort({ createdAt: -1 }).lean();
+    // Exclude attachment URLs (stored as base64) from the list to prevent massive payloads
+    const items = await Task.find()
+      .select("-attachment.url -attachments.url")
+      .sort({ createdAt: -1 })
+      .lean();
     res.json({ items: items.map(withId) });
   } catch (err) {
     next(err);
