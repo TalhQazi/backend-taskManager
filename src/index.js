@@ -227,6 +227,7 @@ app.use("/api/websites", websitesRoutes);
 app.use("/api/social-media", socialMediaRoutes);
 app.use("/api/patents", patentsRoutes);
 app.use("/api/credentials", credentialsRoutes);
+app.use("/api/archive", archiveRoutes);
 app.use("/api/founder-messages", founderMessagesRoutes);
 
 app.use(notFoundHandler);
