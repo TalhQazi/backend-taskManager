@@ -184,8 +184,10 @@ app.use((req, res, next) => {
     return next();
   }
   // For other requests, use JSON parser
-  express.json({ limit: "10mb" })(req, res, next);
+  express.json({ limit: "50mb" })(req, res, next);
+ 
 });
+ app.use(express.urlencoded({ limit: "50mb", extended: true }));
 app.use(morgan("dev"));
 
 app.use(auditLogMiddleware());
@@ -231,18 +233,27 @@ app.use("/api/archive", archiveRoutes);
 app.use(notFoundHandler);
 app.use(errorHandler);
 
-const port = Number(process.env.PORT || 5000);
+const port = Number(process.env.PORT || 5001);
 
 connectDb()
   .then(() => {
-    httpServer.listen(port, () => {
-    
-      console.log(`Backend listening on http://localhost:${port}`);
-      console.log(`WebSocket server ready`);
+    const server = httpServer.listen(port, () => {
+      console.log(`✅ Backend listening on http://localhost:${port}`);
+      console.log(`✅ WebSocket server ready`);
+    });
+
+    server.on("error", (err) => {
+      if (err.code === "EADDRINUSE") {
+        console.log(`❌ Port ${port} is busy. Trying 5002...`);
+        httpServer.listen(5002, () => {
+          console.log(`✅ Backend switched to http://localhost:5002`);
+        });
+      } else {
+        console.error(err);
+      }
     });
   })
   .catch((err) => {
-    
     console.error("Failed to connect to DB", err);
     process.exit(1);
   });

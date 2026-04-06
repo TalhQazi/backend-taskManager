@@ -12,6 +12,7 @@ const { requireAuth } = require("../middleware/auth");
 const { checkAndFlagOffTheClock } = require("../lib/offTheClockWork");
 const { createNotification } = require("../utils/notifications");
 
+
 const router = express.Router();
 // Middleware to skip body parsing for multipart/form-data (must be before other middleware)
 router.use((req, res, next) => {
@@ -365,8 +366,7 @@ router.post("/upload", requireAuth, upload.array("files", 10), async (req, res, 
         }
         return null;
       }).filter(Boolean);
-      
-      // Set first attachment as legacy single attachment
+     
       attachment = attachments[0];
       console.log("Attachments created:", attachments.length, "First attachment URL length:", attachment?.url?.length);
     } else {
