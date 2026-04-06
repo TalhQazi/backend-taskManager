@@ -215,9 +215,35 @@ async function logActivity(req, action, resourceType, resourceId, resourceName, 
   }
 }
 
-router.get("/", requireAuth, async (_req, res, next) => {
+function escapeRegExp(s) {
+  return String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+router.get("/", requireAuth, async (req, res, next) => {
   try {
-    const items = await Task.find().sort({ createdAt: -1 }).lean();
+    const role = String(req.user?.role || "").trim().toLowerCase();
+    let items;
+
+    if (role === "admin" || role === "super-admin") {
+      // Admins see everything
+      items = await Task.find().sort({ createdAt: -1 }).lean();
+    } else {
+      // Managers and employees only see tasks assigned to them
+      const username = String(req.user?.username || "").trim();
+      const name = String(req.user?.name || "").trim();
+      const candidates = [username, name].filter(Boolean);
+
+      if (candidates.length === 0) {
+        items = [];
+      } else {
+        const conditions = candidates.flatMap((c) => [
+          { assignees: { $elemMatch: { $regex: new RegExp(`^${escapeRegExp(c)}$`, "i") } } },
+          { assignee: { $regex: new RegExp(`^${escapeRegExp(c)}$`, "i") } },
+        ]);
+        items = await Task.find({ $or: conditions }).sort({ createdAt: -1 }).lean();
+      }
+    }
+
     res.json({ items: items.map(withId) });
   } catch (err) {
     next(err);
