@@ -180,9 +180,30 @@ router.post("/", requireAuth, async (req, res, next) => {
 });
 
 // Optimized GET all projects with task stats using aggregation
-router.get("/", requireAuth, async (_req, res, next) => {
+function escapeRegExp(s) {
+  return String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+router.get("/", requireAuth, async (req, res, next) => {
   try {
-    const items = await Project.aggregate([
+    const role = String(req.user?.role || "").trim().toLowerCase();
+    let matchStage = null;
+
+    if (role !== "admin" && role !== "super-admin") {
+      const username = String(req.user?.username || "").trim();
+      const name = String(req.user?.name || "").trim();
+      const candidates = [username, name].filter(Boolean);
+
+      if (candidates.length === 0) {
+        return res.json({ items: [] });
+      }
+
+      const regexes = candidates.map((c) => new RegExp(`^${escapeRegExp(c)}$`, "i"));
+      matchStage = { $match: { assignees: { $elemMatch: { $in: regexes } } } };
+    }
+
+    const pipeline = [
+      ...(matchStage ? [matchStage] : []),
       { $sort: { createdAt: -1 } },
       {
         $lookup: {
@@ -245,7 +266,9 @@ router.get("/", requireAuth, async (_req, res, next) => {
           createdByRole: 1
         }
       }
-    ]);
+    ];
+
+    const items = await Project.aggregate(pipeline);
 
     return res.json({ items });
   } catch (err) {
