@@ -45,15 +45,23 @@ const createSchema = z.object({
   status: z.enum(["pending", "in-progress", "completed", "overdue"]).optional(),
   dueDate: z.union([z.string(), z.date()]).optional(),
   dueTime: z.string().optional().default(""),
+  location: z.string().optional().default(""),
   createdAt: z.string().optional().default(""),
   attachmentFileName: z.string().optional().default(""),
   attachmentNote: z.string().optional().default(""),
+  attachment: z.object({
+    fileName: z.string().optional().default(""),
+    url: z.string().optional().default(""),
+    mimeType: z.string().optional().default(""),
+    size: z.number().optional().default(0),
+    uploadedAt: z.union([z.date(), z.string()]).optional(),
+  }).optional(),
   attachments: z.array(z.object({
     fileName: z.string().optional().default(""),
     url: z.string().optional().default(""),
     mimeType: z.string().optional().default(""),
     size: z.number().optional().default(0),
-    uploadedAt: z.date().optional(),
+    uploadedAt: z.union([z.date(), z.string()]).optional(),
   })).optional().default([]),
 });
 
@@ -68,7 +76,15 @@ function withId(doc) {
       ? [legacyAssignee]
       : [];
   const { assignee, assigneeInitials, location, ...rest } = doc;
-  return { ...rest, assignees: nextAssignees, id: String(doc._id) };
+  return { 
+    ...rest, 
+    assignees: nextAssignees, 
+    id: String(doc._id),
+    attachments: doc.attachments,
+    attachment: doc.attachment,
+    attachmentFileName: doc.attachmentFileName,
+    attachmentNote: doc.attachmentNote,
+  };
 }
 
 function normalizeAssignees(input) {
@@ -856,6 +872,69 @@ router.delete("/:id", requireAuth, async (req, res, next) => {
     });
     
     return res.status(204).send();
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// Download task attachment by index
+router.get("/:id/attachments/:index/download", requireAuth, async (req, res, next) => {
+  try {
+    const task = await Task.findById(req.params.id).lean();
+    if (!task) {
+      return res.status(404).json({ error: { message: "Task not found" } });
+    }
+
+    const allowed = await canAccessTaskAsync(req.user, task);
+    if (!allowed) {
+      return res.status(403).json({ error: { message: "Forbidden" } });
+    }
+
+    const idx = parseInt(req.params.index, 10);
+    const attachments = Array.isArray(task.attachments) ? task.attachments : [];
+    
+    // Support legacy single attachment at index -1
+    let attachment = null;
+    if (idx === -1 && task.attachment) {
+      attachment = task.attachment;
+    } else if (idx >= 0 && idx < attachments.length) {
+      attachment = attachments[idx];
+    }
+
+    if (!attachment) {
+      return res.status(404).json({ error: { message: "Attachment not found" } });
+    }
+
+    // If attachment has data URL (base64), decode and serve
+    const url = attachment.url || "";
+    if (url.startsWith("data:")) {
+      const match = url.match(/^data:([^;]+);base64,(.+)$/);
+      if (match) {
+        const mimeType = match[1];
+        const base64Data = match[2];
+        const buffer = Buffer.from(base64Data, "base64");
+        res.setHeader("Content-Type", mimeType);
+        res.setHeader("Content-Disposition", `attachment; filename="${attachment.fileName || "download"}"`);
+        return res.send(buffer);
+      }
+    }
+
+    // If attachment has external URL, redirect to it
+    if (url.startsWith("http://") || url.startsWith("https://")) {
+      return res.redirect(url);
+    }
+
+    // If no URL but has fileName, try to serve from uploads folder
+    if (attachment.fileName) {
+      const filePath = path.join(uploadsDir, attachment.fileName);
+      if (fs.existsSync(filePath)) {
+        res.setHeader("Content-Type", attachment.mimeType || "application/octet-stream");
+        res.setHeader("Content-Disposition", `attachment; filename="${attachment.fileName}"`);
+        return res.sendFile(filePath);
+      }
+    }
+
+    return res.status(404).json({ error: { message: "Attachment file not available" } });
   } catch (err) {
     return next(err);
   }
