@@ -225,7 +225,18 @@ router.get("/", requireAuth, async (_req, res, next) => {
             mimeType: { $ifNull: ["$logo.mimeType", ""] },
             size: { $ifNull: ["$logo.size", 0] },
           },
-          attachments: 1,
+          attachments: {
+            $map: {
+              input: { $ifNull: ["$attachments", []] },
+              as: "att",
+              in: {
+                fileName: "$$att.fileName",
+                mimeType: "$$att.mimeType",
+                size: "$$att.size",
+                uploadedAt: "$$att.uploadedAt",
+              }
+            }
+          },
           taskCount: 1,
           status: 1,
           createdAt: 1,
@@ -280,7 +291,9 @@ router.get("/:id", requireAuth, async (req, res, next) => {
                 location: 1,
                 createdAt: 1,
                 attachmentFileName: 1,
-                attachmentNote: 1
+                attachmentNote: 1,
+                attachment: 1,
+                attachments: 1,
               }
             }
           ]
