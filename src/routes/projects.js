@@ -190,7 +190,7 @@ router.get("/", requireAuth, async (req, res, next) => {
     const role = String(req.user?.role || "").trim().toLowerCase();
     let matchStage = null;
 
-    if (role !== "admin" && role !== "super-admin" && role !== "manager") {
+    if (role !== "admin" && role !== "super-admin") {
       const username = String(req.user?.username || "").trim();
       const name = String(req.user?.name || "").trim();
       const candidates = [username, name].filter(Boolean);
