@@ -224,11 +224,11 @@ router.get("/", requireAuth, async (req, res, next) => {
     const role = String(req.user?.role || "").trim().toLowerCase();
     let items;
 
-    if (role === "admin" || role === "super-admin") {
-      // Admins see everything
+    if (role === "admin" || role === "super-admin" || role === "manager") {
+      // Admins and managers see everything
       items = await Task.find().sort({ createdAt: -1 }).lean();
     } else {
-      // Managers and employees only see tasks assigned to them
+      // Employees only see tasks assigned to them
       const username = String(req.user?.username || "").trim();
       const name = String(req.user?.name || "").trim();
       const candidates = [username, name].filter(Boolean);
@@ -327,6 +327,7 @@ router.post("/", requireAuth, async (req, res, next) => {
       action: "created",
       resourceType: "task",
       resourceName: created.title,
+      assignees: Array.isArray(created.assignees) ? created.assignees : [],
       resourceId: String(created._id),
     });
     
@@ -446,6 +447,7 @@ router.post("/upload", requireAuth, upload.array("files", 10), async (req, res, 
       action: "created",
       resourceType: "task",
       resourceName: created.title,
+      assignees: Array.isArray(created.assignees) ? created.assignees : [],
       resourceId: String(created._id),
     });
     
