@@ -164,6 +164,7 @@ router.post("/", requireAuth, async (req, res, next) => {
       action: "created",
       resourceType: "project",
       resourceName: createdProject.name,
+      assignees: Array.isArray(parsed.data.assignees) ? parsed.data.assignees : [],
       details: `Tasks: ${createdTasks.length}`,
       resourceId: String(createdProject._id),
     });
@@ -189,7 +190,7 @@ router.get("/", requireAuth, async (req, res, next) => {
     const role = String(req.user?.role || "").trim().toLowerCase();
     let matchStage = null;
 
-    if (role !== "admin" && role !== "super-admin") {
+    if (role !== "admin" && role !== "super-admin" && role !== "manager") {
       const username = String(req.user?.username || "").trim();
       const name = String(req.user?.name || "").trim();
       const candidates = [username, name].filter(Boolean);
