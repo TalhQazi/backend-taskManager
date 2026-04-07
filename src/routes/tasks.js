@@ -664,10 +664,10 @@ router.post("/:id/archive", requireAuth, async (req, res, next) => {
 
     const Archive = require("../models/Archive");
 
-    // Archive task comments first
+    // Archive task comments first in bulk
     const taskComments = await TaskComment.find({ taskId: String(task._id) }).lean();
-    for (const comment of taskComments) {
-      await Archive.create({
+    if (taskComments.length > 0) {
+      const commentArchiveEntries = taskComments.map((comment) => ({
         itemType: "comment",
         itemData: {
           originalId: String(comment._id),
@@ -684,7 +684,8 @@ router.post("/:id/archive", requireAuth, async (req, res, next) => {
         archivedByUserId: String(req.user?.sub || req.user?.id || ""),
         archivedByUsername: String(req.user?.username || ""),
         archivedByRole: String(req.user?.role || ""),
-      });
+      }));
+      await Archive.insertMany(commentArchiveEntries);
     }
 
     // Archive the task itself
