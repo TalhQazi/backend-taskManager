@@ -506,10 +506,10 @@ router.delete("/:id", requireAuth, async (req, res, next) => {
       archivedByRole: String(req.user?.role || ""),
     });
 
-    // Archive associated tasks
+    // Archive associated tasks in bulk
     const projectTasks = await Task.find({ projectId: project._id }).lean();
-    for (const task of projectTasks) {
-      await Archive.create({
+    if (projectTasks.length > 0) {
+      const taskArchiveEntries = projectTasks.map((task) => ({
         itemType: "task",
         itemData: {
           originalId: String(task._id),
@@ -532,7 +532,8 @@ router.delete("/:id", requireAuth, async (req, res, next) => {
         archivedByUserId: String(req.user?.sub || req.user?.id || ""),
         archivedByUsername: String(req.user?.username || ""),
         archivedByRole: String(req.user?.role || ""),
-      });
+      }));
+      await Archive.insertMany(taskArchiveEntries);
     }
 
     // Delete associated tasks
