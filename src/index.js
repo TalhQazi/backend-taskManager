@@ -185,7 +185,7 @@ app.use((req, res, next) => {
     return next();
   }
   // For other requests, use JSON parser
-  express.json({ limit: "10mb" })(req, res, next);
+  express.json({ limit: "50mb" })(req, res, next);
 });
 app.use(morgan("dev"));
 
