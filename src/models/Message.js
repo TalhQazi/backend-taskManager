@@ -12,6 +12,8 @@ const MessageSchema = new mongoose.Schema(
     createdAt: { type: String, default: "" },
     type: { type: String, enum: ["direct", "broadcast"], required: true },
     status: { type: String, enum: ["sent", "delivered", "read"], default: "sent" },
+    readBy: [{ type: String }], // usernames/userIds who have read this notification
+    assignees: [{ type: String }], // who the notification targets (for task/project notifications)
     meta: {
       resourceType: { type: String, default: "" },
       resourceId: { type: String, default: "" },
