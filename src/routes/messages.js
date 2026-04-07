@@ -67,12 +67,33 @@ router.get("/", requireAuth, async (req, res, next) => {
         const role = String(req.user?.role || "").trim();
         const username = String(req.user?.username || req.user?.name || "").trim();
         const userId = String(req.user?.sub || req.user?.id || "").trim();
-        query.recipient = { $in: ["all", role, username, userId].filter(Boolean) };
+
+        query.type = "broadcast";
+        if (role === "super-admin") {
+          // super-admin sees all broadcast notifications
+        } else {
+          // recipient field is comma-separated list of usernames/roles
+          const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+          const candidates = [role, username, userId].filter(Boolean);
+          query.$or = candidates.map((c) => ({
+            recipient: { $regex: new RegExp(`(^|,)${escapeRegex(c)}(,|$)`, "i") }
+          }));
+        }
       }
     }
 
     const items = await Message.find(query).sort({ createdAt: -1 }).lean();
-    res.json({ items: items.map((x) => withId(decryptOut(x))) });
+
+    // Per-user read status: a notification is "read" for this user if their username is in readBy[]
+    const currentUser = String(req.user?.username || req.user?.name || "").trim();
+    const enriched = items.map((x) => {
+      const doc = withId(decryptOut(x));
+      const readByList = Array.isArray(x.readBy) ? x.readBy : [];
+      const isReadByMe = currentUser && readByList.includes(currentUser);
+      return { ...doc, status: isReadByMe ? "read" : "sent" };
+    });
+
+    res.json({ items: enriched });
   } catch (err) {
     next(err);
   }
@@ -284,6 +305,49 @@ router.post("/", requireAuth, async (req, res, next) => {
 
     return res.status(201).json({ item: finalData });
 
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Mark a single broadcast notification as read for the current user
+router.post("/:id/mark-read", requireAuth, async (req, res, next) => {
+  try {
+    const currentUser = String(req.user?.username || req.user?.name || "").trim();
+    if (!currentUser) return res.status(400).json({ error: { message: "Cannot identify user" } });
+
+    await Message.findByIdAndUpdate(req.params.id, {
+      $addToSet: { readBy: currentUser },
+    });
+
+    return res.json({ success: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Mark all unread broadcast notifications as read for the current user
+router.post("/mark-all-read", requireAuth, async (req, res, next) => {
+  try {
+    const role = String(req.user?.role || "").trim();
+    const currentUser = String(req.user?.username || req.user?.name || "").trim();
+    if (!currentUser) return res.status(400).json({ error: { message: "Cannot identify user" } });
+
+    let query = { type: "broadcast" };
+    if (role !== "super-admin") {
+      const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const candidates = [role, currentUser].filter(Boolean);
+      query.$or = candidates.map((c) => ({
+        recipient: { $regex: new RegExp(`(^|,)${escapeRegex(c)}(,|$)`, "i") }
+      }));
+    }
+
+    await Message.updateMany(
+      { ...query, readBy: { $ne: currentUser } },
+      { $addToSet: { readBy: currentUser } }
+    );
+
+    return res.json({ success: true });
   } catch (err) {
     next(err);
   }
