@@ -6,6 +6,8 @@ const Employee = require("../models/Employee");
 const { requireAuth } = require("../middleware/auth");
 const { encryptString, decryptString } = require("../lib/encryption");
 const { checkAndFlagOffTheClock } = require("../lib/offTheClockWork");
+const { parsePagination, paginatedResponse } = require("../lib/pagination");
+const { cacheWrap, cacheDel } = require("../lib/cache");
 
 const router = express.Router();
 
@@ -45,6 +47,7 @@ const updateSchema = createSchema.partial();
 router.get("/", requireAuth, async (req, res, next) => {
   try {
     const { sender, recipient, type, user } = req.query;
+    const { page, limit, skip } = parsePagination(req.query);
     let query = {};
 
     // If 'user' param provided, get all messages where user is sender OR recipient
@@ -72,7 +75,6 @@ router.get("/", requireAuth, async (req, res, next) => {
         if (role === "super-admin") {
           // super-admin sees all broadcast notifications
         } else {
-          // recipient field is comma-separated list of usernames/roles
           const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
           const candidates = [role, username, userId].filter(Boolean);
           query.$or = candidates.map((c) => ({
@@ -82,18 +84,26 @@ router.get("/", requireAuth, async (req, res, next) => {
       }
     }
 
-    const items = await Message.find(query).sort({ createdAt: -1 }).lean();
+    const cacheKey = `messages:list:${user || 'all'}:${sender || 'any'}:${recipient || 'any'}:${type || 'any'}:p${page}:l${limit}:${req.user?.sub || ''}`;
+    
+    const result = await cacheWrap(cacheKey, async () => {
+      const [items, total] = await Promise.all([
+        Message.find(query).sort({ createdAt: -1 }).skip(skip).limit(limit).lean(),
+        Message.countDocuments(query),
+      ]);
 
-    // Per-user read status: a notification is "read" for this user if their username is in readBy[]
-    const currentUser = String(req.user?.username || req.user?.name || "").trim();
-    const enriched = items.map((x) => {
-      const doc = withId(decryptOut(x));
-      const readByList = Array.isArray(x.readBy) ? x.readBy : [];
-      const isReadByMe = currentUser && readByList.includes(currentUser);
-      return { ...doc, status: isReadByMe ? "read" : "sent" };
-    });
+      const currentUser = String(req.user?.username || req.user?.name || "").trim();
+      const enriched = items.map((x) => {
+        const doc = withId(decryptOut(x));
+        const readByList = Array.isArray(x.readBy) ? x.readBy : [];
+        const isReadByMe = currentUser && readByList.includes(currentUser);
+        return { ...doc, status: isReadByMe ? "read" : "sent" };
+      });
 
-    res.json({ items: enriched });
+      return paginatedResponse(enriched, total, page, limit);
+    }, 15);
+
+    res.json(result);
   } catch (err) {
     next(err);
   }
@@ -231,6 +241,9 @@ router.post("/mark-read", requireAuth, async (req, res, next) => {
       { $set: { status: "read" } }
     );
 
+    // Invalidate message caches
+    cacheDel("messages:list:*").catch(() => {});
+
     res.json({ success: true, message: "Messages marked as read" });
   } catch (err) {
     next(err);
@@ -276,20 +289,6 @@ router.post("/", requireAuth, async (req, res, next) => {
     const parsed = createSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: { message: "Invalid payload" } });
 
-    await checkAndFlagOffTheClock({
-      employee: parsed.data.sender,
-      userId: String(req.user?.sub || ""),
-      timestamp: parsed.data.timestamp,
-      activityType: "message_create",
-      metadata: { recipient: parsed.data.recipient, type: parsed.data.type },
-    });
-
-   /* const created = await Message.create({
-      ...parsed.data,
-      title: typeof parsed.data.title === "string" ? encryptString(parsed.data.title) : "",
-      content: encryptString(parsed.data.content),
-    });
-    return res.status(201).json({ item: withId(decryptOut(created.toObject())) });*/
     const created = await Message.create({
       ...parsed.data,
       title: typeof parsed.data.title === "string" ? encryptString(parsed.data.title) : "",
@@ -298,6 +297,18 @@ router.post("/", requireAuth, async (req, res, next) => {
 
     const finalData = withId(decryptOut(created.toObject()));
     const io = global.io;
+
+    // Fire-and-forget side effects
+    Promise.allSettled([
+      checkAndFlagOffTheClock({
+        employee: parsed.data.sender,
+        userId: String(req.user?.sub || ""),
+        timestamp: parsed.data.timestamp,
+        activityType: "message_create",
+        metadata: { recipient: parsed.data.recipient, type: parsed.data.type },
+      }),
+      cacheDel("messages:list:*")
+    ]).catch(() => {});
 
     if (io) {
       io.emit("new-message", finalData);
@@ -387,6 +398,9 @@ router.delete("/:id", requireAuth, async (req, res, next) => {
   try {
     const deleted = await Message.findByIdAndDelete(req.params.id).lean();
     if (!deleted) return res.status(404).json({ error: { message: "Message not found" } });
+    
+    cacheDel("messages:list:*").catch(() => {});
+    
     res.status(204).send();
   } catch (err) {
     next(err);

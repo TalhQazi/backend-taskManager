@@ -7,7 +7,15 @@ async function connectDb() {
   }
 
   mongoose.set("strictQuery", true);
-  await mongoose.connect(uri);
+  await mongoose.connect(uri, {
+    maxPoolSize: 10,
+    minPoolSize: 2,
+    socketTimeoutMS: 30000,
+    serverSelectionTimeoutMS: 5000,
+    heartbeatFrequencyMS: 10000,
+  });
+
+  console.log("[DB] MongoDB connected (pool: 2-10)");
 }
 
 module.exports = { connectDb };

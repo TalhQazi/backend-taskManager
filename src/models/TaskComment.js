@@ -11,4 +11,7 @@ const TaskCommentSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+// Compound index for listing comments by task in order
+TaskCommentSchema.index({ taskId: 1, createdAt: 1 });
+
 module.exports = mongoose.model("TaskComment", TaskCommentSchema);

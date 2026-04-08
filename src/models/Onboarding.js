@@ -13,4 +13,7 @@ const OnboardingSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+OnboardingSchema.index({ approvalStatus: 1 });
+OnboardingSchema.index({ employeeName: 1 });
+
 module.exports = mongoose.model("Onboarding", OnboardingSchema);

@@ -1,5 +1,6 @@
 const express = require("express");
 const cors = require("cors");
+const compression = require("compression");
 const morgan = require("morgan");
 const path = require("path");
 const fs = require("fs");
@@ -7,12 +8,9 @@ const { createServer } = require("http");
 const { Server } = require("socket.io");
 require("dotenv").config();
 
-const http = require("http");
-
-
 const { connectDb } = require("./lib/db");
+const { initRedis } = require("./lib/cache");
 const { notFoundHandler, errorHandler } = require("./middleware/error");
-const { auditLogMiddleware } = require("./middleware/auditLog");
 
 const authRoutes = require("./routes/auth");
 const tasksRoutes = require("./routes/tasks");
@@ -187,9 +185,18 @@ app.use((req, res, next) => {
   // For other requests, use JSON parser
   express.json({ limit: "50mb" })(req, res, next);
 });
-app.use(morgan("dev"));
 
-app.use(auditLogMiddleware());
+// Gzip compression — reduces response sizes by 60-80%
+app.use(compression());
+
+// Only log in development (morgan is noisy in production)
+if (isDev) {
+  app.use(morgan("dev"));
+} else {
+  app.use(morgan("combined", {
+    skip: (req) => req.method === "GET" && req.url === "/health",
+  }));
+}
 
 app.use("/uploads", express.static(uploadsDir));
 
@@ -237,11 +244,13 @@ const port = Number(process.env.PORT || 5000);
 
 connectDb()
   .then(async () => {
+    // Initialize Redis cache (graceful — falls back to memory if unavailable)
+    await initRedis();
+    
     // Initialize default founder messages
     await initializeMessages();
     
     httpServer.listen(port, () => {
-    
       console.log(`Backend listening on http://localhost:${port}`);
       console.log(`WebSocket server ready`);
     });

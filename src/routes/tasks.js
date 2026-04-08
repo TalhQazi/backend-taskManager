@@ -11,6 +11,8 @@ const User = require("../models/User");
 const { requireAuth } = require("../middleware/auth");
 const { checkAndFlagOffTheClock } = require("../lib/offTheClockWork");
 const { createNotification } = require("../utils/notifications");
+const { parsePagination, paginatedResponse } = require("../lib/pagination");
+const { cacheWrap, cacheDel } = require("../lib/cache");
 
 const router = express.Router();
 // Middleware to skip body parsing for multipart/form-data (must be before other middleware)
@@ -219,32 +221,45 @@ function escapeRegExp(s) {
   return String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+// Field projection to exclude heavy base64 attachment data from list queries
+const LIST_PROJECTION = {
+  'attachment.url': 0,
+  'attachments.url': 0,
+};
+
 router.get("/", requireAuth, async (req, res, next) => {
   try {
     const role = String(req.user?.role || "").trim().toLowerCase();
-    let items;
+    const { page, limit, skip } = parsePagination(req.query);
 
-    if (role === "admin" || role === "super-admin" || role === "manager") {
-      // Admins and managers see everything
-      items = await Task.find().sort({ createdAt: -1 }).lean();
-    } else {
+    let filter = {};
+
+    if (role !== "admin" && role !== "super-admin" && role !== "manager") {
       // Employees only see tasks assigned to them
       const username = String(req.user?.username || "").trim();
       const name = String(req.user?.name || "").trim();
       const candidates = [username, name].filter(Boolean);
 
       if (candidates.length === 0) {
-        items = [];
-      } else {
-        const conditions = candidates.flatMap((c) => [
-          { assignees: { $elemMatch: { $regex: new RegExp(`^${escapeRegExp(c)}$`, "i") } } },
-          { assignee: { $regex: new RegExp(`^${escapeRegExp(c)}$`, "i") } },
-        ]);
-        items = await Task.find({ $or: conditions }).sort({ createdAt: -1 }).lean();
+        return res.json(paginatedResponse([], 0, page, limit));
       }
+      const conditions = candidates.flatMap((c) => [
+        { assignees: { $elemMatch: { $regex: new RegExp(`^${escapeRegExp(c)}$`, "i") } } },
+        { assignee: { $regex: new RegExp(`^${escapeRegExp(c)}$`, "i") } },
+      ]);
+      filter = { $or: conditions };
     }
 
-    res.json({ items: items.map(withId) });
+    const cacheKey = `tasks:list:${role}:${req.user?.sub || ''}:p${page}:l${limit}`;
+    const result = await cacheWrap(cacheKey, async () => {
+      const [items, total] = await Promise.all([
+        Task.find(filter, LIST_PROJECTION).sort({ createdAt: -1 }).skip(skip).limit(limit).lean(),
+        Task.countDocuments(filter),
+      ]);
+      return paginatedResponse(items.map(withId), total, page, limit);
+    }, 15);
+
+    res.json(result);
   } catch (err) {
     next(err);
   }
@@ -308,28 +323,29 @@ router.post("/", requireAuth, async (req, res, next) => {
       dueDate,
     });
 
-    await checkAndFlagOffTheClock({
-      employee: firstAssignee,
-      userId: String(req.user?.sub || ""),
-      timestamp: new Date(),
-      activityType: "task_create",
-      metadata: { taskId: String(created._id), title: created.title },
-    });
-
     const obj = created.toObject();
-    
-    // Log activity
-    await logActivity(req, "TASK_CREATE", "task", created._id, created.title, `Created task: ${created.title}`);
 
-    await createNotification({
-      actor: req.user?.username || req.user?.name || "System",
-      actorRole: req.user?.role || "",
-      action: "created",
-      resourceType: "task",
-      resourceName: created.title,
-      assignees: Array.isArray(created.assignees) ? created.assignees : [],
-      resourceId: String(created._id),
-    });
+    // Fire-and-forget side effects (don't block response)
+    Promise.allSettled([
+      checkAndFlagOffTheClock({
+        employee: firstAssignee,
+        userId: String(req.user?.sub || ""),
+        timestamp: new Date(),
+        activityType: "task_create",
+        metadata: { taskId: String(created._id), title: created.title },
+      }),
+      logActivity(req, "TASK_CREATE", "task", created._id, created.title, `Created task: ${created.title}`),
+      createNotification({
+        actor: req.user?.username || req.user?.name || "System",
+        actorRole: req.user?.role || "",
+        action: "created",
+        resourceType: "task",
+        resourceName: created.title,
+        assignees: Array.isArray(created.assignees) ? created.assignees : [],
+        resourceId: String(created._id),
+      }),
+      cacheDel("tasks:list:*"),
+    ]).catch(() => {});
     
     return res.status(201).json({ item: withId(obj) });
   } catch (err) {
@@ -340,9 +356,6 @@ router.post("/", requireAuth, async (req, res, next) => {
 // Upload endpoint with multiple file support (up to 16MB each, MongoDB limit)
 router.post("/upload", requireAuth, upload.array("files", 10), async (req, res, next) => {
   try {
-    console.log("Upload endpoint hit");
-    console.log("Request files:", req.files ? req.files.map(f => ({ name: f.originalname, size: f.size, mimetype: f.mimetype })) : "No files");
-    
     const body = req.body || {};
 
     // Manual validation for title and description
@@ -379,7 +392,6 @@ router.post("/upload", requireAuth, upload.array("files", 10), async (req, res, 
 
     const parsed = createSchema.safeParse(payload);
     if (!parsed.success) {
-      console.error("Validation failed:", parsed.error);
       return res.status(400).json({ error: { message: "Invalid payload", details: parsed.error } });
     }
 
@@ -393,11 +405,9 @@ router.post("/upload", requireAuth, upload.array("files", 10), async (req, res, 
     let attachment = undefined;
     
     if (files.length > 0) {
-      console.log("Processing files:", files.length);
       attachments = files.map(f => {
         if (f.buffer) {
           const base64Data = f.buffer.toString("base64");
-          console.log(`File ${f.originalname} - Base64 length:`, base64Data.length);
           return {
             fileName: f.originalname,
             url: `data:${f.mimetype};base64,${base64Data}`,
@@ -411,12 +421,8 @@ router.post("/upload", requireAuth, upload.array("files", 10), async (req, res, 
       
       // Set first attachment as legacy single attachment
       attachment = attachments[0];
-      console.log("Attachments created:", attachments.length, "First attachment URL length:", attachment?.url?.length);
-    } else {
-      console.log("No files uploaded");
     }
 
-    console.log("Creating task with attachments:", attachments.length);
     const created = await Task.create({
       ...parsed.data,
       createdAt,
@@ -426,30 +432,29 @@ router.post("/upload", requireAuth, upload.array("files", 10), async (req, res, 
       attachments: attachments.length > 0 ? attachments : undefined,
     });
 
-    await checkAndFlagOffTheClock({
-      employee: firstAssignee,
-      userId: String(req.user?.sub || ""),
-      timestamp: new Date(),
-      activityType: "task_create_with_attachment",
-      metadata: { taskId: String(created._id), title: created.title },
-    });
-
-    console.log("Task created with ID:", created._id);
     const obj = created.toObject();
-    
-    // Log activity
-    await logActivity(req, "TASK_CREATE", "task", created._id, created.title, `Created task with attachment: ${created.title}`);
 
-    // Create notification for task creation
-    await createNotification({
-      actor: req.user?.username || req.user?.name || "System",
-      actorRole: req.user?.role || "",
-      action: "created",
-      resourceType: "task",
-      resourceName: created.title,
-      assignees: Array.isArray(created.assignees) ? created.assignees : [],
-      resourceId: String(created._id),
-    });
+    // Fire-and-forget side effects
+    Promise.allSettled([
+      checkAndFlagOffTheClock({
+        employee: firstAssignee,
+        userId: String(req.user?.sub || ""),
+        timestamp: new Date(),
+        activityType: "task_create_with_attachment",
+        metadata: { taskId: String(created._id), title: created.title },
+      }),
+      logActivity(req, "TASK_CREATE", "task", created._id, created.title, `Created task with attachment: ${created.title}`),
+      createNotification({
+        actor: req.user?.username || req.user?.name || "System",
+        actorRole: req.user?.role || "",
+        action: "created",
+        resourceType: "task",
+        resourceName: created.title,
+        assignees: Array.isArray(created.assignees) ? created.assignees : [],
+        resourceId: String(created._id),
+      }),
+      cacheDel("tasks:list:*"),
+    ]).catch(() => {});
     
     return res.status(201).json({ item: withId(obj) });
   } catch (err) {
@@ -748,17 +753,20 @@ router.patch("/:id/status", requireAuth, async (req, res, next) => {
       return res.status(404).json({ error: { message: "Task not found" } });
     }
 
-    await logActivity(req, "TASK_STATUS_UPDATE", "task", req.params.id, updated.title, `Updated task status: ${updated.title} -> ${status}`);
-
-    await createNotification({
-      actor: req.user?.username || req.user?.name || "System",
-      actorRole: req.user?.role || "",
-      action: "status changed",
-      resourceType: "task",
-      resourceName: updated.title,
-      details: `Status -> ${status}`,
-      resourceId: String(req.params.id),
-    });
+    // Fire-and-forget
+    Promise.allSettled([
+      logActivity(req, "TASK_STATUS_UPDATE", "task", req.params.id, updated.title, `Updated task status: ${updated.title} -> ${status}`),
+      createNotification({
+        actor: req.user?.username || req.user?.name || "System",
+        actorRole: req.user?.role || "",
+        action: "status changed",
+        resourceType: "task",
+        resourceName: updated.title,
+        details: `Status -> ${status}`,
+        resourceId: String(req.params.id),
+      }),
+      cacheDel("tasks:list:*"),
+    ]).catch(() => {});
 
     return res.json({ item: withId(updated) });
   } catch (err) {
@@ -803,17 +811,19 @@ router.put("/:id", requireAuth, async (req, res, next) => {
       return res.status(404).json({ error: { message: "Task not found" } });
     }
 
-    // Log activity
-    await logActivity(req, "TASK_UPDATE", "task", req.params.id, updated.title, `Updated task: ${updated.title}`);
-
-    await createNotification({
-      actor: req.user?.username || req.user?.name || "System",
-      actorRole: req.user?.role || "",
-      action: "updated",
-      resourceType: "task",
-      resourceName: updated.title,
-      resourceId: String(req.params.id),
-    });
+    // Fire-and-forget
+    Promise.allSettled([
+      logActivity(req, "TASK_UPDATE", "task", req.params.id, updated.title, `Updated task: ${updated.title}`),
+      createNotification({
+        actor: req.user?.username || req.user?.name || "System",
+        actorRole: req.user?.role || "",
+        action: "updated",
+        resourceType: "task",
+        resourceName: updated.title,
+        resourceId: String(req.params.id),
+      }),
+      cacheDel("tasks:list:*"),
+    ]).catch(() => {});
 
     return res.json({ item: withId(updated) });
   } catch (err) {
@@ -888,17 +898,19 @@ router.delete("/:id", requireAuth, async (req, res, next) => {
       return res.status(404).json({ error: { message: "Task not found" } });
     }
     
-    // Log activity
-    await logActivity(req, "TASK_DELETE", "task", req.params.id, deleted.title, `Deleted task: ${deleted.title}`);
-
-    await createNotification({
-      actor: req.user?.username || req.user?.name || "System",
-      actorRole: req.user?.role || "",
-      action: "deleted",
-      resourceType: "task",
-      resourceName: deleted.title,
-      resourceId: String(req.params.id),
-    });
+    // Fire-and-forget
+    Promise.allSettled([
+      logActivity(req, "TASK_DELETE", "task", req.params.id, deleted.title, `Deleted task: ${deleted.title}`),
+      createNotification({
+        actor: req.user?.username || req.user?.name || "System",
+        actorRole: req.user?.role || "",
+        action: "deleted",
+        resourceType: "task",
+        resourceName: deleted.title,
+        resourceId: String(req.params.id),
+      }),
+      cacheDel("tasks:list:*"),
+    ]).catch(() => {});
     
     return res.status(204).send();
   } catch (err) {

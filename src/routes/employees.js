@@ -12,6 +12,8 @@ const ActivityLog = require("../models/ActivityLog");
 const Settings = require("../models/Settings");
 const { createNotification } = require("../utils/notifications");
 const { requireAuth, requireRole } = require("../middleware/auth");
+const { parsePagination, paginatedResponse } = require("../lib/pagination");
+const { cacheWrap, cacheDel } = require("../lib/cache");
 
 const router = express.Router();
 
@@ -122,9 +124,6 @@ router.get("/me/tasks", requireAuth, async (req, res, next) => {
       .map((s) => String(s || "").trim())
       .filter(Boolean);
 
-    console.log("[DEBUG] /me/tasks - Employee:", employee.name, "Email:", employee.email, "User:", user.username);
-    console.log("[DEBUG] /me/tasks - Candidates:", candidates);
-
     // Build case-insensitive regex conditions for assignees array matching
     const assigneeConditions = candidates.flatMap((c) => [
       { assignees: { $elemMatch: { $regex: new RegExp(`^${escapeRegExp(c)}$`, "i") } } },
@@ -133,23 +132,9 @@ router.get("/me/tasks", requireAuth, async (req, res, next) => {
 
     const query = assigneeConditions.length > 0 ? { $or: assigneeConditions } : { _id: null };
 
-    console.log("[DEBUG] /me/tasks - MongoDB query:", JSON.stringify(query));
-
     const tasks = await Task.find(query)
       .sort({ updatedAt: -1 })
       .lean();
-
-    console.log("[DEBUG] /me/tasks - Found tasks:", tasks.length);
-    if (tasks.length > 0) {
-      console.log("[DEBUG] /me/tasks - First task assignees:", tasks[0].assignees);
-    }
-
-    // Also fetch all tasks to see what's in the database (for debugging)
-    const allTasks = await Task.find({}).limit(5).lean();
-    console.log("[DEBUG] /me/tasks - Sample tasks in DB:");
-    allTasks.forEach(t => {
-      console.log(`  Task: ${t.title}, assignees: ${JSON.stringify(t.assignees)}, assignee: ${t.assignee}`);
-    });
 
     res.json({
       items: tasks.map((t) => ({
@@ -408,34 +393,38 @@ async function logActivity(req, action, resourceType, resourceId, resourceName, 
 
 router.get("/", requireAuth, async (_req, res, next) => {
   try {
-    const items = await Employee.find().sort({ createdAt: -1 }).lean();
-    
-    // Get unique emails from employees to fetch their settings
-    const employeeEmails = items.map(e => e.email).filter(Boolean);
-    const settings = await Settings.find({ 
-      $or: [
-        { email: { $in: employeeEmails } },
-        { userId: { $in: items.map(e => String(e._id)) } }
-      ]
-    }).lean();
-    
-    // Create a map of email -> avatarUrl
-    const avatarMap = new Map();
-    settings.forEach(s => {
-      if (s.avatarDataUrl || s.avatarUrl) {
-        const avatar = s.avatarDataUrl || s.avatarUrl;
-        if (s.email) avatarMap.set(s.email, avatar);
-        if (s.userId) avatarMap.set(String(s.userId), avatar);
-      }
-    });
-    
-    // Merge employee data with avatar
-    const itemsWithAvatars = items.map(e => {
-      const avatarUrl = avatarMap.get(e.email) || avatarMap.get(String(e._id)) || "";
-      return { ...e, avatarUrl, avatarDataUrl: avatarUrl };
-    });
-    
-    res.json({ items: itemsWithAvatars.map(withId) });
+    const result = await cacheWrap('employees:list', async () => {
+      const items = await Employee.find().sort({ createdAt: -1 }).lean();
+      
+      // Get unique emails from employees to fetch their settings
+      const employeeEmails = items.map(e => e.email).filter(Boolean);
+      const settings = await Settings.find({ 
+        $or: [
+          { email: { $in: employeeEmails } },
+          { userId: { $in: items.map(e => String(e._id)) } }
+        ]
+      }).lean();
+      
+      // Create a map of email -> avatarUrl
+      const avatarMap = new Map();
+      settings.forEach(s => {
+        if (s.avatarDataUrl || s.avatarUrl) {
+          const avatar = s.avatarDataUrl || s.avatarUrl;
+          if (s.email) avatarMap.set(s.email, avatar);
+          if (s.userId) avatarMap.set(String(s.userId), avatar);
+        }
+      });
+      
+      // Merge employee data with avatar
+      const itemsWithAvatars = items.map(e => {
+        const avatarUrl = avatarMap.get(e.email) || avatarMap.get(String(e._id)) || "";
+        return { ...e, avatarUrl, avatarDataUrl: avatarUrl };
+      });
+      
+      return { items: itemsWithAvatars.map(withId) };
+    }, 30);
+
+    res.json(result);
   } catch (err) {
     next(err);
   }
@@ -489,18 +478,19 @@ router.post("/", requireAuth, async (req, res, next) => {
 
     const obj = created.toObject();
     
-    // Log activity
-    await logActivity(req, "EMPLOYEE_CREATE", "employee", created._id, created.name, `Created employee: ${created.name}`);
-    
-    // Create notification for all admin/manager users
-    await createNotification({
-      actor: req.user?.username || req.user?.name || "Admin",
-      actorRole: req.user?.role || "admin",
-      action: "created",
-      resourceType: "employee",
-      resourceName: created.name,
-      resourceId: String(created._id),
-    });
+    // Fire-and-forget side effects
+    Promise.allSettled([
+      logActivity(req, "EMPLOYEE_CREATE", "employee", created._id, created.name, `Created employee: ${created.name}`),
+      createNotification({
+        actor: req.user?.username || req.user?.name || "Admin",
+        actorRole: req.user?.role || "admin",
+        action: "created",
+        resourceType: "employee",
+        resourceName: created.name,
+        resourceId: String(created._id),
+      }),
+      cacheDel("employees:list"),
+    ]).catch(() => {});
     
     return res.status(201).json({ item: withId(obj) });
   } catch (err) {

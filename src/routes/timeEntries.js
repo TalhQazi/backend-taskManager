@@ -13,6 +13,8 @@ const {
   startOfWeekISO,
   endOfWeekISO,
 } = require("../lib/complianceEngine");
+const { parsePagination, paginatedResponse } = require("../lib/pagination");
+const { cacheWrap, cacheDel } = require("../lib/cache");
 
 const router = express.Router();
 
@@ -159,63 +161,71 @@ async function writeAuditLogs({ timeEntryId, before, after, editedByUserId, ipAd
 router.get("/", requireAuth, async (req, res, next) => {
   try {
     const employeeQuery = String(req.query?.employee || "").trim();
+    const { page, limit, skip } = parsePagination(req.query);
     const filter = {};
     if (employeeQuery) {
       filter.employee = new RegExp(`^${escapeRegex(employeeQuery)}$`, "i");
     }
 
-    const items = await TimeEntry.find(filter).sort({ createdAt: -1 }).lean();
+    const cacheKey = `time-entries:list:${employeeQuery || 'all'}:p${page}:l${limit}:${req.user?.sub || ''}`;
+    
+    const result = await cacheWrap(cacheKey, async () => {
+      const [items, total] = await Promise.all([
+        TimeEntry.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit).lean(),
+        TimeEntry.countDocuments(filter),
+      ]);
 
-    const userIds = Array.from(
-      new Set(
-        items
-          .map((e) => String(e.userId || "").trim())
-          .filter(Boolean)
-      )
-    );
+      const userIds = Array.from(
+        new Set(
+          items
+            .map((e) => String(e.userId || "").trim())
+            .filter(Boolean)
+        )
+      );
 
-    const users = userIds.length
-      ? await User.find({ _id: { $in: userIds } }, { name: 1, username: 1, email: 1 }).lean()
-      : [];
+      const users = userIds.length
+        ? await User.find({ _id: { $in: userIds } }, { name: 1, username: 1, email: 1 }).lean()
+        : [];
 
-    const userById = new Map(users.map((u) => [String(u._id), u]));
+      const userById = new Map(users.map((u) => [String(u._id), u]));
 
-    const emails = Array.from(
-      new Set(
-        users
-          .map((u) => String(u.email || "").trim().toLowerCase())
-          .filter(Boolean)
-      )
-    );
+      const emails = Array.from(
+        new Set(
+          users
+            .map((u) => String(u.email || "").trim().toLowerCase())
+            .filter(Boolean)
+        )
+      );
 
-    const emps = emails.length
-      ? await Employee.find({ email: { $in: emails } }, { name: 1, email: 1 }).lean()
-      : [];
+      const emps = emails.length
+        ? await Employee.find({ email: { $in: emails } }, { name: 1, email: 1 }).lean()
+        : [];
 
-    const employeeByEmail = new Map(emps.map((e) => [String(e.email || "").trim().toLowerCase(), e]));
+      const employeeByEmail = new Map(emps.map((e) => [String(e.email || "").trim().toLowerCase(), e]));
 
-    const enriched = items.map((e) => {
-      const uid = String(e.userId || "").trim();
-      const user = uid ? userById.get(uid) : null;
-      const email = String(user?.email || "").trim().toLowerCase();
-      const emp = email ? employeeByEmail.get(email) : null;
-      const resolved = employeeDisplayName(emp) || userDisplayName(user);
-      if (!resolved) return e;
-      return { ...e, employee: resolved };
-    });
+      const enriched = items.map((e) => {
+        const uid = String(e.userId || "").trim();
+        const user = uid ? userById.get(uid) : null;
+        const email = String(user?.email || "").trim().toLowerCase();
+        const emp = email ? employeeByEmail.get(email) : null;
+        const resolved = employeeDisplayName(emp) || userDisplayName(user);
+        if (!resolved) return withId(e);
+        return withId({ ...e, employee: resolved });
+      });
 
-    // Trigger near-real-time compliance warnings for active shifts
-    const now = new Date();
-    const active = items.filter((e) => (e.clockInAt || e.clockIn) && !(e.clockOutAt || e.clockOut));
-    for (const e of active) {
+      // Compliance evaluation (partial - don't block list query if it fails)
       try {
-        // eslint-disable-next-line no-await-in-loop
-        await evaluateMealBreakCompliance({ timeEntry: e, now });
-      } catch {
-        // ignore compliance evaluation errors for listing endpoint
-      }
-    }
-    res.json({ items: enriched.map(withId) });
+        const now = new Date();
+        const active = items.filter((e) => (e.clockInAt || e.clockIn) && !(e.clockOutAt || e.clockOut));
+        for (const e of active) {
+          evaluateMealBreakCompliance({ timeEntry: e, now }).catch(() => {});
+        }
+      } catch (e) {}
+
+      return paginatedResponse(enriched, total, page, limit);
+    }, 15);
+
+    res.json(result);
   } catch (err) {
     next(err);
   }
@@ -271,16 +281,19 @@ router.post("/", requireAuth, async (req, res, next) => {
 
     const obj = created.toObject();
     
-    // Create notification
-    await createNotification({
-      actor: req.user?.username || req.user?.name || "Admin",
-      actorRole: req.user?.role || "admin",
-      action: "created",
-      resourceType: "time entry",
-      resourceName: parsed.data.employee,
-      details: `Date: ${parsed.data.date}`,
-      resourceId: String(created._id),
-    });
+    // Fire-and-forget side effects
+    Promise.allSettled([
+      createNotification({
+        actor: req.user?.username || req.user?.name || "Admin",
+        actorRole: req.user?.role || "admin",
+        action: "created",
+        resourceType: "time entry",
+        resourceName: parsed.data.employee,
+        details: `Date: ${parsed.data.date}`,
+        resourceId: String(created._id),
+      }),
+      cacheDel("time-entries:list:*")
+    ]).catch(() => {});
     
     return res.status(201).json({ item: withId(obj) });
   } catch (err) {
@@ -342,6 +355,8 @@ router.post("/clock-in", requireAuth, async (req, res, next) => {
       status: "incomplete",
       location: parsed.data.location || "",
     });
+
+    cacheDel("time-entries:list:*").catch(() => {});
 
     return res.status(201).json({ item: withId(created.toObject()) });
   } catch (err) {
@@ -599,14 +614,17 @@ router.delete("/:id", requireAuth, async (req, res, next) => {
     }
     
     // Create notification
-    await createNotification({
-      actor: req.user?.username || req.user?.name || "Admin",
-      actorRole: req.user?.role || "admin",
-      action: "deleted",
-      resourceType: "time entry",
-      resourceName: deleted.employee,
-      resourceId: String(req.params.id),
-    });
+    Promise.allSettled([
+      createNotification({
+        actor: req.user?.username || req.user?.name || "Admin",
+        actorRole: req.user?.role || "admin",
+        action: "deleted",
+        resourceType: "time entry",
+        resourceName: deleted.employee,
+        resourceId: String(req.params.id),
+      }),
+      cacheDel("time-entries:list:*")
+    ]).catch(() => {});
     
     return res.status(204).send();
   } catch (err) {

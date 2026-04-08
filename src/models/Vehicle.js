@@ -33,4 +33,9 @@ const VehicleSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+// Indexes for common queries
+VehicleSchema.index({ status: 1 });
+VehicleSchema.index({ assignedTo: 1 });
+VehicleSchema.index({ createdAt: -1 });
+
 module.exports = mongoose.model("Vehicle", VehicleSchema);
