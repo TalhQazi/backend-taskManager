@@ -1,7 +1,7 @@
 const express = require("express");
 const Archive = require("../models/Archive");
 const { requireAuth } = require("../middleware/auth");
-const bcrypt = require("bcryptjs");
+const { parsePagination, paginatedResponse } = require("../lib/pagination");
 
 const router = express.Router();
 

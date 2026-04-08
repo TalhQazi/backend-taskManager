@@ -277,7 +277,7 @@ router.get("/", requireAuth, async (req, res, next) => {
 
     const pipeline = [
       ...matchStages,
-      { $sort: { createdAt: -1 } },
+      { $sort: { name: 1 } },
       {
         $facet: {
           items: [{ $skip: skip }, { $limit: limit }, ...shapeStages],
