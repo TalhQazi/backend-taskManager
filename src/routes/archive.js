@@ -21,6 +21,7 @@ router.get("/", requireAuth, async (req, res, next) => {
     const items = await Archive.find(filter)
       .sort({ createdAt: -1 })
       .limit(500)
+      .maxTimeMS(8000)
       .allowDiskUse(true)
       .lean();
     res.json({
