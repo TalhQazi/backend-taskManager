@@ -8,6 +8,7 @@ const Archive = require("../models/Archive");
 const ActivityLog = require("../models/ActivityLog");
 const { requireAuth } = require("../middleware/auth");
 const { createNotification } = require("../utils/notifications");
+const { parsePagination, paginatedResponse } = require("../lib/pagination");
 
 const router = express.Router();
 
@@ -188,7 +189,10 @@ function escapeRegExp(s) {
 router.get("/", requireAuth, async (req, res, next) => {
   try {
     const role = String(req.user?.role || "").trim().toLowerCase();
-    let matchStage = null;
+    const { page, limit, skip } = parsePagination(req.query);
+    const searchQ = String(req.query.search || "").trim();
+
+    const matchStages = [];
 
     if (role !== "admin" && role !== "super-admin") {
       const username = String(req.user?.username || "").trim();
@@ -196,26 +200,27 @@ router.get("/", requireAuth, async (req, res, next) => {
       const candidates = [username, name].filter(Boolean);
 
       if (candidates.length === 0) {
-        return res.json({ items: [] });
+        return res.json(paginatedResponse([], 0, page, limit));
       }
 
       const regexes = candidates.map((c) => new RegExp(`^${escapeRegExp(c)}$`, "i"));
-      matchStage = { $match: { assignees: { $elemMatch: { $in: regexes } } } };
+      matchStages.push({ $match: { assignees: { $elemMatch: { $in: regexes } } } });
     }
 
-    const pipeline = [
-      ...(matchStage ? [matchStage] : []),
-      { $sort: { createdAt: -1 } },
+    if (searchQ) {
+      const searchRegex = new RegExp(escapeRegExp(searchQ), "i");
+      matchStages.push({ $match: { $or: [{ name: searchRegex }, { description: searchRegex }] } });
+    }
+
+    const shapeStages = [
       {
         $lookup: {
           from: "tasks",
           localField: "_id",
           foreignField: "projectId",
           as: "tasks",
-          pipeline: [
-            { $project: { status: 1, _id: 0 } }
-          ]
-        }
+          pipeline: [{ $project: { status: 1, _id: 0 } }],
+        },
       },
       {
         $addFields: {
@@ -228,12 +233,12 @@ router.get("/", requireAuth, async (req, res, next) => {
                 { case: { $allElementsTrue: { $map: { input: "$tasks", as: "t", in: { $eq: ["$$t.status", "completed"] } } } }, then: "Completed" },
                 { case: { $anyElementTrue: { $map: { input: "$tasks", as: "t", in: { $eq: ["$$t.status", "in-progress"] } } } }, then: "In Progress" },
                 { case: { $anyElementTrue: { $map: { input: "$tasks", as: "t", in: { $eq: ["$$t.status", "overdue"] } } } }, then: "Overdue" },
-                { case: { $anyElementTrue: { $map: { input: "$tasks", as: "t", in: { $eq: ["$$t.status", "pending"] } } } }, then: "Pending" }
+                { case: { $anyElementTrue: { $map: { input: "$tasks", as: "t", in: { $eq: ["$$t.status", "pending"] } } } }, then: "Pending" },
               ],
-              default: "Active"
-            }
-          }
-        }
+              default: "Active",
+            },
+          },
+        },
       },
       {
         $project: {
@@ -256,22 +261,35 @@ router.get("/", requireAuth, async (req, res, next) => {
                 mimeType: "$$att.mimeType",
                 size: "$$att.size",
                 uploadedAt: "$$att.uploadedAt",
-              }
-            }
+              },
+            },
           },
           taskCount: 1,
           status: 1,
           createdAt: 1,
           createdByUserId: 1,
           createdByUsername: 1,
-          createdByRole: 1
-        }
-      }
+          createdByRole: 1,
+        },
+      },
     ];
 
-    const items = await Project.aggregate(pipeline);
+    const pipeline = [
+      ...matchStages,
+      { $sort: { createdAt: -1 } },
+      {
+        $facet: {
+          items: [{ $skip: skip }, { $limit: limit }, ...shapeStages],
+          total: [{ $count: "count" }],
+        },
+      },
+    ];
 
-    return res.json({ items });
+    const [result] = await Project.aggregate(pipeline);
+    const items = result?.items || [];
+    const total = result?.total?.[0]?.count || 0;
+
+    return res.json(paginatedResponse(items, total, page, limit));
   } catch (err) {
     return next(err);
   }

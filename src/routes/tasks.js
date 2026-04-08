@@ -231,6 +231,9 @@ router.get("/", requireAuth, async (req, res, next) => {
   try {
     const role = String(req.user?.role || "").trim().toLowerCase();
     const { page, limit, skip } = parsePagination(req.query);
+    const searchQ = String(req.query.search || "").trim();
+    const statusQ = String(req.query.status || "").trim();
+    const priorityQ = String(req.query.priority || "").trim();
 
     let filter = {};
 
@@ -250,7 +253,26 @@ router.get("/", requireAuth, async (req, res, next) => {
       filter = { $or: conditions };
     }
 
-    const cacheKey = `tasks:list:${role}:${req.user?.sub || ''}:p${page}:l${limit}`;
+    // Apply search filter
+    if (searchQ) {
+      const searchRegex = new RegExp(escapeRegExp(searchQ), "i");
+      const searchCondition = { $or: [{ title: searchRegex }, { description: searchRegex }] };
+      filter = filter.$or
+        ? { $and: [filter, searchCondition] }
+        : searchCondition;
+    }
+
+    // Apply status filter
+    if (statusQ && statusQ !== "all") {
+      filter.status = statusQ;
+    }
+
+    // Apply priority filter
+    if (priorityQ && priorityQ !== "all") {
+      filter.priority = priorityQ;
+    }
+
+    const cacheKey = `tasks:list:${role}:${req.user?.sub || ''}:p${page}:l${limit}:s${searchQ}:st${statusQ}:pr${priorityQ}`;
     const result = await cacheWrap(cacheKey, async () => {
       const [items, total] = await Promise.all([
         Task.find(filter, LIST_PROJECTION).sort({ createdAt: -1 }).skip(skip).limit(limit).lean(),
