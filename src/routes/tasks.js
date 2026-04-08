@@ -917,26 +917,100 @@ router.put("/:id/reassign", requireAuth, async (req, res, next) => {
   }
 });
 
+async function archiveTaskById(taskId, archivedBy) {
+  const Task = require("../models/Task");
+  const Archive = require("../models/Archive");
+  
+  const task = await Task.findById(taskId).lean();
+  if (!task) return null;
+
+  await Archive.create({
+    itemType: "task",
+    itemData: {
+      originalId: String(task._id),
+      title: task.title,
+      description: task.description,
+      assignees: task.assignees,
+      priority: task.priority,
+      status: task.status,
+      dueDate: task.dueDate,
+      dueTime: task.dueTime,
+      location: task.location,
+      projectId: task.projectId,
+      attachment: task.attachment,
+      attachments: task.attachments,
+      createdAt: task.createdAt,
+    },
+    parentType: task.projectId ? "project" : "standalone",
+    parentId: String(task.projectId || ""),
+    parentName: task.projectId ? "Project Tasks" : "Standalone Tasks",
+    archivedByUserId: String(archivedBy.sub || archivedBy.id || ""),
+    archivedByUsername: String(archivedBy.username || archivedBy.name || ""),
+    archivedByRole: String(archivedBy.role || ""),
+  });
+
+  await Task.findByIdAndDelete(taskId);
+  return task;
+}
+
+router.post("/:id/archive", requireAuth, async (req, res, next) => {
+  try {
+    const role = String(req.user?.role || "").toLowerCase();
+    if (role !== "admin" && role !== "super-admin" && role !== "manager") {
+      return res.status(403).json({ error: { message: "Forbidden" } });
+    }
+
+    const task = await archiveTaskById(req.params.id, req.user);
+    if (!task) {
+      return res.status(404).json({ error: { message: "Task not found" } });
+    }
+
+    // Fire-and-forget
+    Promise.allSettled([
+      logActivity(req, "TASK_ARCHIVE", "task", req.params.id, task.title, `Archived task: ${task.title}`),
+      createNotification({
+        actor: req.user?.username || req.user?.name || "System",
+        actorRole: req.user?.role || "",
+        action: "archived",
+        resourceType: "task",
+        resourceName: task.title,
+        resourceId: String(req.params.id),
+      }),
+      cacheDel("tasks:list:*"),
+      task.projectId ? cacheDel(`project:${task.projectId}`) : Promise.resolve(),
+    ]).catch(() => {});
+
+    return res.json({ ok: true, message: "Task archived" });
+  } catch (err) {
+    return next(err);
+  }
+});
+
 router.delete("/:id", requireAuth, async (req, res, next) => {
   try {
-    const deleted = await Task.findByIdAndDelete(req.params.id).lean();
-    if (!deleted) {
+    const role = String(req.user?.role || "").toLowerCase();
+    if (role !== "admin" && role !== "super-admin") {
+      return res.status(403).json({ error: { message: "Forbidden" } });
+    }
+
+    const task = await archiveTaskById(req.params.id, req.user);
+    if (!task) {
       return res.status(404).json({ error: { message: "Task not found" } });
     }
     
     // Fire-and-forget
     Promise.allSettled([
-      logActivity(req, "TASK_DELETE", "task", req.params.id, deleted.title, `Deleted task: ${deleted.title}`),
+      logActivity(req, "TASK_DELETE", "task", req.params.id, task.title, `Deleted (Archived) task: ${task.title}`),
       createNotification({
         actor: req.user?.username || req.user?.name || "System",
         actorRole: req.user?.role || "",
         action: "deleted",
         resourceType: "task",
-        resourceName: deleted.title,
+        resourceName: task.title,
         resourceId: String(req.params.id),
       }),
       cacheDel("tasks:list:*"),
-      deleted.projectId ? cacheDel(`project:${deleted.projectId}`) : Promise.resolve(),
+      task.projectId ? cacheDel(`project:${task.projectId}`) : Promise.resolve(),
     ]).catch(() => {});
     
     return res.status(204).send();

@@ -428,6 +428,7 @@ router.put("/:id", requireAuth, async (req, res, next) => {
     if (parsed.data.assignees !== undefined) project.assignees = parsed.data.assignees;
     if (parsed.data.logo !== undefined) project.logo = parsed.data.logo;
     if (parsed.data.attachments !== undefined) project.attachments = parsed.data.attachments;
+    if (parsed.data.status !== undefined) project.status = parsed.data.status;
 
     await project.save();
     void cacheDel(`project:${req.params.id}`);
