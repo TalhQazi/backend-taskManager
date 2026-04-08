@@ -19,4 +19,7 @@ const ArchiveSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+ArchiveSchema.index({ createdAt: -1 });
+ArchiveSchema.index({ itemType: 1, createdAt: -1 });
+
 module.exports = mongoose.model("Archive", ArchiveSchema);

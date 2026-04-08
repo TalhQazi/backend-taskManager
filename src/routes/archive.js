@@ -18,7 +18,11 @@ router.get("/", requireAuth, async (req, res, next) => {
     if (req.query.parentType) filter.parentType = req.query.parentType;
     if (req.query.parentId) filter.parentId = req.query.parentId;
 
-    const items = await Archive.find(filter).sort({ createdAt: -1 }).lean();
+    const items = await Archive.find(filter)
+      .sort({ createdAt: -1 })
+      .limit(500)
+      .allowDiskUse(true)
+      .lean();
     res.json({
       items: items.map((i) => ({
         id: String(i._id),

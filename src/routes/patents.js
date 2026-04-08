@@ -123,6 +123,65 @@ router.get("/:id", async (req, res, next) => {
   }
 });
 
+// ── Sub-path aliases used by the frontend (/filed/:id, /pending/:id) ──
+
+router.post("/filed", requireAuth, async (req, res, next) => {
+  req.body.patentType = "filed";
+  try {
+    const { patentName } = req.body;
+    if (!patentName) return res.status(400).json({ error: { message: "patentName is required" } });
+    const newPatent = new Patent({ ...req.body, createdBy: req.user?.username || "System" });
+    await newPatent.save();
+    res.status(201).json({ item: newPatent });
+  } catch (err) { next(err); }
+});
+
+router.post("/pending", requireAuth, async (req, res, next) => {
+  req.body.patentType = "pending";
+  try {
+    const { patentName } = req.body;
+    if (!patentName) return res.status(400).json({ error: { message: "patentName is required" } });
+    const newPatent = new Patent({ ...req.body, createdBy: req.user?.username || "System" });
+    await newPatent.save();
+    res.status(201).json({ item: newPatent });
+  } catch (err) { next(err); }
+});
+
+router.put("/filed/:id", requireAuth, async (req, res, next) => {
+  try {
+    const patent = await Patent.findByIdAndUpdate(req.params.id, req.body, { new: true, runValidators: true });
+    if (!patent) return res.status(404).json({ error: { message: "Patent not found" } });
+    const expiration = calculateExpiration(patent.filingDate, patent.filingType);
+    res.json({ item: { ...patent.toObject(), provisionalExpiration: expiration, isExpiringExpiringSoon: isExpiringExpiringSoon(expiration) } });
+  } catch (err) { next(err); }
+});
+
+router.put("/pending/:id", requireAuth, async (req, res, next) => {
+  try {
+    const patent = await Patent.findByIdAndUpdate(req.params.id, req.body, { new: true, runValidators: true });
+    if (!patent) return res.status(404).json({ error: { message: "Patent not found" } });
+    res.json({ item: patent });
+  } catch (err) { next(err); }
+});
+
+router.delete("/filed/:id", requireAuth, async (req, res, next) => {
+  try {
+    const patent = await Patent.findByIdAndDelete(req.params.id);
+    if (!patent) return res.status(404).json({ error: { message: "Patent not found" } });
+    res.json({ message: "Patent deleted successfully" });
+  } catch (err) { next(err); }
+});
+
+router.delete("/pending/:id", requireAuth, async (req, res, next) => {
+  try {
+    const patent = await Patent.findByIdAndDelete(req.params.id);
+    if (!patent) return res.status(404).json({ error: { message: "Patent not found" } });
+    res.json({ message: "Patent deleted successfully" });
+  } catch (err) { next(err); }
+});
+
+// ── Generic routes ──
+
 // Create new patent (requires auth)
 router.post("/", requireAuth, async (req, res, next) => {
   try {
