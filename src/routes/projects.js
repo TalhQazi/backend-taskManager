@@ -337,8 +337,23 @@ router.get("/:id", requireAuth, async (req, res, next) => {
                   createdAt: 1,
                   attachmentFileName: 1,
                   attachmentNote: 1,
-                  attachment: 1,
-                  attachments: 1,
+                  attachment: {
+                    fileName: { $ifNull: ["$attachment.fileName", ""] },
+                    mimeType: { $ifNull: ["$attachment.mimeType", ""] },
+                    size: { $ifNull: ["$attachment.size", 0] },
+                  },
+                  attachments: {
+                    $map: {
+                      input: { $ifNull: ["$attachments", []] },
+                      as: "att",
+                      in: {
+                        fileName: "$$att.fileName",
+                        mimeType: "$$att.mimeType",
+                        size: "$$att.size",
+                        uploadedAt: "$$att.uploadedAt",
+                      },
+                    },
+                  },
                 }
               }
             ]
@@ -369,7 +384,11 @@ router.get("/:id", requireAuth, async (req, res, next) => {
             name: 1,
             description: 1,
             assignees: 1,
-            logo: { $ifNull: ["$logo", { fileName: "", url: "", mimeType: "", size: 0 }] },
+            logo: {
+              fileName: { $ifNull: ["$logo.fileName", ""] },
+              mimeType: { $ifNull: ["$logo.mimeType", ""] },
+              size: { $ifNull: ["$logo.size", 0] },
+            },
             attachments: 1,
             tasks: 1,
             taskCount: 1,
