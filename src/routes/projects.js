@@ -9,6 +9,7 @@ const ActivityLog = require("../models/ActivityLog");
 const { requireAuth } = require("../middleware/auth");
 const { createNotification } = require("../utils/notifications");
 const { parsePagination, paginatedResponse } = require("../lib/pagination");
+const { cacheWrap, cacheDel } = require("../lib/cache");
 
 const router = express.Router();
 
@@ -309,81 +310,86 @@ router.get("/:id/logo", requireAuth, async (req, res, next) => {
 // Optimized GET single project with tasks using aggregation
 router.get("/:id", requireAuth, async (req, res, next) => {
   try {
-    const projectResult = await Project.aggregate([
-      { $match: { _id: new mongoose.Types.ObjectId(req.params.id) } },
-      {
-        $lookup: {
-          from: "tasks",
-          localField: "_id",
-          foreignField: "projectId",
-          as: "tasks",
-          pipeline: [
-            { $sort: { createdAt: -1 } },
-            {
-              $project: {
-                _id: 0,
-                id: { $toString: "$_id" },
-                title: 1,
-                description: 1,
-                assignees: 1,
-                priority: 1,
-                status: 1,
-                dueDate: 1,
-                dueTime: 1,
-                location: 1,
-                createdAt: 1,
-                attachmentFileName: 1,
-                attachmentNote: 1,
-                attachment: 1,
-                attachments: 1,
+    const cacheKey = `project:${req.params.id}`;
+    const cached = await cacheWrap(cacheKey, async () => {
+      const projectResult = await Project.aggregate([
+        { $match: { _id: new mongoose.Types.ObjectId(req.params.id) } },
+        {
+          $lookup: {
+            from: "tasks",
+            localField: "_id",
+            foreignField: "projectId",
+            as: "tasks",
+            pipeline: [
+              { $sort: { createdAt: -1 } },
+              {
+                $project: {
+                  _id: 0,
+                  id: { $toString: "$_id" },
+                  title: 1,
+                  description: 1,
+                  assignees: 1,
+                  priority: 1,
+                  status: 1,
+                  dueDate: 1,
+                  dueTime: 1,
+                  location: 1,
+                  createdAt: 1,
+                  attachmentFileName: 1,
+                  attachmentNote: 1,
+                  attachment: 1,
+                  attachments: 1,
+                }
+              }
+            ]
+          }
+        },
+        {
+          $addFields: {
+            id: { $toString: "$_id" },
+            taskCount: { $size: "$tasks" },
+            status: {
+              $switch: {
+                branches: [
+                  { case: { $eq: [{ $size: "$tasks" }, 0] }, then: "No tasks" },
+                  { case: { $allElementsTrue: { $map: { input: "$tasks", as: "t", in: { $eq: ["$$t.status", "completed"] } } } }, then: "Completed" },
+                  { case: { $anyElementTrue: { $map: { input: "$tasks", as: "t", in: { $eq: ["$$t.status", "in-progress"] } } } }, then: "In Progress" },
+                  { case: { $anyElementTrue: { $map: { input: "$tasks", as: "t", in: { $eq: ["$$t.status", "overdue"] } } } }, then: "Overdue" },
+                  { case: { $anyElementTrue: { $map: { input: "$tasks", as: "t", in: { $eq: ["$$t.status", "pending"] } } } }, then: "Pending" }
+                ],
+                default: "Active"
               }
             }
-          ]
-        }
-      },
-      {
-        $addFields: {
-          id: { $toString: "$_id" },
-          taskCount: { $size: "$tasks" },
-          status: {
-            $switch: {
-              branches: [
-                { case: { $eq: [{ $size: "$tasks" }, 0] }, then: "No tasks" },
-                { case: { $allElementsTrue: { $map: { input: "$tasks", as: "t", in: { $eq: ["$$t.status", "completed"] } } } }, then: "Completed" },
-                { case: { $anyElementTrue: { $map: { input: "$tasks", as: "t", in: { $eq: ["$$t.status", "in-progress"] } } } }, then: "In Progress" },
-                { case: { $anyElementTrue: { $map: { input: "$tasks", as: "t", in: { $eq: ["$$t.status", "overdue"] } } } }, then: "Overdue" },
-                { case: { $anyElementTrue: { $map: { input: "$tasks", as: "t", in: { $eq: ["$$t.status", "pending"] } } } }, then: "Pending" }
-              ],
-              default: "Active"
-            }
+          }
+        },
+        {
+          $project: {
+            _id: 0,
+            id: 1,
+            name: 1,
+            description: 1,
+            assignees: 1,
+            logo: { $ifNull: ["$logo", { fileName: "", url: "", mimeType: "", size: 0 }] },
+            attachments: 1,
+            tasks: 1,
+            taskCount: 1,
+            status: 1,
+            createdAt: 1,
+            createdByUserId: 1,
+            createdByUsername: 1,
+            createdByRole: 1
           }
         }
-      },
-      {
-        $project: {
-          _id: 0,
-          id: 1,
-          name: 1,
-          description: 1,
-          assignees: 1,
-          logo: { $ifNull: ["$logo", { fileName: "", url: "", mimeType: "", size: 0 }] },
-          attachments: 1,
-          tasks: 1,
-          taskCount: 1,
-          status: 1,
-          createdAt: 1,
-          createdByUserId: 1,
-          createdByUsername: 1,
-          createdByRole: 1
-        }
-      }
-    ]);
+      ]);
 
-    if (projectResult.length === 0) {
+      return projectResult.length > 0 ? projectResult[0] : null;
+    }, 60);
+
+    if (!cached) {
       return res.status(404).json({ error: { message: "Project not found" } });
     }
 
-    return res.json({ item: projectResult[0] });
+    return res.json({ item: cached });
   } catch (err) {
     return next(err);
   }
@@ -424,6 +430,7 @@ router.put("/:id", requireAuth, async (req, res, next) => {
     if (parsed.data.attachments !== undefined) project.attachments = parsed.data.attachments;
 
     await project.save();
+    void cacheDel(`project:${req.params.id}`);
 
     await logActivity(
       req,
@@ -469,6 +476,7 @@ router.put("/:id/reassign", requireAuth, async (req, res, next) => {
 
     project.assignees = assignees;
     await project.save();
+    void cacheDel(`project:${req.params.id}`);
 
     // Log activity
     await logActivity(req, "PROJECT_REASSIGN", "project", req.params.id, project.name, `Reassigned project: ${project.name} to ${assignees.join(", ")}`);
@@ -559,6 +567,7 @@ router.delete("/:id", requireAuth, async (req, res, next) => {
 
     // Delete the project
     await Project.findByIdAndDelete(req.params.id);
+    void cacheDel(`project:${req.params.id}`);
 
     await logActivity(
       req,

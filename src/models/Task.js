@@ -37,5 +37,7 @@ TaskSchema.index({ projectId: 1, status: 1 });
 TaskSchema.index({ assignees: 1, status: 1 });
 TaskSchema.index({ createdAt: -1, status: 1 });
 TaskSchema.index({ projectId: 1, createdAt: -1 });
+// Text index for search queries (replaces regex scans)
+TaskSchema.index({ title: "text", description: "text" });
 
 module.exports = mongoose.model("Task", TaskSchema);

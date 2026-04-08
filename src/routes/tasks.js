@@ -367,8 +367,9 @@ router.post("/", requireAuth, async (req, res, next) => {
         resourceId: String(created._id),
       }),
       cacheDel("tasks:list:*"),
+      created.projectId ? cacheDel(`project:${created.projectId}`) : Promise.resolve(),
     ]).catch(() => {});
-    
+
     return res.status(201).json({ item: withId(obj) });
   } catch (err) {
     return next(err);
@@ -476,8 +477,9 @@ router.post("/upload", requireAuth, upload.array("files", 10), async (req, res, 
         resourceId: String(created._id),
       }),
       cacheDel("tasks:list:*"),
+      created.projectId ? cacheDel(`project:${created.projectId}`) : Promise.resolve(),
     ]).catch(() => {});
-    
+
     return res.status(201).json({ item: withId(obj) });
   } catch (err) {
     console.error("Upload error:", err);
@@ -788,6 +790,7 @@ router.patch("/:id/status", requireAuth, async (req, res, next) => {
         resourceId: String(req.params.id),
       }),
       cacheDel("tasks:list:*"),
+      updated.projectId ? cacheDel(`project:${updated.projectId}`) : Promise.resolve(),
     ]).catch(() => {});
 
     return res.json({ item: withId(updated) });
@@ -845,6 +848,7 @@ router.put("/:id", requireAuth, async (req, res, next) => {
         resourceId: String(req.params.id),
       }),
       cacheDel("tasks:list:*"),
+      updated.projectId ? cacheDel(`project:${updated.projectId}`) : Promise.resolve(),
     ]).catch(() => {});
 
     return res.json({ item: withId(updated) });
@@ -932,6 +936,7 @@ router.delete("/:id", requireAuth, async (req, res, next) => {
         resourceId: String(req.params.id),
       }),
       cacheDel("tasks:list:*"),
+      deleted.projectId ? cacheDel(`project:${deleted.projectId}`) : Promise.resolve(),
     ]).catch(() => {});
     
     return res.status(204).send();
