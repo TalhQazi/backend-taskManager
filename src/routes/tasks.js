@@ -882,7 +882,7 @@ router.put("/:id", requireAuth, async (req, res, next) => {
       patch.dueDate = new Date(patch.dueDate);
     }
 
-    delete patch.location;
+
     delete patch.assignee;
     delete patch.assigneeInitials;
 
