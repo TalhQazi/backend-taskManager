@@ -328,7 +328,7 @@ router.get("/:id", requireAuth, async (req, res, next) => {
                   id: { $toString: "$_id" },
                   title: 1,
                   description: 1,
-                  assignees: 1,
+                  assignees: { $ifNull: ["$assignees", { $cond: [{ $ifNull: ["$assignee", false] }, ["$assignee"], []] }] },
                   priority: 1,
                   status: 1,
                   dueDate: 1,
