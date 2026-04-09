@@ -338,20 +338,33 @@ router.post("/", requireAuth, async (req, res, next) => {
       return res.status(400).json({ error: { message: "Task description is required" } });
     }
 
+    // Clean empty projectId to avoid Mongoose CastError
+    const body = { ...req.body };
+    if (body.projectId === "" || body.projectId === null || body.projectId === "undefined") {
+      delete body.projectId;
+    }
+
     const parsed = createSchema.safeParse({
-      ...req.body,
-      assignees: normalizeAssignees(req.body?.assignees ?? req.body?.assignee),
+      ...body,
+      assignees: normalizeAssignees(body?.assignees ?? body?.assignee),
     });
+    
     if (!parsed.success) {
       return res.status(400).json({ error: { message: "Invalid payload", details: parsed.error.errors } });
     }
 
-    const dueDate = parsed.data.dueDate ? new Date(parsed.data.dueDate) : undefined;
-    const createdAt = parsed.data.createdAt || new Date().toISOString().split("T")[0];
-    const firstAssignee = parsed.data.assignees?.[0] || "";
+    const data = { ...parsed.data };
+    // Double check projectId again after parse
+    if (!data.projectId || data.projectId === "" || data.projectId === "undefined") {
+      delete data.projectId;
+    }
+
+    const dueDate = data.dueDate ? new Date(data.dueDate) : undefined;
+    const createdAt = data.createdAt || new Date().toISOString().split("T")[0];
+    const firstAssignee = data.assignees?.[0] || "";
 
     const created = await Task.create({
-      ...parsed.data,
+      ...data,
       createdAt,
       dueDate,
     });
@@ -379,10 +392,19 @@ router.post("/", requireAuth, async (req, res, next) => {
       }),
       cacheDel("tasks:list:*"),
       created.projectId ? cacheDel(`project:${created.projectId}`) : Promise.resolve(),
-    ]).catch(() => {});
+    ]).catch((err) => {
+      console.error("Task creation side-effects error:", err);
+    });
 
     return res.status(201).json({ item: withId(obj) });
   } catch (err) {
+    console.error("POST /api/tasks Error:", err);
+    if (err.name === 'ValidationError') {
+      return res.status(400).json({ error: { message: err.message, details: err.errors } });
+    }
+    if (err.name === 'CastError') {
+      return res.status(400).json({ error: { message: `Invalid value for field ${err.path}: ${err.value}` } });
+    }
     return next(err);
   }
 });
