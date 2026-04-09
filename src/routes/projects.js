@@ -10,6 +10,7 @@ const { requireAuth } = require("../middleware/auth");
 const { createNotification } = require("../utils/notifications");
 const { parsePagination, paginatedResponse } = require("../lib/pagination");
 const { cacheWrap, cacheDel } = require("../lib/cache");
+const { uploadToS3, base64ToBuffer } = require("../lib/s3");
 
 const router = express.Router();
 
@@ -120,12 +121,42 @@ router.post("/", requireAuth, async (req, res, next) => {
       return res.status(400).json({ error: { message: "Invalid payload", details: parsed.error.errors } });
     }
 
+    const data = { ...parsed.data };
+
+    // 1. Upload Project Logo to S3
+    if (data.logo?.url && data.logo.url.startsWith("data:")) {
+      try {
+        const { buffer, mimeType } = base64ToBuffer(data.logo.url);
+        const s3Url = await uploadToS3(buffer, data.logo.fileName || "logo", mimeType, "projects/logos");
+        data.logo.url = s3Url;
+      } catch (err) {
+        console.error("Failed to upload project logo to S3:", err);
+      }
+    }
+
+    // 2. Upload Project Attachments to S3
+    if (Array.isArray(data.attachments) && data.attachments.length > 0) {
+      data.attachments = await Promise.all(data.attachments.map(async (att) => {
+        if (att.url && att.url.startsWith("data:")) {
+          try {
+            const { buffer, mimeType } = base64ToBuffer(att.url);
+            const s3Url = await uploadToS3(buffer, att.fileName || "attachment", mimeType, "projects/attachments");
+            return { ...att, url: s3Url, uploadedAt: att.uploadedAt || new Date() };
+          } catch (err) {
+            console.error("Failed to upload project attachment to S3:", err);
+            return att;
+          }
+        }
+        return att;
+      }));
+    }
+
     const createdProject = await Project.create({
-      name: parsed.data.name,
-      description: parsed.data.description || "",
-      assignees: parsed.data.assignees || [],
-      logo: parsed.data.logo || { fileName: "", url: "", mimeType: "", size: 0 },
-      attachments: parsed.data.attachments || [],
+      name: data.name,
+      description: data.description || "",
+      assignees: data.assignees || [],
+      logo: data.logo || { fileName: "", url: "", mimeType: "", size: 0 },
+      attachments: data.attachments || [],
       createdByUserId: String(req.user?.sub || req.user?.id || ""),
       createdByUsername: String(req.user?.username || req.user?.name || ""),
       createdByRole: String(req.user?.role || ""),
@@ -133,20 +164,51 @@ router.post("/", requireAuth, async (req, res, next) => {
 
     const nowDate = new Date().toISOString().split("T")[0];
 
-    const taskDocs = parsed.data.tasks.map((t) => ({
-      title: t.title,
-      description: t.description,
-      assignees: normalizeAssignees(t.assignees),
-      priority: t.priority,
-      status: t.status,
-      dueDate: t.dueDate ? new Date(t.dueDate) : undefined,
-      dueTime: t.dueTime,
-      createdAt: t.createdAt || nowDate,
-      attachmentFileName: t.attachmentFileName || t.attachment?.fileName || "",
-      attachmentNote: t.attachmentNote || "",
-      attachment: t.attachment,
-      attachments: t.attachments || [],
-      projectId: createdProject._id,
+    // 3. Upload Nested Task Attachments to S3
+    const taskDocs = await Promise.all(data.tasks.map(async (t) => {
+      let attachment = t.attachment;
+      if (attachment?.url && attachment.url.startsWith("data:")) {
+        try {
+          const { buffer, mimeType } = base64ToBuffer(attachment.url);
+          const s3Url = await uploadToS3(buffer, attachment.fileName || "attachment", mimeType, "tasks");
+          attachment.url = s3Url;
+        } catch (err) {
+          console.error("Failed to upload nested task primary attachment to S3:", err);
+        }
+      }
+
+      let attachments = t.attachments || [];
+      if (attachments.length > 0) {
+        attachments = await Promise.all(attachments.map(async (att) => {
+          if (att.url && att.url.startsWith("data:")) {
+            try {
+              const { buffer, mimeType } = base64ToBuffer(att.url);
+              const s3Url = await uploadToS3(buffer, att.fileName || "attachment", mimeType, "tasks");
+              return { ...att, url: s3Url, uploadedAt: att.uploadedAt || new Date() };
+            } catch (err) {
+              console.error("Failed to upload nested task multi-attachment to S3:", err);
+              return att;
+            }
+          }
+          return att;
+        }));
+      }
+
+      return {
+        title: t.title,
+        description: t.description,
+        assignees: normalizeAssignees(t.assignees),
+        priority: t.priority,
+        status: t.status,
+        dueDate: t.dueDate ? new Date(t.dueDate) : undefined,
+        dueTime: t.dueTime,
+        createdAt: t.createdAt || nowDate,
+        attachmentFileName: t.attachmentFileName || attachment?.fileName || "",
+        attachmentNote: t.attachmentNote || "",
+        attachment,
+        attachments,
+        projectId: createdProject._id,
+      };
     }));
 
     const createdTasks = await Task.insertMany(taskDocs, { ordered: true });
@@ -166,7 +228,7 @@ router.post("/", requireAuth, async (req, res, next) => {
       action: "created",
       resourceType: "project",
       resourceName: createdProject.name,
-      assignees: Array.isArray(parsed.data.assignees) ? parsed.data.assignees : [],
+      assignees: Array.isArray(data.assignees) ? data.assignees : [],
       details: `Tasks: ${createdTasks.length}`,
       resourceId: String(createdProject._id),
     });
@@ -437,18 +499,43 @@ router.put("/:id", requireAuth, async (req, res, next) => {
       return res.status(400).json({ error: { message: "Invalid payload", details: parsed.error.errors } });
     }
 
-    const project = await Project.findById(req.params.id);
-    if (!project) {
-      return res.status(404).json({ error: { message: "Project not found" } });
+    const patch = { ...parsed.data };
+
+    // Upload Logo to S3 if update includes new base64 logo
+    if (patch.logo?.url && patch.logo.url.startsWith("data:")) {
+      try {
+        const { buffer, mimeType } = base64ToBuffer(patch.logo.url);
+        const s3Url = await uploadToS3(buffer, patch.logo.fileName || "logo", mimeType, "projects/logos");
+        patch.logo.url = s3Url;
+      } catch (err) {
+        console.error("Failed to upload updated project logo to S3:", err);
+      }
+    }
+
+    // Upload Project Attachments to S3 for updates
+    if (Array.isArray(patch.attachments) && patch.attachments.length > 0) {
+      patch.attachments = await Promise.all(patch.attachments.map(async (att) => {
+        if (att.url && att.url.startsWith("data:")) {
+          try {
+            const { buffer, mimeType } = base64ToBuffer(att.url);
+            const s3Url = await uploadToS3(buffer, att.fileName || "attachment", mimeType, "projects/attachments");
+            return { ...att, url: s3Url, uploadedAt: att.uploadedAt || new Date() };
+          } catch (err) {
+            console.error("Failed to upload updated project attachment to S3:", err);
+            return att;
+          }
+        }
+        return att;
+      }));
     }
 
     // Update fields
-    if (parsed.data.name !== undefined) project.name = parsed.data.name;
-    if (parsed.data.description !== undefined) project.description = parsed.data.description;
-    if (parsed.data.assignees !== undefined) project.assignees = parsed.data.assignees;
-    if (parsed.data.logo !== undefined) project.logo = parsed.data.logo;
-    if (parsed.data.attachments !== undefined) project.attachments = parsed.data.attachments;
-    if (parsed.data.status !== undefined) project.status = parsed.data.status;
+    if (patch.name !== undefined) project.name = patch.name;
+    if (patch.description !== undefined) project.description = patch.description;
+    if (patch.assignees !== undefined) project.assignees = patch.assignees;
+    if (patch.logo !== undefined) project.logo = patch.logo;
+    if (patch.attachments !== undefined) project.attachments = patch.attachments;
+    if (patch.status !== undefined) project.status = patch.status;
 
     await project.save();
     void cacheDel(`project:${req.params.id}`);

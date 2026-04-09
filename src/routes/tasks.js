@@ -13,6 +13,7 @@ const { checkAndFlagOffTheClock } = require("../lib/offTheClockWork");
 const { createNotification } = require("../utils/notifications");
 const { parsePagination, paginatedResponse } = require("../lib/pagination");
 const { cacheWrap, cacheDel } = require("../lib/cache");
+const { uploadToS3, base64ToBuffer } = require("../lib/s3");
 
 const router = express.Router();
 // Middleware to skip body parsing for multipart/form-data (must be before other middleware)
@@ -353,10 +354,31 @@ router.post("/", requireAuth, async (req, res, next) => {
       return res.status(400).json({ error: { message: "Invalid payload", details: parsed.error.errors } });
     }
 
-    const data = { ...parsed.data };
-    // Double check projectId again after parse
-    if (!data.projectId || data.projectId === "" || data.projectId === "undefined") {
-      delete data.projectId;
+    // Convert Base64 attachments to S3 URLs if present
+    if (data.attachment?.url && data.attachment.url.startsWith("data:")) {
+      try {
+        const { buffer, mimeType } = base64ToBuffer(data.attachment.url);
+        const s3Url = await uploadToS3(buffer, data.attachment.fileName || "attachment", mimeType, "tasks");
+        data.attachment.url = s3Url;
+      } catch (err) {
+        console.error("Failed to upload primary attachment to S3:", err);
+      }
+    }
+
+    if (Array.isArray(data.attachments) && data.attachments.length > 0) {
+      data.attachments = await Promise.all(data.attachments.map(async (att) => {
+        if (att.url && att.url.startsWith("data:")) {
+          try {
+            const { buffer, mimeType } = base64ToBuffer(att.url);
+            const s3Url = await uploadToS3(buffer, att.fileName || "attachment", mimeType, "tasks");
+            return { ...att, url: s3Url, uploadedAt: att.uploadedAt || new Date() };
+          } catch (err) {
+            console.error("Failed to upload multi-attachment to S3:", err);
+            return att;
+          }
+        }
+        return att;
+      }));
     }
 
     const dueDate = data.dueDate ? new Date(data.dueDate) : undefined;
@@ -461,8 +483,20 @@ router.post("/upload", requireAuth, upload.array("files", 10), async (req, res, 
     let attachment = undefined;
     
     if (files.length > 0) {
-      attachments = files.map(f => {
-        if (f.buffer) {
+      attachments = await Promise.all(files.map(async (f) => {
+        try {
+          // Upload Buffer to S3
+          const s3Url = await uploadToS3(f.buffer, f.originalname, f.mimetype, "tasks");
+          return {
+            fileName: f.originalname,
+            url: s3Url,
+            mimeType: f.mimetype,
+            size: f.size,
+            uploadedAt: new Date(),
+          };
+        } catch (err) {
+          console.error("Failed to upload file to S3 in multipart route:", err);
+          // Fallback to base64 if S3 fails
           const base64Data = f.buffer.toString("base64");
           return {
             fileName: f.originalname,
@@ -472,8 +506,7 @@ router.post("/upload", requireAuth, upload.array("files", 10), async (req, res, 
             uploadedAt: new Date(),
           };
         }
-        return null;
-      }).filter(Boolean);
+      }));
       
       // Set first attachment as legacy single attachment
       attachment = attachments[0];
