@@ -317,6 +317,17 @@ router.get("/:id", requireAuth, async (req, res, next) => {
   }
 });
 
+// Get task attachment lazily to avoid massive JSON payloads in project views
+router.get("/:id/attachment", requireAuth, async (req, res, next) => {
+  try {
+    const task = await Task.findById(req.params.id).select("attachment").lean();
+    if (!task) return res.status(404).json({ error: { message: "Task not found" } });
+    res.json({ attachment: task.attachment || { fileName: "", url: "", mimeType: "", size: 0 } });
+  } catch (err) {
+    next(err);
+  }
+});
+
 router.post("/", requireAuth, async (req, res, next) => {
   try {
     // Manual validation for title and description
