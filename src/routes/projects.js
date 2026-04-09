@@ -250,7 +250,6 @@ router.get("/", requireAuth, async (req, res, next) => {
           assignees: 1,
           logo: {
             fileName: { $ifNull: ["$logo.fileName", ""] },
-            url: { $ifNull: ["$logo.url", ""] },
             mimeType: { $ifNull: ["$logo.mimeType", ""] },
             size: { $ifNull: ["$logo.size", 0] },
           },
@@ -260,7 +259,6 @@ router.get("/", requireAuth, async (req, res, next) => {
               as: "att",
               in: {
                 fileName: "$$att.fileName",
-                url: "$$att.url",
                 mimeType: "$$att.mimeType",
                 size: "$$att.size",
                 uploadedAt: "$$att.uploadedAt",
