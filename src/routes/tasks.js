@@ -521,7 +521,6 @@ router.get("/:id/comments", requireAuth, async (req, res, next) => {
         authorRole: String(c.authorRole || ""),
         attachments: Array.isArray(c.attachments) ? c.attachments.map(a => ({
           fileName: a.fileName || "",
-          url: a.url || "",
           mimeType: a.mimeType || "",
           size: a.size || 0,
           uploadedAt: a.uploadedAt
@@ -607,7 +606,12 @@ router.post("/:id/comments", requireAuth, async (req, res, next) => {
       authorUserId: String(created.authorUserId || ""),
       authorUsername: String(created.authorUsername || ""),
       authorRole: String(created.authorRole || ""),
-      attachments: Array.isArray(created.attachments) ? created.attachments : [],
+      attachments: Array.isArray(created.attachments) ? created.attachments.map(a => ({
+        fileName: a.fileName || "",
+        mimeType: a.mimeType || "",
+        size: a.size || 0,
+        uploadedAt: a.uploadedAt
+      })) : [],
       createdAt: created.createdAt,
     };
     
@@ -619,6 +623,24 @@ router.post("/:id/comments", requireAuth, async (req, res, next) => {
     return res.status(201).json({
       item: commentData,
     });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// GET single comment attachment
+router.get("/:id/comments/:commentId/attachments/:index", requireAuth, async (req, res, next) => {
+  try {
+    const comment = await TaskComment.findById(req.params.commentId).select("attachments").lean();
+    if (!comment || !comment.attachments) {
+      return res.status(404).json({ error: { message: "Comment or attachment not found" } });
+    }
+    const idx = parseInt(req.params.index, 10);
+    const attachment = comment.attachments[idx];
+    if (!attachment) {
+      return res.status(404).json({ error: { message: "Attachment index out of bounds" } });
+    }
+    return res.json({ attachment: { url: attachment.url || "" } });
   } catch (err) {
     return next(err);
   }
