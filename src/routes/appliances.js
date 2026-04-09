@@ -10,6 +10,7 @@ const Vehicle = require("../models/Vehicle");
 const ActivityLog = require("../models/ActivityLog");
 const { createNotification } = require("../utils/notifications");
 const { requireAuth, requireRole } = require("../middleware/auth");
+const { cacheWrap, cacheDel } = require("../lib/cache");
 
 const router = express.Router();
 
@@ -131,8 +132,14 @@ async function logActivity(req, action, resourceType, resourceId, resourceName, 
 
 router.get("/", requireAuth, async (_req, res, next) => {
   try {
-    const items = await Appliance.find().sort({ createdAt: -1 }).lean();
-    res.json({ items });
+    const result = await cacheWrap("appliances:list", async () => {
+      const items = await Appliance.find()
+        .select("-tagPhotoDataUrl")
+        .sort({ createdAt: -1 })
+        .lean();
+      return { items };
+    }, 60);
+    res.json(result);
   } catch (err) {
     next(err);
   }
@@ -188,7 +195,7 @@ router.post("/", requireAuth, async (req, res, next) => {
     
     // Log activity
     await logActivity(req, "APPLIANCE_CREATE", "appliance", created._id, created.name, `Created appliance: ${created.name}`);
-    
+    cacheDel("appliances:list");
     res.status(201).json({ item: created.toObject() });
   } catch (err) {
     next(err);
@@ -213,7 +220,7 @@ router.put("/:id", requireAuth, async (req, res, next) => {
 
     // Log activity
     await logActivity(req, "APPLIANCE_UPDATE", "appliance", req.params.id, updated.name, `Updated appliance: ${updated.name}`);
-    
+
     // Create notification
     await createNotification({
       actor: req.user?.username || req.user?.name || "Admin",
@@ -224,7 +231,7 @@ router.put("/:id", requireAuth, async (req, res, next) => {
       details: data.status ? `Status: ${data.status}` : "",
       resourceId: String(req.params.id),
     });
-    
+    cacheDel("appliances:list");
     res.json({ item: updated });
   } catch (err) {
     next(err);
@@ -261,7 +268,7 @@ router.post("/upload", requireAuth, upload.single("tagPhotoFile"), async (req, r
 
     // Log activity
     await logActivity(req, "APPLIANCE_CREATE", "appliance", created._id, created.name, `Created appliance with photo: ${created.name}`);
-    
+
     // Create notification
     await createNotification({
       actor: req.user?.username || req.user?.name || "Admin",
@@ -272,7 +279,7 @@ router.post("/upload", requireAuth, upload.single("tagPhotoFile"), async (req, r
       details: created.category ? `Category: ${created.category}` : "",
       resourceId: String(created._id),
     });
-    
+    cacheDel("appliances:list");
     return res.status(201).json({ item: created.toObject() });
   } catch (err) {
     return next(err);
@@ -286,7 +293,7 @@ router.delete("/:id", requireAuth, async (req, res, next) => {
     
     // Log activity
     await logActivity(req, "APPLIANCE_DELETE", "appliance", req.params.id, deleted.name, `Deleted appliance: ${deleted.name}`);
-    
+
     // Create notification
     await createNotification({
       actor: req.user?.username || req.user?.name || "Admin",
@@ -296,7 +303,7 @@ router.delete("/:id", requireAuth, async (req, res, next) => {
       resourceName: deleted.name,
       resourceId: String(req.params.id),
     });
-    
+    cacheDel("appliances:list");
     res.status(204).send();
   } catch (err) {
     next(err);

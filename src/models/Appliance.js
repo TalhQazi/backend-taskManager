@@ -31,5 +31,6 @@ const ApplianceSchema = new mongoose.Schema(
 ApplianceSchema.index({ status: 1 });
 ApplianceSchema.index({ location: 1 });
 ApplianceSchema.index({ assignedTo: 1 });
+ApplianceSchema.index({ createdAt: -1 });
 
 module.exports = mongoose.model("Appliance", ApplianceSchema);

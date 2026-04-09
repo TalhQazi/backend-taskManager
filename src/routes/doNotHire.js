@@ -4,6 +4,7 @@ const { z } = require("zod");
 const DoNotHire = require("../models/DoNotHire");
 const { createNotification } = require("../utils/notifications");
 const { requireAuth } = require("../middleware/auth");
+const { cacheWrap, cacheDel } = require("../lib/cache");
 
 const router = express.Router();
 
@@ -33,8 +34,11 @@ const updateSchema = createSchema.partial();
 
 router.get("/", requireAuth, async (_req, res, next) => {
   try {
-    const items = await DoNotHire.find().sort({ createdAt: -1 }).lean();
-    res.json({ items: items.map(withId) });
+    const result = await cacheWrap("do-not-hire:list", async () => {
+      const items = await DoNotHire.find().sort({ createdAt: -1 }).lean();
+      return { items: items.map(withId) };
+    }, 120);
+    res.json(result);
   } catch (err) {
     next(err);
   }
@@ -64,6 +68,7 @@ router.post("/", requireAuth, async (req, res, next) => {
         resourceId: String(created._id),
       });
       
+      cacheDel("do-not-hire:list");
       return res.status(201).json({ item: withId(created.toObject()) });
     }
 
@@ -71,7 +76,7 @@ router.post("/", requireAuth, async (req, res, next) => {
     if (!parsed.success) return res.status(400).json({ error: { message: "Invalid payload" } });
 
     const created = await DoNotHire.create(parsed.data);
-    
+
     // Create notification
     await createNotification({
       actor: req.user?.username || req.user?.name || "Admin",
@@ -82,7 +87,7 @@ router.post("/", requireAuth, async (req, res, next) => {
       details: `Reason: ${created.reason}`,
       resourceId: String(created._id),
     });
-    
+    cacheDel("do-not-hire:list");
     res.status(201).json({ item: withId(created.toObject()) });
   } catch (err) {
     next(err);
@@ -112,6 +117,7 @@ router.put("/:id", requireAuth, async (req, res, next) => {
         resourceId: String(req.params.id),
       });
       
+      cacheDel("do-not-hire:list");
       return res.json({ item: withId(updated) });
     }
 
@@ -130,7 +136,7 @@ router.put("/:id", requireAuth, async (req, res, next) => {
       resourceName: updated.fullName,
       resourceId: String(req.params.id),
     });
-
+    cacheDel("do-not-hire:list");
     res.json({ item: withId(updated) });
   } catch (err) {
     next(err);
@@ -151,7 +157,7 @@ router.delete("/:id", requireAuth, async (req, res, next) => {
       resourceName: deleted.fullName,
       resourceId: String(req.params.id),
     });
-    
+    cacheDel("do-not-hire:list");
     res.status(204).send();
   } catch (err) {
     next(err);

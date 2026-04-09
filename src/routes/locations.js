@@ -6,6 +6,7 @@ const Location = require("../models/Location");
 const ActivityLog = require("../models/ActivityLog");
 const { createNotification } = require("../utils/notifications");
 const { requireAuth } = require("../middleware/auth");
+const { cacheWrap, cacheDel } = require("../lib/cache");
 
 const router = express.Router();
 
@@ -66,8 +67,14 @@ const updateSchema = createSchema.partial();
 
 router.get("/", requireAuth, async (_req, res, next) => {
   try {
-    const items = await Location.find().select("-photoDataUrl").sort({ createdAt: -1 }).lean();
-    res.json({ items: items.map(withId) });
+    const result = await cacheWrap("locations:list", async () => {
+      const items = await Location.find()
+        .select("-photoDataUrl")
+        .sort({ createdAt: -1 })
+        .lean();
+      return { items: items.map(withId) };
+    }, 60);
+    res.json(result);
   } catch (err) {
     next(err);
   }
@@ -119,6 +126,7 @@ router.post("/", requireAuth, async (req, res, next) => {
         resourceId: String(createdObj.id),
       });
       
+      cacheDel("locations:list");
       return res.status(201).json({ item: withId(created.toObject()) });
     }
 
@@ -136,7 +144,7 @@ router.post("/", requireAuth, async (req, res, next) => {
       `${createdObj.name} (${createdObj.city})`,
       `Location "${createdObj.name}" in ${createdObj.city} created`
     );
-    
+
     // Create notification
     await createNotification({
       actor: req.user?.username || req.user?.name || "Admin",
@@ -147,7 +155,7 @@ router.post("/", requireAuth, async (req, res, next) => {
       details: createdObj.city ? `City: ${createdObj.city}` : "",
       resourceId: String(createdObj.id),
     });
-    
+    cacheDel("locations:list");
     res.status(201).json({ item: withId(created.toObject()) });
   } catch (err) {
     next(err);
@@ -212,6 +220,7 @@ router.put("/:id", requireAuth, async (req, res, next) => {
         resourceId: String(updatedObj.id),
       });
       
+      cacheDel("locations:list");
       return res.json({ item: updatedObj });
     }
 
@@ -243,7 +252,7 @@ router.put("/:id", requireAuth, async (req, res, next) => {
       resourceName: updatedObj.name,
       resourceId: String(updatedObj.id),
     });
-    
+    cacheDel("locations:list");
     res.json({ item: updatedObj });
   } catch (err) {
     next(err);
@@ -277,7 +286,7 @@ router.delete("/:id", requireAuth, async (req, res, next) => {
       resourceName: deletedObj.name,
       resourceId: String(deletedObj.id),
     });
-    
+    cacheDel("locations:list");
     res.status(204).send();
   } catch (err) {
     next(err);

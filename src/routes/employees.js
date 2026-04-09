@@ -398,12 +398,12 @@ router.get("/", requireAuth, async (_req, res, next) => {
       
       // Get unique emails from employees to fetch their settings
       const employeeEmails = items.map(e => e.email).filter(Boolean);
-      const settings = await Settings.find({ 
+      const settings = await Settings.find({
         $or: [
           { email: { $in: employeeEmails } },
           { userId: { $in: items.map(e => String(e._id)) } }
         ]
-      }).lean();
+      }).select("email userId avatarUrl avatarDataUrl").lean();
       
       // Create a map of email -> avatarUrl
       const avatarMap = new Map();
@@ -422,7 +422,7 @@ router.get("/", requireAuth, async (_req, res, next) => {
       });
       
       return { items: itemsWithAvatars.map(withId) };
-    }, 30);
+    }, 60);
 
     res.json(result);
   } catch (err) {

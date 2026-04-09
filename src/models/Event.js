@@ -15,5 +15,6 @@ const EventSchema = new mongoose.Schema(
 
 // Compound index for schedule lookups
 EventSchema.index({ assignee: 1, day: 1 });
+EventSchema.index({ createdAt: -1 });
 
 module.exports = mongoose.model("Event", EventSchema);

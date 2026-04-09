@@ -10,6 +10,7 @@ const AssetSequence = require("../models/AssetSequence");
 const Appliance = require("../models/Appliance");
 const ActivityLog = require("../models/ActivityLog");
 const { requireAuth, requireRole } = require("../middleware/auth");
+const { cacheWrap, cacheDel } = require("../lib/cache");
 
 const router = express.Router();
 
@@ -168,8 +169,14 @@ async function logActivity(req, action, resourceType, resourceId, resourceName, 
 
 router.get("/", requireAuth, async (_req, res, next) => {
   try {
-    const items = await Vehicle.find().sort({ createdAt: -1 }).lean();
-    res.json({ items: items.map(withId) });
+    const result = await cacheWrap("vehicles:list", async () => {
+      const items = await Vehicle.find()
+        .select("-tagPhotoDataUrl")
+        .sort({ createdAt: -1 })
+        .lean();
+      return { items: items.map(withId) };
+    }, 60);
+    res.json(result);
   } catch (err) {
     next(err);
   }
@@ -243,7 +250,7 @@ router.post("/", requireAuth, async (req, res, next) => {
       
       // Log activity
       await logActivity(req, "VEHICLE_CREATE", "vehicle", created._id, created.name, `Created vehicle: ${created.name}`);
-      
+
       // Create notification
       await createNotification({
         actor: req.user?.username || req.user?.name || "Admin",
@@ -254,7 +261,7 @@ router.post("/", requireAuth, async (req, res, next) => {
         details: `License: ${created.licensePlate}`,
         resourceId: String(created._id),
       });
-      
+      cacheDel("vehicles:list");
       return res.status(201).json({ item: withId(obj) });
     }
 
@@ -273,6 +280,7 @@ router.post("/", requireAuth, async (req, res, next) => {
     });
 
     const obj = created.toObject();
+    cacheDel("vehicles:list");
     return res.status(201).json({ item: withId(obj) });
   } catch (err) {
     return next(err);
@@ -331,6 +339,7 @@ router.post("/upload", requireAuth, upload.fields([{ name: "registrationFile", m
     });
 
     const obj = created.toObject();
+    cacheDel("vehicles:list");
     return res.status(201).json({ item: withId(obj) });
   } catch (err) {
     return next(err);
@@ -377,7 +386,7 @@ router.put("/:id", requireAuth, async (req, res, next) => {
       
       // Log activity
       await logActivity(req, "VEHICLE_UPDATE", "vehicle", req.params.id, updated.name, `Updated vehicle: ${updated.name}`);
-      
+
       // Create notification
       await createNotification({
         actor: req.user?.username || req.user?.name || "Admin",
@@ -388,7 +397,7 @@ router.put("/:id", requireAuth, async (req, res, next) => {
         details: patch.status ? `Status: ${patch.status}` : "",
         resourceId: String(req.params.id),
       });
-      
+      cacheDel("vehicles:list");
       return res.json({ item: withId(updated) });
     }
 
@@ -424,7 +433,7 @@ router.put("/:id", requireAuth, async (req, res, next) => {
       resourceName: updated.name,
       resourceId: String(req.params.id),
     });
-
+    cacheDel("vehicles:list");
     return res.json({ item: withId(updated) });
   } catch (err) {
     return next(err);
@@ -440,7 +449,7 @@ router.delete("/:id", requireAuth, async (req, res, next) => {
     
     // Log activity
     await logActivity(req, "VEHICLE_DELETE", "vehicle", req.params.id, deleted.name, `Deleted vehicle: ${deleted.name}`);
-    
+
     // Create notification
     await createNotification({
       actor: req.user?.username || req.user?.name || "Admin",
@@ -450,7 +459,7 @@ router.delete("/:id", requireAuth, async (req, res, next) => {
       resourceName: deleted.name,
       resourceId: String(req.params.id),
     });
-    
+    cacheDel("vehicles:list");
     return res.status(204).send();
   } catch (err) {
     return next(err);
