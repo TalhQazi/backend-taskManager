@@ -511,6 +511,18 @@ router.get("/:id/comments", requireAuth, async (req, res, next) => {
 
     const items = await TaskComment.find({ taskId: task._id }).sort({ createdAt: 1 }).lean();
 
+    const Settings = require("../models/Settings");
+    const userIds = [...new Set(items.map(c => c.authorUserId))].filter(Boolean);
+    const settingsList = await Settings.find({ userId: { $in: userIds } }).lean();
+    
+    const settingsMap = {};
+    settingsList.forEach(s => {
+      settingsMap[s.userId] = {
+        fullName: s.fullName || "",
+        avatar: s.avatarDataUrl || s.avatarUrl || ""
+      };
+    });
+
     return res.json({
       items: items.map((c) => ({
         id: String(c._id),
@@ -518,6 +530,8 @@ router.get("/:id/comments", requireAuth, async (req, res, next) => {
         message: String(c.message || ""),
         authorUserId: String(c.authorUserId || ""),
         authorUsername: String(c.authorUsername || ""),
+        authorFullName: (c.authorUserId && settingsMap[c.authorUserId]?.fullName) || "",
+        authorAvatar: (c.authorUserId && settingsMap[c.authorUserId]?.avatar) || "",
         authorRole: String(c.authorRole || ""),
         attachments: Array.isArray(c.attachments) ? c.attachments.map(a => ({
           fileName: a.fileName || "",
@@ -598,13 +612,19 @@ router.post("/:id/comments", requireAuth, async (req, res, next) => {
       }
     }
 
+    const Settings = require("../models/Settings");
+    const authorUserId = String(req.user?.sub || req.user?.id || "");
+    const userSettings = await Settings.findOne({ userId: authorUserId }).lean();
+
     // Broadcast to all clients in the task room via WebSocket
     const commentData = {
       id: String(created._id),
       taskId: String(created.taskId),
       message: String(created.message || ""),
-      authorUserId: String(created.authorUserId || ""),
+      authorUserId: authorUserId,
       authorUsername: String(created.authorUsername || ""),
+      authorFullName: userSettings?.fullName || "",
+      authorAvatar: userSettings?.avatarDataUrl || userSettings?.avatarUrl || "",
       authorRole: String(created.authorRole || ""),
       attachments: Array.isArray(created.attachments) ? created.attachments.map(a => ({
         fileName: a.fileName || "",
