@@ -553,6 +553,41 @@ router.post("/:id/comments", requireAuth, async (req, res, next) => {
 
     await logActivity(req, "TASK_COMMENT_CREATE", "task", task._id, task.title, `Comment added on task: ${task.title}`);
 
+    // Process Mentions
+    if (message.includes("@")) {
+      const Employee = require("../models/Employee");
+      const activeEmployees = await Employee.find({ status: "active" }).select("name").lean();
+      const mentionedUsers = [];
+      const lowerMessage = message.toLowerCase();
+      
+      activeEmployees.forEach(emp => {
+        if (lowerMessage.includes("@" + emp.name.toLowerCase())) {
+          mentionedUsers.push(emp.name);
+        }
+      });
+
+      // Also allow mentioning admins if they are in the User collection
+      const activeUsers = await User.find({}).select("username").lean();
+      activeUsers.forEach(u => {
+        if (u.username && lowerMessage.includes("@" + u.username.toLowerCase()) && !mentionedUsers.includes(u.username)) {
+          mentionedUsers.push(u.username);
+        }
+      });
+
+      if (mentionedUsers.length > 0) {
+        await createNotification({
+          actor: String(req.user?.username || "Someone"),
+          actorRole: String(req.user?.role || ""),
+          action: "mentioned you in a",
+          resourceType: "task comment",
+          resourceName: task.title,
+          assignees: mentionedUsers,
+          details: `"${message.length > 50 ? message.substring(0, 50) + "..." : message}"`,
+          resourceId: String(task._id),
+        });
+      }
+    }
+
     // Broadcast to all clients in the task room via WebSocket
     const commentData = {
       id: String(created._id),
