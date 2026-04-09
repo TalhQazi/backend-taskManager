@@ -137,6 +137,7 @@ router.post("/:id/restore", requireAuth, async (req, res, next) => {
             authorUserId: cd.authorUserId,
             authorUsername: cd.authorUsername,
             authorRole: cd.authorRole,
+            attachments: cd.attachments || []
           });
           await Archive.findByIdAndDelete(ac._id);
         }

@@ -508,6 +508,13 @@ router.get("/:id/comments", requireAuth, async (req, res, next) => {
         authorUserId: String(c.authorUserId || ""),
         authorUsername: String(c.authorUsername || ""),
         authorRole: String(c.authorRole || ""),
+        attachments: Array.isArray(c.attachments) ? c.attachments.map(a => ({
+          fileName: a.fileName || "",
+          url: a.url || "",
+          mimeType: a.mimeType || "",
+          size: a.size || 0,
+          uploadedAt: a.uploadedAt
+        })) : [],
         createdAt: c.createdAt,
       })),
     });
@@ -528,8 +535,11 @@ router.post("/:id/comments", requireAuth, async (req, res, next) => {
     }
 
     const message = String(req.body?.message || "").trim();
-    if (!message) {
-      return res.status(400).json({ error: { message: "Message is required" } });
+    const attachments = Array.isArray(req.body?.attachments) ? req.body.attachments : [];
+    
+    // We can allow either a message or an attachment
+    if (!message && attachments.length === 0) {
+      return res.status(400).json({ error: { message: "Message or attachment is required" } });
     }
 
     const created = await TaskComment.create({
@@ -538,6 +548,7 @@ router.post("/:id/comments", requireAuth, async (req, res, next) => {
       authorUsername: String(req.user?.username || ""),
       authorRole: String(req.user?.role || ""),
       message,
+      attachments
     });
 
     await logActivity(req, "TASK_COMMENT_CREATE", "task", task._id, task.title, `Comment added on task: ${task.title}`);
@@ -550,6 +561,7 @@ router.post("/:id/comments", requireAuth, async (req, res, next) => {
       authorUserId: String(created.authorUserId || ""),
       authorUsername: String(created.authorUsername || ""),
       authorRole: String(created.authorRole || ""),
+      attachments: Array.isArray(created.attachments) ? created.attachments : [],
       createdAt: created.createdAt,
     };
     
