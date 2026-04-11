@@ -4,6 +4,9 @@ const { z } = require("zod");
 
 const Project = require("../models/Project");
 const Task = require("../models/Task");
+const ProjectComment = require("../models/ProjectComment");
+const Settings = require("../models/Settings");
+const User = require("../models/User");
 const Archive = require("../models/Archive");
 const ActivityLog = require("../models/ActivityLog");
 const { requireAuth } = require("../middleware/auth");
@@ -696,6 +699,143 @@ router.delete("/:id", requireAuth, async (req, res, next) => {
     });
 
     return res.json({ success: true, message: "Project archived successfully" });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+
+router.get("/:id/comments", requireAuth, async (req, res, next) => {
+  try {
+    const project = await Project.findById(req.params.id).lean();
+    if (!project) {
+      return res.status(404).json({ error: { message: "Project not found" } });
+    }
+
+    const items = await ProjectComment.find({ projectId: project._id }).sort({ createdAt: 1 }).lean();
+
+    const userIds = [...new Set(items.map(c => c.authorUserId))].filter(Boolean);
+    const settingsList = await Settings.find({ userId: { $in: userIds } }).lean();
+    
+    const settingsMap = {};
+    settingsList.forEach(s => {
+      settingsMap[s.userId] = {
+        fullName: s.fullName || "",
+        avatar: s.avatarDataUrl || s.avatarUrl || ""
+      };
+    });
+
+    return res.json({
+      items: items.map((c) => ({
+        id: String(c._id),
+        projectId: String(c.projectId),
+        message: String(c.message || ""),
+        authorUserId: String(c.authorUserId || ""),
+        authorUsername: String(c.authorUsername || ""),
+        authorFullName: (c.authorUserId && settingsMap[c.authorUserId]?.fullName) || "",
+        authorAvatar: (c.authorUserId && settingsMap[c.authorUserId]?.avatar) || "",
+        authorRole: String(c.authorRole || ""),
+        attachments: Array.isArray(c.attachments) ? c.attachments.map(a => ({
+          fileName: a.fileName || "",
+          mimeType: a.mimeType || "",
+          size: a.size || 0,
+          uploadedAt: a.uploadedAt,
+          url: a.url
+        })) : [],
+        createdAt: c.createdAt,
+      })),
+    });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+router.post("/:id/comments", requireAuth, async (req, res, next) => {
+  try {
+    const project = await Project.findById(req.params.id).lean();
+    if (!project) {
+      return res.status(404).json({ error: { message: "Project not found" } });
+    }
+
+    const message = String(req.body?.message || "").trim();
+    const attachments = Array.isArray(req.body?.attachments) ? req.body.attachments : [];
+    
+    if (!message && attachments.length === 0) {
+      return res.status(400).json({ error: { message: "Message or attachment is required" } });
+    }
+
+    const created = await ProjectComment.create({
+      projectId: project._id,
+      authorUserId: String(req.user?.sub || req.user?.id || ""),
+      authorUsername: String(req.user?.username || ""),
+      authorRole: String(req.user?.role || ""),
+      message,
+      attachments
+    });
+
+    await logActivity(req, "PROJECT_COMMENT_CREATE", "project", project._id, project.name, `Comment added on project: ${project.name}`);
+
+    // Process Mentions
+    if (message.includes("@")) {
+      const Employee = require("../models/Employee");
+      const activeEmployees = await Employee.find({ status: "active" }).select("name").lean();
+      const mentionedUsers = [];
+      const lowerMessage = message.toLowerCase();
+      
+      activeEmployees.forEach(emp => {
+        if (lowerMessage.includes("@" + emp.name.toLowerCase())) {
+          mentionedUsers.push(emp.name);
+        }
+      });
+
+      const activeUsers = await User.find({}).select("username").lean();
+      activeUsers.forEach(u => {
+        if (u.username && lowerMessage.includes("@" + u.username.toLowerCase()) && !mentionedUsers.includes(u.username)) {
+          mentionedUsers.push(u.username);
+        }
+      });
+
+      if (mentionedUsers.length > 0) {
+        await createNotification({
+          actor: String(req.user?.username || "Someone"),
+          actorRole: String(req.user?.role || ""),
+          action: "mentioned you in a",
+          resourceType: "project comment",
+          resourceName: project.name,
+          assignees: mentionedUsers,
+          details: `"${message.length > 50 ? message.substring(0, 50) + "..." : message}"`,
+          resourceId: String(project._id),
+        });
+      }
+    }
+
+    const authorUserId = String(req.user?.sub || req.user?.id || "");
+    const userSettings = await Settings.findOne({ userId: authorUserId }).lean();
+
+    const commentData = {
+      id: String(created._id),
+      projectId: String(created.projectId),
+      message: String(created.message || ""),
+      authorUserId: authorUserId,
+      authorUsername: String(created.authorUsername || ""),
+      authorFullName: userSettings?.fullName || "",
+      authorAvatar: userSettings?.avatarDataUrl || userSettings?.avatarUrl || "",
+      authorRole: String(created.authorRole || ""),
+      attachments: Array.isArray(created.attachments) ? created.attachments.map(a => ({
+        fileName: a.fileName || "",
+        mimeType: a.mimeType || "",
+        size: a.size || 0,
+        uploadedAt: a.uploadedAt,
+        url: a.url
+      })) : [],
+      createdAt: created.createdAt,
+    };
+    
+    if (global.io) {
+      global.io.to(`project-${project._id}`).emit("new-project-comment", commentData);
+    }
+
+    return res.status(201).json({ item: commentData });
   } catch (err) {
     return next(err);
   }
