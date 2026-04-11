@@ -504,6 +504,11 @@ router.put("/:id", requireAuth, async (req, res, next) => {
 
     const patch = { ...parsed.data };
 
+    const project = await Project.findById(req.params.id);
+    if (!project) {
+      return res.status(404).json({ error: { message: "Project not found" } });
+    }
+
     // Upload Logo to S3 if update includes new base64 logo
     if (patch.logo?.url && patch.logo.url.startsWith("data:")) {
       try {
