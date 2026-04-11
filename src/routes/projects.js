@@ -544,24 +544,26 @@ router.put("/:id", requireAuth, async (req, res, next) => {
       }));
     }
 
-    // Update fields
-    if (patch.name !== undefined) project.name = patch.name;
-    if (patch.description !== undefined) project.description = patch.description;
-    if (patch.assignees !== undefined) project.assignees = patch.assignees;
-    if (patch.logo !== undefined) project.logo = patch.logo;
-    if (patch.attachments !== undefined) project.attachments = patch.attachments;
-    if (patch.status !== undefined) project.status = patch.status;
+    // Update fields using findByIdAndUpdate
+    const updated = await Project.findByIdAndUpdate(
+      req.params.id,
+      { $set: patch },
+      { new: true }
+    ).lean();
 
-    await project.save();
+    if (!updated) {
+      return res.status(404).json({ error: { message: "Project not found" } });
+    }
+
     void cacheDel(`project:${req.params.id}`);
 
     await logActivity(
       req,
       "PROJECT_UPDATE",
       "project",
-      project._id,
-      project.name,
-      `Updated project: ${project.name}`
+      updated._id,
+      updated.name,
+      `Updated project: ${updated.name}`
     );
 
     void createNotification({
@@ -569,12 +571,13 @@ router.put("/:id", requireAuth, async (req, res, next) => {
       actorRole: String(req.user?.role || ""),
       action: "updated",
       resourceType: "project",
-      resourceName: project.name,
-      resourceId: String(project._id),
+      resourceName: updated.name,
+      resourceId: String(updated._id),
     });
 
-    return res.json({ item: withId(project.toObject()) });
+    return res.json({ item: withId(updated) });
   } catch (err) {
+    console.error("Project Update Error:", err);
     return next(err);
   }
 });
