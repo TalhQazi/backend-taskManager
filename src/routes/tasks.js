@@ -354,6 +354,8 @@ router.post("/", requireAuth, async (req, res, next) => {
       return res.status(400).json({ error: { message: "Invalid payload", details: parsed.error.errors } });
     }
 
+    const data = parsed.data;
+
     // Convert Base64 attachments to S3 URLs if present
     if (data.attachment?.url && data.attachment.url.startsWith("data:")) {
       try {
