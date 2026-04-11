@@ -222,11 +222,6 @@ function escapeRegExp(s) {
   return String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-// Field projection to exclude heavy base64 attachment data from list queries
-const LIST_PROJECTION = {
-  'attachment.url': 0,
-  'attachments.url': 0,
-};
 
 router.get("/", requireAuth, async (req, res, next) => {
   try {
@@ -276,7 +271,7 @@ router.get("/", requireAuth, async (req, res, next) => {
     const cacheKey = `tasks:list:${role}:${req.user?.sub || ''}:p${page}:l${limit}:s${searchQ}:st${statusQ}:pr${priorityQ}`;
     const result = await cacheWrap(cacheKey, async () => {
       const [items, total] = await Promise.all([
-        Task.find(filter, LIST_PROJECTION).sort({ createdAt: -1 }).skip(skip).limit(limit).lean(),
+        Task.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit).lean(),
         Task.countDocuments(filter),
       ]);
       return paginatedResponse(items.map(withId), total, page, limit);
