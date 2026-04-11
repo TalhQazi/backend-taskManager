@@ -315,7 +315,13 @@ router.get("/", requireAuth, async (req, res, next) => {
           assignees: 1,
           logo: {
             fileName: { $ifNull: ["$logo.fileName", ""] },
-            url: { $ifNull: ["$logo.url", ""] },
+            url: { 
+              $cond: {
+                if: { $eq: [{ $substrCP: [{ $ifNull: ["$logo.url", ""] }, 0, 5] }, "data:"] },
+                then: "", 
+                else: { $ifNull: ["$logo.url", ""] }
+              }
+            },
             mimeType: { $ifNull: ["$logo.mimeType", ""] },
             size: { $ifNull: ["$logo.size", 0] },
           },
