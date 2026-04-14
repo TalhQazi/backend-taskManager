@@ -6,7 +6,7 @@ const TaskCommentSchema = new mongoose.Schema(
     authorUserId: { type: String, default: "" },
     authorUsername: { type: String, default: "" },
     authorRole: { type: String, default: "" },
-    message: { type: String, required: true },
+    message: { type: String, default: "" },
     attachments: [
       {
         fileName: { type: String, default: "" },

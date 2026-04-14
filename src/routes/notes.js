@@ -19,6 +19,12 @@ router.get("/", requireAuth, async (req, res, next) => {
 router.post("/", requireAuth, async (req, res, next) => {
   try {
     const userId = req.user.sub || req.user.id;
+    console.log("Creating note for user:", userId);
+    
+    if (!userId) {
+      return res.status(401).json({ error: { message: "User ID not found" } });
+    }
+
     const { title, content, color, isPinned } = req.body;
     
     const note = await Note.create({
@@ -26,11 +32,13 @@ router.post("/", requireAuth, async (req, res, next) => {
       title: title || "",
       content: content || "",
       color: color || "#ffffff",
-      isPinned: isPinned || false
+      isPinned: !!isPinned
     });
     
+    console.log("Note created:", note._id);
     res.status(201).json({ item: { ...note.toObject(), id: note._id } });
   } catch (err) {
+    console.error("Note creation error:", err);
     next(err);
   }
 });
