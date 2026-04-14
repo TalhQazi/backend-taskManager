@@ -134,7 +134,6 @@ router.get("/", requireAuth, async (_req, res, next) => {
   try {
     const result = await cacheWrap("appliances:list", async () => {
       const items = await Appliance.find()
-        .select("-tagPhotoDataUrl")
         .sort({ createdAt: -1 })
         .lean();
       return { items };

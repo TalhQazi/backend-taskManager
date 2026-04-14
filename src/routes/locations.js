@@ -58,6 +58,7 @@ const adminUiSchema = z.object({
   contactPhone: z.string().optional(),
   contactName: z.string().optional(),
   tasksCount: z.number().optional(),
+  employeeCount: z.number().optional(),
   status: z.enum(["active", "inactive"]).optional(),
   photoDataUrl: z.string().optional(),
   photoFileName: z.string().optional(),
@@ -69,7 +70,6 @@ router.get("/", requireAuth, async (_req, res, next) => {
   try {
     const result = await cacheWrap("locations:list", async () => {
       const items = await Location.find()
-        .select("-photoDataUrl")
         .sort({ createdAt: -1 })
         .lean();
       return { items: items.map(withId) };
@@ -94,7 +94,9 @@ router.post("/", requireAuth, async (req, res, next) => {
         type: mappedType,
         phone: adminParsed.data.contactPhone || "",
         manager: adminParsed.data.contactName || "",
-        employeeCount: Number.isFinite(adminParsed.data.tasksCount) ? adminParsed.data.tasksCount : 0,
+        employeeCount: Number.isFinite(adminParsed.data.employeeCount)
+          ? adminParsed.data.employeeCount
+          : (Number.isFinite(adminParsed.data.tasksCount) ? adminParsed.data.tasksCount : 0),
         status: adminParsed.data.status || "active",
         operatingHours: "",
         photoDataUrl: adminParsed.data.photoDataUrl || "",

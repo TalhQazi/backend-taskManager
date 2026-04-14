@@ -171,7 +171,6 @@ router.get("/", requireAuth, async (_req, res, next) => {
   try {
     const result = await cacheWrap("vehicles:list", async () => {
       const items = await Vehicle.find()
-        .select("-tagPhotoDataUrl")
         .sort({ createdAt: -1 })
         .lean();
       return { items: items.map(withId) };
@@ -179,6 +178,19 @@ router.get("/", requireAuth, async (_req, res, next) => {
     res.json(result);
   } catch (err) {
     next(err);
+  }
+});
+
+router.get("/:id", requireAuth, async (req, res, next) => {
+  try {
+    const id = String(req.params.id || "").trim();
+    const item = await Vehicle.findById(id).lean();
+    if (!item) {
+      return res.status(404).json({ error: { message: "Vehicle not found" } });
+    }
+    return res.json({ item: withId(item) });
+  } catch (err) {
+    return next(err);
   }
 });
 
