@@ -411,6 +411,13 @@ router.get("/:id", requireAuth, async (req, res, next) => {
                   attachmentNote: 1,
                   attachment: {
                     fileName: { $ifNull: ["$attachment.fileName", ""] },
+                    url: { 
+                      $cond: {
+                        if: { $eq: [{ $substrCP: [{ $ifNull: ["$attachment.url", ""] }, 0, 5] }, "data:"] },
+                        then: "",
+                        else: { $ifNull: ["$attachment.url", ""] }
+                      }
+                    },
                     mimeType: { $ifNull: ["$attachment.mimeType", ""] },
                     size: { $ifNull: ["$attachment.size", 0] },
                   },
@@ -420,6 +427,13 @@ router.get("/:id", requireAuth, async (req, res, next) => {
                       as: "att",
                       in: {
                         fileName: "$$att.fileName",
+                        url: {
+                          $cond: {
+                            if: { $eq: [{ $substrCP: [{ $ifNull: ["$$att.url", ""] }, 0, 5] }, "data:"] },
+                            then: "",
+                            else: { $ifNull: ["$$att.url", ""] }
+                          }
+                        },
                         mimeType: "$$att.mimeType",
                         size: "$$att.size",
                         uploadedAt: "$$att.uploadedAt",
@@ -462,7 +476,25 @@ router.get("/:id", requireAuth, async (req, res, next) => {
               mimeType: { $ifNull: ["$logo.mimeType", ""] },
               size: { $ifNull: ["$logo.size", 0] },
             },
-            attachments: 1,
+            attachments: {
+              $map: {
+                input: { $ifNull: ["$attachments", []] },
+                as: "att",
+                in: {
+                  fileName: "$$att.fileName",
+                  url: {
+                    $cond: {
+                      if: { $eq: [{ $substrCP: [{ $ifNull: ["$$att.url", ""] }, 0, 5] }, "data:"] },
+                      then: "",
+                      else: { $ifNull: ["$$att.url", ""] }
+                    }
+                  },
+                  mimeType: "$$att.mimeType",
+                  size: "$$att.size",
+                  uploadedAt: "$$att.uploadedAt",
+                },
+              },
+            },
             tasks: 1,
             taskCount: 1,
             status: 1,
