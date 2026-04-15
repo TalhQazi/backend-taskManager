@@ -68,7 +68,33 @@ const createSchema = z.object({
   })).optional().default([]),
 });
 
-const updateSchema = createSchema.partial();
+const updateSchema = z.object({
+  title: z.string().min(1).optional(),
+  description: z.string().min(1).optional(),
+  projectId: z.string().optional(),
+  assignees: z.array(z.string()).optional(),
+  priority: z.enum(["high", "medium", "low"]).optional(),
+  status: z.enum(["pending", "in-progress", "completed", "overdue"]).optional(),
+  dueDate: z.union([z.string(), z.date()]).optional(),
+  dueTime: z.string().optional(),
+  location: z.string().optional(),
+  attachmentFileName: z.string().optional(),
+  attachmentNote: z.string().optional(),
+  attachment: z.object({
+    fileName: z.string().optional(),
+    url: z.string().optional(),
+    mimeType: z.string().optional(),
+    size: z.number().optional(),
+    uploadedAt: z.union([z.date(), z.string()]).optional(),
+  }).optional(),
+  attachments: z.array(z.object({
+    fileName: z.string().optional(),
+    url: z.string().optional(),
+    mimeType: z.string().optional(),
+    size: z.number().optional(),
+    uploadedAt: z.union([z.date(), z.string()]).optional(),
+  })).optional(),
+});
 
 function withId(doc) {
   if (!doc) return doc;
@@ -953,12 +979,15 @@ router.patch("/:id/status", requireAuth, async (req, res, next) => {
 
 router.put("/:id", requireAuth, async (req, res, next) => {
   try {
-    const parsed = updateSchema.safeParse({
-      ...req.body,
-      assignees: normalizeAssignees(req.body?.assignees ?? req.body?.assignee),
-    });
+    console.log("PUT /api/tasks Update Payload:", JSON.stringify(req.body, null, 2));
+    const parseData = { ...req.body };
+    if (req.body?.assignees !== undefined || req.body?.assignee !== undefined) {
+      parseData.assignees = normalizeAssignees(req.body?.assignees ?? req.body?.assignee);
+    }
+
+    const parsed = updateSchema.safeParse(parseData);
     if (!parsed.success) {
-      return res.status(400).json({ error: { message: "Invalid payload" } });
+      return res.status(400).json({ error: { message: "Invalid payload", details: parsed.error.errors } });
     }
 
     const firstAssignee = parsed.data.assignees?.[0] || "";
@@ -973,9 +1002,42 @@ router.put("/:id", requireAuth, async (req, res, next) => {
 
     const patch = { ...parsed.data };
     if (patch.dueDate) {
-      patch.dueDate = new Date(patch.dueDate);
+      const d = new Date(patch.dueDate);
+      if (!isNaN(d.getTime())) {
+        patch.dueDate = d;
+      } else {
+        delete patch.dueDate;
+      }
+    } else if (patch.dueDate === "") {
+      patch.dueDate = null;
     }
 
+    // Convert Base64 attachments to S3 URLs if present on update
+    if (patch.attachment?.url && patch.attachment.url.startsWith("data:")) {
+      try {
+        const { buffer, mimeType } = base64ToBuffer(patch.attachment.url);
+        const s3Url = await uploadToS3(buffer, patch.attachment.fileName || "attachment", mimeType, "tasks");
+        patch.attachment.url = s3Url;
+      } catch (err) {
+        console.error("Failed to upload updated primary attachment to S3:", err);
+      }
+    }
+
+    if (Array.isArray(patch.attachments) && patch.attachments.length > 0) {
+      patch.attachments = await Promise.all(patch.attachments.map(async (att) => {
+        if (att.url && att.url.startsWith("data:")) {
+          try {
+            const { buffer, mimeType } = base64ToBuffer(att.url);
+            const s3Url = await uploadToS3(buffer, att.fileName || "attachment", mimeType, "tasks");
+            return { ...att, url: s3Url, uploadedAt: att.uploadedAt || new Date() };
+          } catch (err) {
+            console.error("Failed to upload updated multi-attachment to S3:", err);
+            return att;
+          }
+        }
+        return att;
+      }));
+    }
 
     delete patch.assignee;
     delete patch.assigneeInitials;

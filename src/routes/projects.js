@@ -87,10 +87,10 @@ const taskCreateSchema = z.object({
 });
 
 const logoSchema = z.object({
-  fileName: z.string().optional().default(""),
-  url: z.string().optional().default(""),
-  mimeType: z.string().optional().default(""),
-  size: z.number().optional().default(0),
+  fileName: z.string().optional(),
+  url: z.string().optional(),
+  mimeType: z.string().optional(),
+  size: z.number().optional(),
 }).optional();
 
 const projectCreateSchema = z.object({
@@ -490,15 +490,15 @@ router.get("/:id", requireAuth, async (req, res, next) => {
 const projectUpdateSchema = z.object({
   name: z.string().min(1, "Project name is required").optional(),
   description: z.string().optional(),
-  assignees: z.array(z.string()).optional().default([]),
+  assignees: z.array(z.string()).optional(),
   logo: logoSchema,
   attachments: z.array(z.object({
-    fileName: z.string().optional().default(""),
-    url: z.string().optional().default(""),
-    mimeType: z.string().optional().default(""),
-    size: z.number().optional().default(0),
-    uploadedAt: z.date().optional(),
-  })).optional().default([]),
+    fileName: z.string().optional(),
+    url: z.string().optional(),
+    mimeType: z.string().optional(),
+    size: z.number().optional(),
+    uploadedAt: z.union([z.date(), z.string()]).optional(),
+  })).optional(),
   status: z.string().optional(),
 });
 
