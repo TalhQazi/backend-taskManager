@@ -1,4 +1,4 @@
-const { S3Client, PutObjectCommand, DeleteObjectCommand } = require("@aws-sdk/client-s3");
+const { S3Client, PutObjectCommand, DeleteObjectCommand, GetObjectCommand } = require("@aws-sdk/client-s3");
 const path = require("path");
 
 const s3Client = new S3Client({
@@ -73,6 +73,40 @@ async function deleteFromS3(url) {
 }
 
 /**
+ * Get a file from S3 by its key and return the readable stream + content type.
+ * Used to proxy S3 files through the backend API to avoid CORS issues.
+ * @param {string} key - The S3 object key (e.g. "projects/logos/1234-abc.png")
+ * @returns {Promise<{stream: ReadableStream, contentType: string, contentLength: number}>}
+ */
+async function getFromS3(key) {
+  const bucketName = process.env.AWS_S3_BUCKET_NAME;
+  const command = new GetObjectCommand({
+    Bucket: bucketName,
+    Key: key,
+  });
+  const response = await s3Client.send(command);
+  return {
+    stream: response.Body,
+    contentType: response.ContentType || "application/octet-stream",
+    contentLength: response.ContentLength || 0,
+  };
+}
+
+/**
+ * Extract the S3 object key from a full S3 URL.
+ * @param {string} url - Full S3 URL
+ * @returns {string|null} - The object key, or null if not a valid S3 URL
+ */
+function extractS3Key(url) {
+  if (!url || !url.includes("amazonaws.com")) return null;
+  const bucketName = process.env.AWS_S3_BUCKET_NAME;
+  const region = process.env.AWS_REGION || "us-east-1";
+  const pattern = new RegExp(`https://${bucketName}\\.s3\\.${region}\\.amazonaws\\.com/(.+)`);
+  const match = url.match(pattern);
+  return match ? match[1] : null;
+}
+
+/**
  * Helper to convert Base64 string to Buffer for S3 upload
  * @param {string} base64String - Data URI (data:image/png;base64,...)
  * @returns {{buffer: Buffer, mimeType: string}}
@@ -92,5 +126,7 @@ function base64ToBuffer(base64String) {
 module.exports = {
   uploadToS3,
   deleteFromS3,
+  getFromS3,
+  extractS3Key,
   base64ToBuffer,
 };

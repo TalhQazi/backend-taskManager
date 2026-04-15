@@ -205,6 +205,39 @@ app.get("/health", (_req, res) => {
   res.json({ ok: true });
 });
 
+// S3 Proxy endpoint — serves S3 files through the backend to avoid CORS/OpaqueResponseBlocking issues
+const { getFromS3 } = require("./lib/s3");
+const { requireAuth } = require("./middleware/auth");
+
+app.get("/api/s3-proxy/*", requireAuth, async (req, res) => {
+  try {
+    // Extract the S3 key from the URL path after /api/s3-proxy/
+    const s3Key = req.params[0];
+    if (!s3Key) {
+      return res.status(400).json({ error: { message: "Missing S3 key" } });
+    }
+
+    const { stream, contentType, contentLength } = await getFromS3(s3Key);
+
+    // Set proper headers for caching and content type
+    res.set("Content-Type", contentType);
+    if (contentLength) {
+      res.set("Content-Length", String(contentLength));
+    }
+    res.set("Cache-Control", "public, max-age=86400, immutable"); // Cache for 24h
+    res.set("Access-Control-Allow-Origin", "*");
+
+    // Pipe the S3 stream directly to the response
+    stream.pipe(res);
+  } catch (err) {
+    if (err.name === "NoSuchKey" || err.$metadata?.httpStatusCode === 404) {
+      return res.status(404).json({ error: { message: "File not found" } });
+    }
+    console.error("[S3 Proxy] Error:", err.message || err);
+    return res.status(500).json({ error: { message: "Failed to fetch file" } });
+  }
+});
+
 app.use("/api/auth", authRoutes);
 app.use("/api/tasks", tasksRoutes);
 app.use("/api/employees", employeesRoutes);
