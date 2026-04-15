@@ -1,5 +1,6 @@
 const express = require("express");
 const { z } = require("zod");
+const axios = require("axios");
 
 const Location = require("../models/Location");
 const ActivityLog = require("../models/ActivityLog");
@@ -65,7 +66,7 @@ const updateSchema = createSchema.partial();
 
 router.get("/", requireAuth, async (_req, res, next) => {
   try {
-    const items = await Location.find().sort({ createdAt: -1 }).lean();
+    const items = await Location.find().select("-photoDataUrl").sort({ createdAt: -1 }).lean();
     res.json({ items: items.map(withId) });
   } catch (err) {
     next(err);
@@ -148,6 +149,16 @@ router.post("/", requireAuth, async (req, res, next) => {
     });
     
     res.status(201).json({ item: withId(created.toObject()) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get("/:id/photo", requireAuth, async (req, res, next) => {
+  try {
+    const loc = await Location.findById(req.params.id).select("photoDataUrl photoFileName").lean();
+    if (!loc) return res.status(404).json({ error: { message: "Location not found" } });
+    res.json({ photoDataUrl: loc.photoDataUrl || "", photoFileName: loc.photoFileName || "" });
   } catch (err) {
     next(err);
   }
@@ -300,27 +311,20 @@ router.get("/cities", requireAuth, async (req, res, next) => {
       return res.json({ cities: [] });
     }
 
-    // Common cities by country
-    const citiesByCountry = {
-      "USA": ["New York", "Los Angeles", "Chicago", "Houston", "Phoenix", "Philadelphia", "San Antonio", "San Diego", "Dallas", "San Jose", "Austin", "Jacksonville", "Fort Worth", "Columbus", "Charlotte", "San Francisco", "Indianapolis", "Seattle", "Denver", "Washington", "Boston", "El Paso", "Nashville", "Detroit", "Oklahoma City", "Portland", "Las Vegas", "Louisville", "Baltimore", "Milwaukee", "Albuquerque", "Tucson", "Fresno", "Mesa", "Sacramento", "Atlanta", "Kansas City", "Colorado Springs", "Omaha", "Raleigh", "Miami", "Long Beach", "Virginia Beach", "Oakland", "Minneapolis", "Tulsa", "Tampa", "Arlington", "New Orleans"],
-      "Canada": ["Toronto", "Montreal", "Vancouver", "Calgary", "Edmonton", "Ottawa", "Winnipeg", "Quebec City", "Hamilton", "Kitchener", "London", "Victoria", "Halifax", "Oshawa", "Windsor", "Saskatoon", "St. Catharines", "Regina", "Barrie", "St. John's", "Kelowna", "Sherbrooke", "Guelph", "Abbotsford", "Kingston", "Kanata", "Milton", "Moncton", "Whitehorse", "Red Deer"],
-      "UK": ["London", "Birmingham", "Manchester", "Glasgow", "Liverpool", "Leeds", "Sheffield", "Edinburgh", "Bristol", "Cardiff", "Belfast", "Leicester", "Coventry", "Bradford", "Nottingham", "Plymouth", "Stoke-on-Trent", "Wolverhampton", "Derby", "Swansea", "Southampton", "Aberdeen", "Portsmouth", "York", "Dundee", "Oxford", "Cambridge"],
-      "Germany": ["Berlin", "Hamburg", "Munich", "Cologne", "Frankfurt", "Stuttgart", "Dusseldorf", "Dortmund", "Essen", "Leipzig", "Bremen", "Dresden", "Hanover", "Nuremberg", "Duisburg", "Bochum", "Wuppertal", "Bielefeld", "Bonn", "Munster", "Karlsruhe", "Mannheim", "Augsburg", "Wiesbaden", "Gelsenkirchen", "Mönchengladbach", "Braunschweig", "Chemnitz", "Kiel", "Aachen"],
-      "France": ["Paris", "Marseille", "Lyon", "Toulouse", "Nice", "Nantes", "Strasbourg", "Montpellier", "Bordeaux", "Lille", "Rennes", "Reims", "Le Havre", "Saint-Etienne", "Toulon", "Grenoble", "Dijon", "Angers", "Nîmes", "Villeurbanne", "Saint-Denis", "Le Mans", "Aix-en-Provence", "Brest", "Limoges", "Tours", "Amiens", "Perpignan", "Metz", "Besançon"],
-      "Australia": ["Sydney", "Melbourne", "Brisbane", "Perth", "Adelaide", "Gold Coast", "Newcastle", "Canberra", "Sunshine Coast", "Wollongong", "Hobart", "Geelong", "Townsville", "Cairns", "Toowoomba", "Darwin", "Ballarat", "Bendigo", "Albury", "Launceston", "Mackay", "Rockhampton", "Bunbury", "Bundaberg", "Coffs Harbour", "Wagga Wagga", "Hervey Bay", "Mildura", "Shepparton", "Port Macquarie"],
-      "Pakistan": ["Karachi", "Lahore", "Islamabad", "Faisalabad", "Rawalpindi", "Gujranwala", "Multan", "Peshawar", "Quetta", "Sialkot", "Bahawalpur", "Sargodha", "Abbottabad", "Sheikhupura", "Jhelum", "Gujrat", "Mardan", "Kasur", "Dera Ghazi Khan", "Sahiwal", "Okara", "Wah", "Rahim Yar Khan", "Chiniot", "Kamoke", "Mandi Bahauddin", "Jaranwala", "Chishtian", "Attock", "Kotli"],
-      "India": ["Mumbai", "Delhi", "Bangalore", "Hyderabad", "Ahmedabad", "Chennai", "Kolkata", "Surat", "Pune", "Jaipur", "Lucknow", "Kanpur", "Nagpur", "Indore", "Thane", "Bhopal", "Visakhapatnam", "Pimpri-Chinchwad", "Patna", "Vadodara", "Ghaziabad", "Ludhiana", "Agra", "Nashik", "Faridabad", "Meerut", "Rajkot", "Kalyan-Dombivli", "Vasai-Virar", "Varanasi"],
-      "UAE": ["Dubai", "Abu Dhabi", "Sharjah", "Ajman", "Ras Al Khaimah", "Fujairah", "Umm Al Quwain", "Al Ain"],
-      "Saudi Arabia": ["Riyadh", "Jeddah", "Mecca", "Medina", "Dammam", "Taif", "Tabuk", "Buraidah", "Khamis Mushait", "Abha", "Hail", "Najran", "Jazan", "Al Bahah", "Skaka", "Arar", "Hafar Al-Batin", "Al-Kharj", "Qatif", "Khobar"],
-    };
+    // Fetch cities from DB and external API in parallel
+    const [existingCities, apiCities] = await Promise.all([
+      Location.distinct("city", { country }).lean(),
+      axios
+        .post(
+          "https://countriesnow.space/api/v0.1/countries/cities",
+          { country },
+          { timeout: 5000 }
+        )
+        .then((r) => (Array.isArray(r.data?.data) ? r.data.data : []))
+        .catch(() => []), // if API is down, fall back silently
+    ]);
 
-    // Get existing cities from database for this country
-    const existingCities = await Location.distinct("city", { country }).lean();
-    
-    // Combine with common cities
-    const commonCities = citiesByCountry[country] || [];
-    const allCities = [...new Set([...existingCities.filter(Boolean), ...commonCities])].sort();
-    
+    const allCities = [...new Set([...existingCities.filter(Boolean), ...apiCities])].sort();
     res.json({ cities: allCities });
   } catch (err) {
     next(err);

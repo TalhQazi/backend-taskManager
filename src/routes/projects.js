@@ -4,6 +4,7 @@ const { z } = require("zod");
 
 const Project = require("../models/Project");
 const Task = require("../models/Task");
+const Archive = require("../models/Archive");
 const ActivityLog = require("../models/ActivityLog");
 const { requireAuth } = require("../middleware/auth");
 const { createNotification } = require("../utils/notifications");
@@ -219,7 +220,12 @@ router.get("/", requireAuth, async (_req, res, next) => {
           name: 1,
           description: 1,
           assignees: 1,
-          logo: { $ifNull: ["$logo", { fileName: "", url: "", mimeType: "", size: 0 }] },
+          logo: {
+            fileName: { $ifNull: ["$logo.fileName", ""] },
+            mimeType: { $ifNull: ["$logo.mimeType", ""] },
+            size: { $ifNull: ["$logo.size", 0] },
+          },
+          attachments: 1,
           taskCount: 1,
           status: 1,
           createdAt: 1,
@@ -233,6 +239,17 @@ router.get("/", requireAuth, async (_req, res, next) => {
     return res.json({ items });
   } catch (err) {
     return next(err);
+  }
+});
+
+// GET project logo only (avoids sending large base64 in list endpoint)
+router.get("/:id/logo", requireAuth, async (req, res, next) => {
+  try {
+    const project = await Project.findById(req.params.id).select("logo").lean();
+    if (!project) return res.status(404).json({ error: { message: "Project not found" } });
+    res.json({ logo: project.logo || { fileName: "", url: "", mimeType: "", size: 0 } });
+  } catch (err) {
+    next(err);
   }
 });
 
@@ -295,6 +312,7 @@ router.get("/:id", requireAuth, async (req, res, next) => {
           description: 1,
           assignees: 1,
           logo: { $ifNull: ["$logo", { fileName: "", url: "", mimeType: "", size: 0 }] },
+          attachments: 1,
           tasks: 1,
           taskCount: 1,
           status: 1,
