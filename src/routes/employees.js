@@ -96,6 +96,11 @@ function escapeRegExp(s) {
      const ctx = await requireEmployeeSelf(req, res);
      if (!ctx) return;
      const { user, employee } = ctx;
+
+     const userId = String(user._id || "");
+     const settings = userId ? await Settings.findOne({ userId }, { avatarUrl: 1, avatarDataUrl: 1 }).lean() : null;
+     const avatarUrl = String(settings?.avatarUrl || settings?.avatarDataUrl || "").trim();
+
      res.json({
        item: {
          id: String(employee._id),
@@ -105,6 +110,7 @@ function escapeRegExp(s) {
          company: employee.company || "",
          location: employee.location || "",
          status: employee.status || "active",
+         avatarUrl: avatarUrl || undefined,
          username: user.username || user.email || "",
          role: "employee",
        },
@@ -395,32 +401,45 @@ router.get("/", requireAuth, async (_req, res, next) => {
   try {
     const result = await cacheWrap('employees:list', async () => {
       const items = await Employee.find().sort({ createdAt: -1 }).lean();
-      
-      // Get unique emails from employees to fetch their settings
-      const employeeEmails = items.map(e => e.email).filter(Boolean);
-      const settings = await Settings.find({
-        $or: [
-          { email: { $in: employeeEmails } },
-          { userId: { $in: items.map(e => String(e._id)) } }
-        ]
-      }).select("email userId avatarUrl avatarDataUrl").lean();
-      
-      // Create a map of email -> avatarUrl
-      const avatarMap = new Map();
-      settings.forEach(s => {
-        if (s.avatarDataUrl || s.avatarUrl) {
-          const avatar = s.avatarDataUrl || s.avatarUrl;
-          if (s.email) avatarMap.set(s.email, avatar);
-          if (s.userId) avatarMap.set(String(s.userId), avatar);
-        }
-      });
-      
-      // Merge employee data with avatar
-      const itemsWithAvatars = items.map(e => {
-        const avatarUrl = avatarMap.get(e.email) || avatarMap.get(String(e._id)) || "";
+
+      // Resolve avatars from Settings. Settings are stored by User userId, not Employee _id.
+      const employeeEmails = items.map((e) => String(e.email || "").trim()).filter(Boolean);
+      const users = employeeEmails.length
+        ? await User.find(
+            { email: { $in: employeeEmails } },
+            { _id: 1, email: 1 }
+          ).lean()
+        : [];
+
+      const emailToUserId = new Map(
+        users
+          .map((u) => [String(u.email || "").trim(), String(u._id)])
+          .filter(([email, id]) => Boolean(email) && Boolean(id))
+      );
+
+      const userIds = Array.from(new Set(Array.from(emailToUserId.values())));
+      const settings = userIds.length
+        ? await Settings.find({ userId: { $in: userIds } })
+            .select("userId avatarUrl avatarDataUrl")
+            .lean()
+        : [];
+
+      const userIdToAvatar = new Map(
+        settings
+          .map((s) => [
+            String(s.userId),
+            String(s.avatarUrl || s.avatarDataUrl || "").trim(),
+          ])
+          .filter(([, url]) => Boolean(url))
+      );
+
+      const itemsWithAvatars = items.map((e) => {
+        const email = String(e.email || "").trim();
+        const userId = emailToUserId.get(email);
+        const avatarUrl = userId ? userIdToAvatar.get(String(userId)) || "" : "";
         return { ...e, avatarUrl, avatarDataUrl: avatarUrl };
       });
-      
+
       return { items: itemsWithAvatars.map(withId) };
     }, 60);
 
@@ -540,14 +559,44 @@ router.put("/:id", requireAuth, async (req, res, next) => {
     // Sync user account if password was updated
     if (patch.passwordHash) {
       try {
-        await User.findOneAndUpdate(
-          { email: updated.email },
-          { passwordHash: patch.passwordHash }
-        );
+        const authUserId = String(req.user?.sub || "").trim();
+        const authRole = String(req.user?.role || "").trim();
+
+        if (authRole === "employee" && authUserId) {
+          await User.findByIdAndUpdate(authUserId, { passwordHash: patch.passwordHash });
+        } else {
+          const email = String(updated.email || "").trim();
+          await User.findOneAndUpdate(
+            { email: new RegExp(`^${escapeRegExp(email)}$`, "i") },
+            { passwordHash: patch.passwordHash }
+          );
+        }
       } catch (userErr) {
         console.error("Failed to update user password:", userErr.message);
       }
     }
+
+    // Sync user account name when employee name changes (Admin panel reads from User collection)
+    if (typeof patch.name === "string" && patch.name.trim()) {
+      try {
+        const authUserId = String(req.user?.sub || "").trim();
+        const authRole = String(req.user?.role || "").trim();
+
+        if (authRole === "employee" && authUserId) {
+          await User.findByIdAndUpdate(authUserId, { name: updated.name });
+        }
+
+        const email = String(updated.email || "").trim();
+        await User.findOneAndUpdate(
+          { email: new RegExp(`^${escapeRegExp(email)}$`, "i") },
+          { name: updated.name }
+        );
+      } catch (userErr) {
+        console.error("Failed to update user name:", userErr.message);
+      }
+    }
+
+    await cacheDel("employees:list");
 
     // Create notification for all admin/manager users
     await createNotification({
