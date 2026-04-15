@@ -536,8 +536,22 @@ const projectUpdateSchema = z.object({
 
 router.put("/:id", requireAuth, async (req, res, next) => {
   try {
+    // Debug: Log incoming logo payload info (not the full base64)
+    if (req.body?.logo) {
+      console.log("[ProjectUpdate] Logo payload received:", {
+        fileName: req.body.logo.fileName,
+        mimeType: req.body.logo.mimeType,
+        size: req.body.logo.size,
+        urlPrefix: req.body.logo.url ? req.body.logo.url.substring(0, 50) + "..." : "NO URL",
+        urlLength: req.body.logo.url ? req.body.logo.url.length : 0,
+      });
+    } else {
+      console.log("[ProjectUpdate] No logo in request body. Keys:", Object.keys(req.body || {}));
+    }
+
     const parsed = projectUpdateSchema.safeParse(req.body);
     if (!parsed.success) {
+      console.error("[ProjectUpdate] Schema validation failed:", JSON.stringify(parsed.error.errors, null, 2));
       return res.status(400).json({ error: { message: "Invalid payload", details: parsed.error.errors } });
     }
 
@@ -550,13 +564,18 @@ router.put("/:id", requireAuth, async (req, res, next) => {
 
     // Upload Logo to S3 if update includes new base64 logo
     if (patch.logo?.url && patch.logo.url.startsWith("data:")) {
+      console.log("[ProjectUpdate] Uploading logo to S3...", { fileName: patch.logo.fileName });
       try {
         const { buffer, mimeType } = base64ToBuffer(patch.logo.url);
         const s3Url = await uploadToS3(buffer, patch.logo.fileName || "logo", mimeType, "projects/logos");
+        console.log("[ProjectUpdate] S3 upload SUCCESS:", s3Url);
         patch.logo.url = s3Url;
       } catch (err) {
-        console.error("Failed to upload updated project logo to S3:", err);
+        console.error("[ProjectUpdate] S3 upload FAILED:", err.message || err);
+        // Keep the base64 data URL in MongoDB as fallback
       }
+    } else if (patch.logo) {
+      console.log("[ProjectUpdate] Logo present but no base64 data URL. url starts with:", patch.logo.url?.substring(0, 30));
     }
 
     // Upload Project Attachments to S3 for updates
@@ -577,6 +596,7 @@ router.put("/:id", requireAuth, async (req, res, next) => {
     }
 
     // Update fields using findByIdAndUpdate
+    console.log("[ProjectUpdate] Saving to MongoDB. Patch keys:", Object.keys(patch), patch.logo ? { logoUrl: patch.logo.url?.substring(0, 60) } : "no logo in patch");
     const updated = await Project.findByIdAndUpdate(
       req.params.id,
       { $set: patch },
@@ -586,6 +606,8 @@ router.put("/:id", requireAuth, async (req, res, next) => {
     if (!updated) {
       return res.status(404).json({ error: { message: "Project not found" } });
     }
+
+    console.log("[ProjectUpdate] Saved. DB logo URL:", updated.logo?.url?.substring(0, 80));
 
     void cacheDel(`project:${req.params.id}`);
 
