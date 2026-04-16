@@ -1,4 +1,5 @@
 const express = require("express");
+const mongoose = require("mongoose");
 const { z } = require("zod");
 const multer = require("multer");
 const path = require("path");
@@ -258,8 +259,21 @@ router.get("/", requireAuth, async (req, res, next) => {
     const searchQ = String(req.query.search || "").trim();
     const statusQ = String(req.query.status || "").trim();
     const priorityQ = String(req.query.priority || "").trim();
+    const projectIdQ = String(req.query.projectId || "").trim();
 
     let filter = {};
+
+    if (projectIdQ) {
+      if (projectIdQ === "none") {
+        filter.projectId = { $exists: false };
+      } else {
+        try {
+          filter.projectId = new mongoose.Types.ObjectId(projectIdQ);
+        } catch (err) {
+          // ignore invalid project IDs
+        }
+      }
+    }
 
     if (role !== "admin" && role !== "super-admin" && role !== "manager") {
       // Employees only see tasks assigned to them
