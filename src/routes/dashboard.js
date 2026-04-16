@@ -60,7 +60,8 @@ router.get("/summary", requireAuth, async (_req, res, next) => {
       vehicleTotal,
       patentTotal,
       websiteTotal,
-      projectTotal
+      projectTotal,
+      openBugReports
     ] = await Promise.all([
       Task.find().lean(),
       Employee.countDocuments(),
@@ -69,6 +70,7 @@ router.get("/summary", requireAuth, async (_req, res, next) => {
       Patent.countDocuments(),
       Website.countDocuments(),
       Project.countDocuments(),
+      require("../models/BugReport").countDocuments({ status: "open" })
     ]);
 
     const isCompletedTask = (t) => String(t?.status || "").toLowerCase() === "completed";
@@ -92,7 +94,7 @@ router.get("/summary", requireAuth, async (_req, res, next) => {
 
     const pendingBugs = tasks.filter((t) => 
       t.category === "bug" && !isCompletedTask(t)
-    ).length;
+    ).length + openBugReports;
 
     const employeesWorkingSet = new Set(
       entriesToday
