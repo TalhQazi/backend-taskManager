@@ -400,7 +400,7 @@ async function logActivity(req, action, resourceType, resourceId, resourceName, 
 router.get("/", requireAuth, async (_req, res, next) => {
   try {
     const result = await cacheWrap('employees:list', async () => {
-      const items = await Employee.find().sort({ createdAt: -1 }).lean();
+      const items = await Employee.find().sort({ name: 1 }).lean();
 
       // Resolve avatars from Settings. Settings are stored by User userId, not Employee _id.
       const employeeEmails = items.map((e) => String(e.email || "").trim()).filter(Boolean);
@@ -576,6 +576,23 @@ router.put("/:id", requireAuth, async (req, res, next) => {
       }
     }
 
+    if (patch.status === "inactive") {
+      const archived = await archiveEmployeeById(req.params.id, req.user);
+      if (archived) {
+         // Create notification
+        await createNotification({
+          actor: req.user?.username || req.user?.name || "Admin",
+          actorRole: req.user?.role || "admin",
+          action: "archived (deactivated)",
+          resourceType: "employee",
+          resourceName: archived.name,
+          resourceId: String(req.params.id),
+        });
+        cacheDel("employees:list");
+        return res.json({ item: withId(archived), archived: true });
+      }
+    }
+
     // Sync user account name when employee name changes (Admin panel reads from User collection)
     if (typeof patch.name === "string" && patch.name.trim()) {
       try {
@@ -614,33 +631,60 @@ router.put("/:id", requireAuth, async (req, res, next) => {
   }
 });
 
+async function archiveEmployeeById(employeeId, archivedBy) {
+  const Employee = require("../models/Employee");
+  const User = require("../models/User");
+  const Archive = require("../models/Archive");
+  
+  const employee = await Employee.findById(employeeId).lean();
+  if (!employee) return null;
+
+  await Archive.create({
+    itemType: "employee",
+    itemData: {
+      originalId: String(employee._id),
+      ...employee,
+    },
+    parentType: "organization",
+    parentId: "system",
+    parentName: "Employees",
+    archivedByUserId: String(archivedBy.sub || archivedBy.id || ""),
+    archivedByUsername: String(archivedBy.username || archivedBy.name || ""),
+    archivedByRole: String(archivedBy.role || ""),
+  });
+
+  // Delete from Employee and corresponding User
+  await Employee.findByIdAndDelete(employeeId);
+  try {
+    await User.deleteOne({ email: employee.email });
+  } catch (err) {
+    console.error("Failed to delete user account during archiving:", err);
+  }
+  
+  return employee;
+}
+
 router.delete("/:id", requireAuth, async (req, res, next) => {
   try {
-    const deleted = await Employee.findByIdAndDelete(req.params.id).lean();
+    const deleted = await archiveEmployeeById(req.params.id, req.user);
     if (!deleted) {
       return res.status(404).json({ error: { message: "Employee not found" } });
     }
     
-    // Also delete corresponding user account
-    try {
-      await User.deleteOne({ email: deleted.email });
-    } catch (userErr) {
-      console.error("Failed to delete user account:", userErr.message);
-    }
-    
     // Log activity
-    await logActivity(req, "EMPLOYEE_DELETE", "employee", req.params.id, deleted.name, `Deleted employee: ${deleted.name}`);
+    await logActivity(req, "EMPLOYEE_ARCHIVE", "employee", req.params.id, deleted.name, `Archived (Deleted) employee: ${deleted.name}`);
     
-    // Create notification for all admin/manager users
+    // Create notification
     await createNotification({
       actor: req.user?.username || req.user?.name || "Admin",
       actorRole: req.user?.role || "admin",
-      action: "deleted",
+      action: "archived",
       resourceType: "employee",
       resourceName: deleted.name,
       resourceId: String(req.params.id),
     });
     
+    cacheDel("employees:list");
     return res.status(204).send();
   } catch (err) {
     return next(err);

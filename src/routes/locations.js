@@ -70,7 +70,7 @@ router.get("/", requireAuth, async (_req, res, next) => {
   try {
     const result = await cacheWrap("locations:list", async () => {
       const items = await Location.find()
-        .sort({ createdAt: -1 })
+        .sort({ name: 1 })
         .lean();
       return { items: items.map(withId) };
     }, 60);

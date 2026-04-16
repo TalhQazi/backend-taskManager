@@ -171,7 +171,7 @@ router.get("/", requireAuth, async (_req, res, next) => {
   try {
     const result = await cacheWrap("vehicles:list", async () => {
       const items = await Vehicle.find()
-        .sort({ createdAt: -1 })
+        .sort({ name: 1 })
         .lean();
       return { items: items.map(withId) };
     }, 60);
@@ -429,6 +429,23 @@ router.put("/:id", requireAuth, async (req, res, next) => {
       new: true,
     }).lean();
 
+    if (patch.status === "inactive") {
+      const archived = await archiveVehicleById(req.params.id, req.user);
+      if (archived) {
+         // Create notification
+        await createNotification({
+          actor: req.user?.username || req.user?.name || "Admin",
+          actorRole: req.user?.role || "admin",
+          action: "archived (deactivated)",
+          resourceType: "vehicle",
+          resourceName: archived.name,
+          resourceId: String(req.params.id),
+        });
+        cacheDel("vehicles:list");
+        return res.json({ item: withId(archived), archived: true });
+      }
+    }
+
     if (!updated) {
       return res.status(404).json({ error: { message: "Vehicle not found" } });
     }
@@ -452,21 +469,46 @@ router.put("/:id", requireAuth, async (req, res, next) => {
   }
 });
 
+async function archiveVehicleById(vehicleId, archivedBy) {
+  const Vehicle = require("../models/Vehicle");
+  const Archive = require("../models/Archive");
+  
+  const vehicle = await Vehicle.findById(vehicleId).lean();
+  if (!vehicle) return null;
+
+  await Archive.create({
+    itemType: "vehicle",
+    itemData: {
+      originalId: String(vehicle._id),
+      ...vehicle,
+    },
+    parentType: "organization",
+    parentId: "system",
+    parentName: "Vehicles",
+    archivedByUserId: String(archivedBy.sub || archivedBy.id || ""),
+    archivedByUsername: String(archivedBy.username || archivedBy.name || ""),
+    archivedByRole: String(archivedBy.role || ""),
+  });
+
+  await Vehicle.findByIdAndDelete(vehicleId);
+  return vehicle;
+}
+
 router.delete("/:id", requireAuth, async (req, res, next) => {
   try {
-    const deleted = await Vehicle.findByIdAndDelete(req.params.id).lean();
+    const deleted = await archiveVehicleById(req.params.id, req.user);
     if (!deleted) {
       return res.status(404).json({ error: { message: "Vehicle not found" } });
     }
     
     // Log activity
-    await logActivity(req, "VEHICLE_DELETE", "vehicle", req.params.id, deleted.name, `Deleted vehicle: ${deleted.name}`);
+    await logActivity(req, "VEHICLE_ARCHIVE", "vehicle", req.params.id, deleted.name, `Archived vehicle: ${deleted.name}`);
 
     // Create notification
     await createNotification({
       actor: req.user?.username || req.user?.name || "Admin",
       actorRole: req.user?.role || "admin",
-      action: "deleted",
+      action: "archived",
       resourceType: "vehicle",
       resourceName: deleted.name,
       resourceId: String(req.params.id),

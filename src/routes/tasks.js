@@ -113,6 +113,8 @@ function withId(doc) {
     attachment: doc.attachment,
     attachmentFileName: doc.attachmentFileName,
     attachmentNote: doc.attachmentNote,
+    startedAt: doc.startedAt,
+    totalTimeSpent: doc.totalTimeSpent || 0,
   };
 }
 
@@ -950,7 +952,24 @@ router.patch("/:id/status", requireAuth, async (req, res, next) => {
       return res.status(400).json({ error: { message: "Invalid status" } });
     }
 
-    const updated = await Task.findByIdAndUpdate(req.params.id, { status }, { new: true }).lean();
+    const update = { status };
+    
+    // Timer Logic
+    if (status === "in-progress" && task.status !== "in-progress") {
+      // Starting the task
+      update.startedAt = new Date();
+    } else if (task.status === "in-progress" && status !== "in-progress") {
+      // Stopping/Completing the task
+      const now = new Date();
+      const startedAt = task.startedAt ? new Date(task.startedAt) : null;
+      if (startedAt) {
+        const diffSeconds = Math.floor((now.getTime() - startedAt.getTime()) / 1000);
+        update.totalTimeSpent = (task.totalTimeSpent || 0) + diffSeconds;
+        update.startedAt = null; // Reset startedAt since it's not currently running
+      }
+    }
+
+    const updated = await Task.findByIdAndUpdate(req.params.id, update, { new: true }).lean();
     if (!updated) {
       return res.status(404).json({ error: { message: "Task not found" } });
     }
@@ -1154,6 +1173,8 @@ async function archiveTaskById(taskId, archivedBy) {
       attachment: task.attachment,
       attachments: task.attachments,
       createdAt: task.createdAt,
+      startedAt: task.startedAt,
+      totalTimeSpent: task.totalTimeSpent,
     },
     parentType: task.projectId ? "project" : "standalone",
     parentId: String(task.projectId || ""),

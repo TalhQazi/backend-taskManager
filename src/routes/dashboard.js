@@ -90,6 +90,10 @@ router.get("/summary", requireAuth, async (_req, res, next) => {
       return due < start;
     }).length;
 
+    const pendingBugs = tasks.filter((t) => 
+      t.category === "bug" && !isCompletedTask(t)
+    ).length;
+
     const employeesWorkingSet = new Set(
       entriesToday
         .filter((e) => {
@@ -118,7 +122,8 @@ router.get("/summary", requireAuth, async (_req, res, next) => {
       vehicleTotal,
       patentTotal,
       websiteTotal,
-      projectTotal
+      projectTotal,
+      pendingBugs,
     });
   } catch (err) {
     next(err);

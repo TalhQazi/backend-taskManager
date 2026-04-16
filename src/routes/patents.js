@@ -65,7 +65,7 @@ router.get("/expiration-watch", async (req, res, next) => {
 router.get("/filed", async (req, res, next) => {
   try {
     const patents = await Patent.find({ patentType: "filed" })
-      .sort({ createdAt: -1 })
+      .sort({ patentName: 1 })
       .lean();
 
     // Calculate expiration for each patent
@@ -90,7 +90,7 @@ router.get("/filed", async (req, res, next) => {
 router.get("/pending", async (req, res, next) => {
   try {
     const patents = await Patent.find({ patentType: "pending" })
-      .sort({ createdAt: -1 })
+      .sort({ patentName: 1 })
       .lean();
     res.json({ items: patents });
   } catch (err) {
