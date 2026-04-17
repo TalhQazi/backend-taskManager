@@ -686,7 +686,7 @@ router.get("/scrum-records", requireAuth, requireRole(["super-admin", "admin"]),
       results.map(async (group) => {
         const emp = await Employee.findOne(
           { name: group._id },
-          { name: 1, email: 1, company: 1, location: 1, status: 1 }
+          { name: 1, email: 1, company: 1, phone: 1, status: 1 }
         ).lean();
 
         return {
@@ -694,7 +694,7 @@ router.get("/scrum-records", requireAuth, requireRole(["super-admin", "admin"]),
           employeeId: emp ? String(emp._id) : null,
           email: emp?.email || "",
           company: emp?.company || "",
-          location: emp?.location || "",
+          phone: emp?.phone || "",
           status: emp?.status || "unknown",
           totalScrumRecords: group.count,
           latestRecord: group.latestRecord,
