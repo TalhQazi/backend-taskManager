@@ -6,7 +6,7 @@ const Employee = require("../models/Employee");
 const User = require("../models/User");
 const TimeEditAuditLog = require("../models/TimeEditAuditLog");
 const { createNotification } = require("../utils/notifications");
-const { requireAuth } = require("../middleware/auth");
+const { requireAuth, requireRole } = require("../middleware/auth");
 const {
   evaluateMealBreakCompliance,
   evaluateOvertimeCompliance,
@@ -627,6 +627,138 @@ router.delete("/:id", requireAuth, async (req, res, next) => {
     ]).catch(() => {});
     
     return res.status(204).send();
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// Admin endpoints for scrum records
+
+// GET /api/time-entries/scrum-records - Get all scrum records for all employees (admin only)
+router.get("/scrum-records", requireAuth, requireRole(["super-admin", "admin"]), async (req, res, next) => {
+  try {
+    const { from, to, employee, page = 1, limit = 50 } = req.query;
+
+    const matchStage = {
+      scrum: { $exists: true, $ne: "" },
+    };
+
+    // Date range filter
+    if (from || to) {
+      matchStage.date = {};
+      if (from) matchStage.date.$gte = new Date(from);
+      if (to) matchStage.date.$lte = new Date(to);
+    }
+
+    // Employee filter
+    if (employee) {
+      matchStage.employee = { $regex: escapeRegex(employee), $options: "i" };
+    }
+
+    const pipeline = [
+      { $match: matchStage },
+      { $sort: { date: -1 } },
+      {
+        $group: {
+          _id: "$employee",
+          records: {
+            $push: {
+              id: "$_id",
+              date: "$date",
+              clockIn: "$clockIn",
+              clockOut: "$clockOut",
+              totalHours: "$totalHours",
+              scrum: "$scrum",
+              createdAt: "$createdAt",
+            },
+          },
+          count: { $sum: 1 },
+          latestRecord: { $first: "$date" },
+        },
+      },
+      { $sort: { latestRecord: -1 } },
+    ];
+
+    const results = await TimeEntry.aggregate(pipeline);
+
+    // Get employee details for each group
+    const employeeDetails = await Promise.all(
+      results.map(async (group) => {
+        const emp = await Employee.findOne(
+          { name: group._id },
+          { name: 1, email: 1, company: 1, location: 1, status: 1 }
+        ).lean();
+
+        return {
+          employeeName: group._id,
+          employeeId: emp ? String(emp._id) : null,
+          email: emp?.email || "",
+          company: emp?.company || "",
+          location: emp?.location || "",
+          status: emp?.status || "unknown",
+          totalScrumRecords: group.count,
+          latestRecord: group.latestRecord,
+          records: group.records,
+        };
+      })
+    );
+
+    return res.json({
+      success: true,
+      items: employeeDetails,
+      total: employeeDetails.length,
+    });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// GET /api/time-entries/scrum-records/:employeeName - Get scrum records for a specific employee (admin only)
+router.get("/scrum-records/:employeeName", requireAuth, requireRole(["super-admin", "admin"]), async (req, res, next) => {
+  try {
+    const { employeeName } = req.params;
+    const { from, to, page = 1, limit = 50 } = req.query;
+
+    const matchStage = {
+      employee: decodeURIComponent(employeeName),
+      scrum: { $exists: true, $ne: "" },
+    };
+
+    // Date range filter
+    if (from || to) {
+      matchStage.date = {};
+      if (from) matchStage.date.$gte = new Date(from);
+      if (to) matchStage.date.$lte = new Date(to);
+    }
+
+    const skip = (Number(page) - 1) * Number(limit);
+
+    const [records, total] = await Promise.all([
+      TimeEntry.find(matchStage)
+        .sort({ date: -1 })
+        .skip(skip)
+        .limit(Number(limit))
+        .lean(),
+      TimeEntry.countDocuments(matchStage),
+    ]);
+
+    const items = records.map((entry) => ({
+      id: String(entry._id),
+      date: entry.date,
+      clockIn: entry.clockIn,
+      clockOut: entry.clockOut,
+      totalHours: entry.totalHours,
+      scrum: entry.scrum,
+      createdAt: entry.createdAt,
+    }));
+
+    return res.json({
+      success: true,
+      items,
+      total,
+      page: Number(page),
+      limit: Number(limit),
+    });
   } catch (err) {
     return next(err);
   }
