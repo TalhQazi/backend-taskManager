@@ -14,6 +14,12 @@ const MessageSchema = new mongoose.Schema(
     status: { type: String, enum: ["sent", "delivered", "read"], default: "sent" },
     readBy: [{ type: String }],
     assignees: [{ type: String }],
+    attachment: {
+      fileName: { type: String, default: "" },
+      url: { type: String, default: "" },
+      mimeType: { type: String, default: "" },
+      size: { type: Number, default: 0 },
+    },
     meta: {
       resourceType: { type: String, default: "" },
       resourceId: { type: String, default: "" },
