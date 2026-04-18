@@ -653,7 +653,20 @@ async function archiveEmployeeById(employeeId, archivedBy) {
     archivedByRole: String(archivedBy.role || ""),
   });
 
-  // Delete from Employee and corresponding User
+  // Remove from Tasks and Projects
+    try {
+      const Task = require('../models/Task');
+      const Project = require('../models/Project');
+      const targets = [employee.name, employee.email].filter(Boolean);
+      if (targets.length > 0) {
+        if (Task) await Task.updateMany({ assignees: { $in: targets } }, { $pull: { assignees: { $in: targets } } });
+        if (Project) await Project.updateMany({ assignees: { $in: targets } }, { $pull: { assignees: { $in: targets } } });
+      }
+    } catch (err) {
+      console.error('Failed to unassign employee', err);
+    }
+
+    // Delete from Employee and corresponding User
   await Employee.findByIdAndDelete(employeeId);
   try {
     await User.deleteOne({ email: employee.email });
