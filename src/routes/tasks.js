@@ -14,7 +14,7 @@ const { checkAndFlagOffTheClock } = require("../lib/offTheClockWork");
 const { createNotification } = require("../utils/notifications");
 const { parsePagination, paginatedResponse } = require("../lib/pagination");
 const { cacheWrap, cacheDel } = require("../lib/cache");
-const { uploadToS3, base64ToBuffer } = require("../lib/s3");
+const { uploadToS3, base64ToBuffer, getFromS3, extractS3Key } = require("../lib/s3");
 const contributionTracker = require("../utils/contributionTracker");
 
 const router = express.Router();
@@ -1352,8 +1352,23 @@ router.get("/:id/attachments/:index/download", requireAuth, async (req, res, nex
       }
     }
 
-    // If attachment has external URL, redirect to it
+    // If attachment has external URL, proxy S3 files with download headers
+    // (a plain redirect lets S3 serve images without Content-Disposition, so
+    // browsers preview PNG/WebP instead of downloading them)
     if (url.startsWith("http://") || url.startsWith("https://")) {
+      const s3Key = extractS3Key(url);
+      if (s3Key) {
+        try {
+          const { stream, contentType, contentLength } = await getFromS3(s3Key);
+          res.setHeader("Content-Type", attachment.mimeType || contentType);
+          res.setHeader("Content-Disposition", `attachment; filename="${attachment.fileName || "download"}"`);
+          if (contentLength) res.setHeader("Content-Length", String(contentLength));
+          return stream.pipe(res);
+        } catch (_) {
+          // S3 fetch failed — fall back to redirect
+          return res.redirect(url);
+        }
+      }
       return res.redirect(url);
     }
 
