@@ -653,7 +653,20 @@ async function archiveEmployeeById(employeeId, archivedBy) {
     archivedByRole: String(archivedBy.role || ""),
   });
 
-  // Delete from Employee and corresponding User
+  // Remove from Tasks and Projects
+    try {
+      const Task = require('../models/Task');
+      const Project = require('../models/Project');
+      const targets = [employee.name, employee.email].filter(Boolean);
+      if (targets.length > 0) {
+        if (Task) await Task.updateMany({ assignees: { $in: targets } }, { $pull: { assignees: { $in: targets } } });
+        if (Project) await Project.updateMany({ assignees: { $in: targets } }, { $pull: { assignees: { $in: targets } } });
+      }
+    } catch (err) {
+      console.error('Failed to unassign employee', err);
+    }
+
+    // Delete from Employee and corresponding User
   await Employee.findByIdAndDelete(employeeId);
   try {
     await User.deleteOne({ email: employee.email });
@@ -736,6 +749,143 @@ router.post("/:id/reset-password", requireAuth, requireRole(["super-admin"]), as
     }
 
     return res.json({ success: true, message: "Password reset successfully" });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// GET /api/employees/me/time-entry/history - Get employee time entry history
+router.get("/me/time-entry/history", requireAuth, async (req, res, next) => {
+  try {
+    const ctx = await requireEmployeeSelf(req, res);
+    if (!ctx) return;
+    const { employee } = ctx;
+
+    const entries = await TimeEntry.find({ employee: employee.name })
+      .sort({ date: -1 })
+      .limit(50)
+      .lean();
+
+    const items = entries.map((entry) => ({
+      id: String(entry._id),
+      date: entry.date,
+      clockIn: entry.clockIn,
+      clockOut: entry.clockOut,
+      clockInAt: entry.clockInAt,
+      clockOutAt: entry.clockOutAt,
+      totalHours: entry.totalHours,
+      status: entry.clockOut ? "completed" : "active",
+      scrum: entry.scrum || null,
+    }));
+
+    return res.json({ success: true, items });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// POST /api/employees/me/clock-out-with-scrum - Clock out with scrum details
+router.post("/me/clock-out-with-scrum", requireAuth, async (req, res, next) => {
+  try {
+    const ctx = await requireEmployeeSelf(req, res);
+    if (!ctx) return;
+    const { employee, user } = ctx;
+    const { scrum } = req.body;
+
+    if (!scrum || !scrum.trim()) {
+      return res.status(400).json({ success: false, message: "Scrum details are required" });
+    }
+
+    const { start, end } = getDayRange(new Date());
+    const entry = await TimeEntry.findOne({
+      employee: employee.name,
+      date: { $gte: start, $lte: end },
+    }).sort({ createdAt: -1 });
+
+    if (!entry) {
+      return res.status(404).json({ success: false, message: "No active time entry found" });
+    }
+
+    if (entry.clockOut) {
+      return res.status(400).json({ success: false, message: "Already clocked out" });
+    }
+
+    const now = new Date();
+    const clockOutTime = now.toLocaleTimeString("en-US", {
+      hour12: false,
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+
+    // Calculate total hours
+    let totalHours = 0;
+    if (entry.clockInAt) {
+      const diffMs = now.getTime() - new Date(entry.clockInAt).getTime();
+      totalHours = Math.round((diffMs / (1000 * 60 * 60)) * 100) / 100;
+    }
+
+    entry.clockOut = clockOutTime;
+    entry.clockOutAt = now;
+    entry.totalHours = totalHours;
+    entry.status = "complete";
+    entry.scrum = scrum.trim();
+
+    await entry.save();
+
+    // Create notification for admin
+    await createNotification({
+      title: "Employee Clocked Out with Scrum",
+      message: `${employee.name} has clocked out with scrum details`,
+      type: "info",
+      link: `/admin/time-tracking`,
+      recipients: [{ role: "admin" }],
+    });
+
+    return res.json({
+      success: true,
+      item: {
+        id: String(entry._id),
+        date: entry.date,
+        clockIn: entry.clockIn,
+        clockOut: entry.clockOut,
+        clockInAt: entry.clockInAt,
+        clockOutAt: entry.clockOutAt,
+        totalHours: entry.totalHours,
+        status: entry.status,
+        scrum: entry.scrum,
+      },
+    });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// GET /api/employees/me/scrum-records - Get employee scrum records
+router.get("/me/scrum-records", requireAuth, async (req, res, next) => {
+  try {
+    const ctx = await requireEmployeeSelf(req, res);
+    if (!ctx) return;
+    const { employee } = ctx;
+
+    const entries = await TimeEntry.find({
+      employee: employee.name,
+      scrum: { $exists: true, $ne: "" },
+    })
+      .sort({ date: -1 })
+      .limit(100)
+      .lean();
+
+    const items = entries.map((entry) => ({
+      id: String(entry._id),
+      date: entry.date,
+      clockIn: entry.clockIn,
+      clockOut: entry.clockOut,
+      totalHours: entry.totalHours,
+      scrum: entry.scrum,
+      createdAt: entry.createdAt,
+    }));
+
+    return res.json({ success: true, items });
   } catch (err) {
     return next(err);
   }
