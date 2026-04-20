@@ -150,10 +150,23 @@ class ContributionTracker {
         details: `Completed task "${task.title}"`,
       });
 
-      // Update contributor's actions in task
-      const contributor = task.contributors.find((c) => c.userId === userId);
-      if (contributor && !contributor.actions.includes("completed")) {
-        contributor.actions.push("completed");
+      // Update contributor's actions in task - add if not exists
+      let contributor = task.contributors.find((c) => c.userId === userId);
+      if (contributor) {
+        if (!contributor.actions.includes("completed")) {
+          contributor.actions.push("completed");
+        }
+      } else {
+        // Add as new contributor
+        task.contributors.push({
+          userId: userId,
+          name: user.name,
+          email: user.email,
+          role: user.role,
+          addedAt: new Date(),
+          contributionType: "updater",
+          actions: ["completed"],
+        });
       }
 
       await task.save();
