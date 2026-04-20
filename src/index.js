@@ -43,6 +43,7 @@ const credentialsRoutes = require("./routes/credentials");
 const archiveRoutes = require("./routes/archive");
 const { router: founderMessagesRoutes, initializeMessages } = require("./routes/founderMessages");
 const notesRoutes = require("./routes/notes");
+const assetLibraryRoutes = require("./routes/assetLibrary");
 
 //going to express now
 const app = express();
@@ -271,6 +272,7 @@ app.use("/api/credentials", credentialsRoutes);
 app.use("/api/archive", archiveRoutes);
 app.use("/api/founder-messages", founderMessagesRoutes);
 app.use("/api/notes", notesRoutes);
+app.use("/api/asset-library", assetLibraryRoutes);
 
 app.use(notFoundHandler);
 app.use(errorHandler);

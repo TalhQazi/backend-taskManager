@@ -24,7 +24,10 @@ async function uploadToS3(buffer, originalName, mimeType, folder = "uploads") {
 
   const fileExtension = path.extname(originalName);
   const fileName = `${folder}/${Date.now()}-${Math.random().toString(36).substring(2, 9)}${fileExtension}`;
-  const bucketName = process.env.AWS_S3_BUCKET_NAME;
+  const bucketName = process.env.AWS_S3_BUCKET_NAME || process.env.AWS_S3_BUCKET;
+  if (!bucketName) {
+    throw new Error("AWS S3 bucket name missing in environment variables");
+  }
 
   const command = new PutObjectCommand({
     Bucket: bucketName,
@@ -51,7 +54,8 @@ async function deleteFromS3(url) {
   try {
     if (!url || !url.includes("amazonaws.com")) return;
     
-    const bucketName = process.env.AWS_S3_BUCKET_NAME;
+    const bucketName = process.env.AWS_S3_BUCKET_NAME || process.env.AWS_S3_BUCKET;
+    if (!bucketName) return;
     const region = process.env.AWS_REGION || "us-east-1";
     
     // Extract key from URL
@@ -79,7 +83,10 @@ async function deleteFromS3(url) {
  * @returns {Promise<{stream: ReadableStream, contentType: string, contentLength: number}>}
  */
 async function getFromS3(key) {
-  const bucketName = process.env.AWS_S3_BUCKET_NAME;
+  const bucketName = process.env.AWS_S3_BUCKET_NAME || process.env.AWS_S3_BUCKET;
+  if (!bucketName) {
+    throw new Error("AWS S3 bucket name missing in environment variables");
+  }
   const command = new GetObjectCommand({
     Bucket: bucketName,
     Key: key,
@@ -99,7 +106,8 @@ async function getFromS3(key) {
  */
 function extractS3Key(url) {
   if (!url || !url.includes("amazonaws.com")) return null;
-  const bucketName = process.env.AWS_S3_BUCKET_NAME;
+  const bucketName = process.env.AWS_S3_BUCKET_NAME || process.env.AWS_S3_BUCKET;
+  if (!bucketName) return null;
   const region = process.env.AWS_REGION || "us-east-1";
   const pattern = new RegExp(`https://${bucketName}\\.s3\\.${region}\\.amazonaws\\.com/(.+)`);
   const match = url.match(pattern);
