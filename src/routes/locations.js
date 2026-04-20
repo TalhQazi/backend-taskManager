@@ -175,6 +175,33 @@ router.get("/:id/photo", requireAuth, async (req, res, next) => {
   }
 });
 
+router.get("/:id/render-photo", async (req, res) => {
+  try {
+    const loc = await Location.findById(req.params.id).select("photoDataUrl").lean();
+    if (!loc || !loc.photoDataUrl) {
+      return res.status(404).send("Not found");
+    }
+
+    const matches = loc.photoDataUrl.match(/^data:([A-Za-z-+/]+);base64,(.+)$/);
+    if (!matches || matches.length !== 3) {
+      return res.status(400).send("Invalid image data");
+    }
+
+    const contentType = matches[1];
+    const base64Data = matches[2];
+    const buffer = Buffer.from(base64Data, 'base64');
+
+    res.writeHead(200, {
+      "Content-Type": contentType,
+      "Content-Length": buffer.length,
+      "Cache-Control": "public, max-age=86400" // Cache for 1 day
+    });
+    res.end(buffer);
+  } catch (err) {
+    res.status(500).send("Error rendering image");
+  }
+});
+
 router.put("/:id", requireAuth, async (req, res, next) => {
   try {
     const adminParsed = adminUiSchema.partial().safeParse(req.body);
