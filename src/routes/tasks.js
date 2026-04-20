@@ -295,7 +295,14 @@ router.get("/", requireAuth, async (req, res, next) => {
     // Apply search filter
     if (searchQ) {
       const searchRegex = new RegExp(escapeRegExp(searchQ), "i");
-      const searchCondition = { $or: [{ title: searchRegex }, { description: searchRegex }] };
+      const searchCondition = { 
+        $or: [
+          { title: searchRegex }, 
+          { description: searchRegex },
+          { assignees: { $elemMatch: { $regex: searchRegex } } },
+          { assignee: searchRegex } // Legacy support
+        ] 
+      };
       filter = filter.$or
         ? { $and: [filter, searchCondition] }
         : searchCondition;
