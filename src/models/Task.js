@@ -31,6 +31,34 @@ const TaskSchema = new mongoose.Schema(
     ],
     startedAt: { type: Date },
     totalTimeSpent: { type: Number, default: 0 }, // cumulative time in seconds
+    
+    // Contributor tracking
+    createdBy: {
+      userId: { type: String, default: "" },
+      name: { type: String, default: "" },
+      email: { type: String, default: "" },
+      role: { type: String, default: "" },
+    },
+    contributors: [
+      {
+        userId: { type: String, required: true },
+        name: { type: String, required: true },
+        email: { type: String },
+        role: { type: String },
+        addedAt: { type: Date, default: Date.now },
+        contributionType: { type: String, enum: ["creator", "assignee", "updater", "reviewer"], default: "assignee" },
+        actions: [String], // e.g., ["created", "updated_status", "added_comment"]
+      },
+    ],
+    contributionHistory: [
+      {
+        userId: { type: String, required: true },
+        name: { type: String, required: true },
+        action: { type: String, required: true }, // e.g., "created", "updated", "completed"
+        timestamp: { type: Date, default: Date.now },
+        details: { type: String, default: "" },
+      },
+    ],
   },
   { timestamps: true }
 );

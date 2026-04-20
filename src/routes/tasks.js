@@ -15,6 +15,7 @@ const { createNotification } = require("../utils/notifications");
 const { parsePagination, paginatedResponse } = require("../lib/pagination");
 const { cacheWrap, cacheDel } = require("../lib/cache");
 const { uploadToS3, base64ToBuffer } = require("../lib/s3");
+const contributionTracker = require("../utils/contributionTracker");
 
 const router = express.Router();
 // Middleware to skip body parsing for multipart/form-data (must be before other middleware)
@@ -453,6 +454,13 @@ router.post("/", requireAuth, async (req, res, next) => {
       }),
       cacheDel("tasks:list:*"),
       created.projectId ? cacheDel(`project:${created.projectId}`) : Promise.resolve(),
+      // Track contributor
+      contributionTracker.trackTaskCreation(created, {
+        userId: String(req.user?.sub || ""),
+        name: req.user?.name || req.user?.username || "Unknown",
+        email: req.user?.email || "",
+        role: req.user?.role || "employee",
+      }),
     ]).catch((err) => {
       console.error("Task creation side-effects error:", err);
     });
@@ -961,6 +969,7 @@ router.patch("/:id/status", requireAuth, async (req, res, next) => {
     }
 
     const status = String(req.body?.status || "").trim();
+    const previousStatus = task.status;
     const allowed = new Set(["pending", "in-progress", "completed", "overdue"]);
     if (!allowed.has(status)) {
       return res.status(400).json({ error: { message: "Invalid status" } });
@@ -1002,6 +1011,32 @@ router.patch("/:id/status", requireAuth, async (req, res, next) => {
       }),
       cacheDel("tasks:list:*"),
       updated.projectId ? cacheDel(`project:${updated.projectId}`) : Promise.resolve(),
+      // Track contribution
+      (async () => {
+        const taskDoc = await Task.findById(req.params.id);
+        if (taskDoc) {
+          const changes = [{ field: "status", oldValue: previousStatus, newValue: status }];
+          await contributionTracker.trackTaskUpdate(taskDoc, {
+            userId: String(req.user?.sub || ""),
+            name: req.user?.name || req.user?.username || "Unknown",
+            email: req.user?.email || "",
+            role: req.user?.role || "employee",
+          }, changes, {
+            isStatusChange: true,
+            description: `Changed task status from "${previousStatus}" to "${status}"`,
+            impact: status === "completed" ? "high" : "medium",
+          });
+          // Track completion separately
+          if (status === "completed") {
+            await contributionTracker.trackTaskCompletion(taskDoc, {
+              userId: String(req.user?.sub || ""),
+              name: req.user?.name || req.user?.username || "Unknown",
+              email: req.user?.email || "",
+              role: req.user?.role || "employee",
+            });
+          }
+        }
+      })(),
     ]).catch(() => {});
 
     return res.json({ item: withId(updated) });
