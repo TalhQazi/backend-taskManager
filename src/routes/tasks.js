@@ -822,6 +822,86 @@ router.post("/:id/comments/:commentId/archive", requireAuth, async (req, res, ne
   }
 });
 
+// Edit a comment (Admin can edit any, users can edit their own)
+router.patch("/:id/comments/:commentId", requireAuth, async (req, res, next) => {
+  try {
+    const userId = String(req.user?.sub || req.user?.id || "");
+    const userRole = String(req.user?.role || "").toLowerCase();
+    const isAdmin = userRole === "admin" || userRole === "super-admin";
+
+    const task = await Task.findById(req.params.id).lean();
+    if (!task) {
+      return res.status(404).json({ error: { message: "Task not found" } });
+    }
+
+    const comment = await TaskComment.findById(req.params.commentId);
+    if (!comment) {
+      return res.status(404).json({ error: { message: "Comment not found" } });
+    }
+
+    // Check permissions: admin can edit any, user can only edit their own
+    if (!isAdmin && comment.authorUserId !== userId) {
+      return res.status(403).json({ error: { message: "Forbidden: You can only edit your own comments" } });
+    }
+
+    const { message, attachments } = req.body;
+    if (message !== undefined) comment.message = message;
+    if (attachments !== undefined) comment.attachments = attachments;
+    comment.updatedAt = new Date();
+
+    await comment.save();
+
+    await logActivity(req, "COMMENT_UPDATE", "task", task._id, task.title, `Comment updated on task: ${task.title}`);
+
+    return res.json({
+      item: {
+        id: String(comment._id),
+        taskId: String(comment.taskId),
+        message: String(comment.message || ""),
+        authorUserId: String(comment.authorUserId || ""),
+        authorUsername: String(comment.authorUsername || ""),
+        authorRole: String(comment.authorRole || ""),
+        attachments: comment.attachments || [],
+        createdAt: comment.createdAt,
+        updatedAt: comment.updatedAt,
+      },
+    });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// Delete a comment (Admin can delete any, users can delete their own)
+router.delete("/:id/comments/:commentId", requireAuth, async (req, res, next) => {
+  try {
+    const userId = String(req.user?.sub || req.user?.id || "");
+    const userRole = String(req.user?.role || "").toLowerCase();
+    const isAdmin = userRole === "admin" || userRole === "super-admin";
+
+    const task = await Task.findById(req.params.id).lean();
+    if (!task) {
+      return res.status(404).json({ error: { message: "Task not found" } });
+    }
+
+    const comment = await TaskComment.findById(req.params.commentId);
+    if (!comment) {
+      return res.status(404).json({ error: { message: "Comment not found" } });
+    }
+
+    // Check permissions: admin can delete any, user can only delete their own
+    if (!isAdmin && comment.authorUserId !== userId) {
+      return res.status(403).json({ error: { message: "Forbidden: You can only delete your own comments" } });
+    }
+
+    await TaskComment.findByIdAndDelete(req.params.commentId);
+    await logActivity(req, "COMMENT_DELETE", "task", task._id, task.title, `Comment deleted on task: ${task.title}`);
+
+    return res.json({ ok: true, message: "Comment deleted" });
+  } catch (err) {
+    return next(err);
+  }
+});
+
 // Archive an attachment from a task
 router.post("/:id/attachments/:attachmentIndex/archive", requireAuth, async (req, res, next) => {
   try {
