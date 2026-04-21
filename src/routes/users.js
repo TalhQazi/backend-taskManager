@@ -257,6 +257,28 @@ router.post("/:id/archive", requireAuth, requireRole(["super-admin", "admin"]), 
     }
 
     const Archive = require("../models/Archive");
+    const Project = require("../models/Project");
+    const Task = require("../models/Task");
+
+    // Get potential identifier strings for the user in assignees arrays
+    const identifiers = [
+      user.name,
+      user.email,
+      user.username,
+      `${user.name}`.trim(),
+    ].filter(Boolean);
+
+    // Remove user from all projects
+    await Project.updateMany(
+      { assignees: { $in: identifiers } },
+      { $pull: { assignees: { $in: identifiers } } }
+    );
+
+    // Remove user from all tasks
+    await Task.updateMany(
+      { assignees: { $in: identifiers } },
+      { $pull: { assignees: { $in: identifiers } } }
+    );
 
     await Archive.create({
       itemType: "user",
