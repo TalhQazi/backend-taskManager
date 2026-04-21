@@ -12,8 +12,61 @@ const ActivityLog = require("../models/ActivityLog");
 const Settings = require("../models/Settings");
 const { createNotification } = require("../utils/notifications");
 const { requireAuth, requireRole } = require("../middleware/auth");
+
 const { parsePagination, paginatedResponse } = require("../lib/pagination");
 const { cacheWrap, cacheDel } = require("../lib/cache");
+
+const PayrollRecord = require("../models/employee/PayrollRecord");
+const EmpDocument = require("../models/employee/EmpDocument");
+
+
+const multer = require("multer");
+const path = require("path");
+const fs = require("fs");
+const jwt = require("jsonwebtoken");
+
+
+const storage = multer.diskStorage({
+  destination: function (req, file, cb) {
+    const employeeId = req.employee?._id;
+
+    console.log("EMPLOYEE IN MULTER:", employeeId);
+
+    if (!employeeId) {
+      return cb(new Error("Employee not found"), "");
+    }
+
+    const { docType } = req.body;
+
+    let folder = "docs";
+
+    if (docType === "W-4" || docType === "I-9") {
+      folder = "tax";
+    } else if (docType === "Payslip") {
+      folder = "payroll";
+    }
+
+    const dir = `uploads/employees/${employeeId}/${folder}`;
+
+    console.log("FINAL DIR:", dir);
+
+    fs.mkdirSync(dir, { recursive: true });
+
+    cb(null, dir);
+  },
+
+  filename: function (req, file, cb) {
+    const ext = path.extname(file.originalname);
+    const name =
+      Date.now() + "-" + Math.random().toString(36).substring(7);
+
+    cb(null, name + ext);
+  },
+});
+
+const upload = multer({ storage });
+
+
 
 const router = express.Router();
 
@@ -113,6 +166,20 @@ function escapeRegExp(s) {
          avatarUrl: avatarUrl || undefined,
          username: user.username || user.email || "",
          role: "employee",
+
+          bankInfo: employee.bankInfo || {
+          accountName: "",
+          accountNumber: "",
+          ifsc: "",
+          bankName: "",
+        },
+
+        
+        taxSettings: employee.taxSettings || {
+          pan: "",
+          tds: "",
+          regime: "",
+        },
        },
      });
    } catch (err) {
@@ -308,7 +375,7 @@ router.post("/me/clock-out", requireAuth, async (req, res, next) => {
   }
 });
 
-router.get("/me/dashboard", requireAuth, async (req, res, next) => {
+router.get("/me/dashboardddd", requireAuth, async (req, res, next) => {
   try {
     const ctx = await requireEmployeeSelf(req, res);
     if (!ctx) return;
@@ -368,6 +435,191 @@ router.get("/me/dashboard", requireAuth, async (req, res, next) => {
             status: t.status,
             priority: t.priority,
             dueDate: t.dueDate ? new Date(t.dueDate).toISOString().slice(0, 10) : "",
+          })),
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+
+router.get("/me/dashboard", requireAuth, async (req, res, next) => {
+  try {
+    const ctx = await requireEmployeeSelf(req, res);
+    if (!ctx) return;
+
+    const { employee, user } = ctx;
+
+    const REQUIRED_DOCS = ["W-4", "I-9", "Agreement"];
+
+    const candidates = [employee.name, employee.email, user.username]
+      .map((s) => String(s || "").trim())
+      .filter(Boolean);
+
+    const candidateRegexes = candidates.map(
+      (c) => new RegExp(`^${escapeRegExp(c)}$`, "i")
+    );
+
+    const { start, end } = getDayRange(new Date());
+
+    const [
+      tasks,
+      schedule,
+      todayEntry,
+      unreadMessages,
+      payrollAgg,
+      timeLogsAgg,
+      documents,
+    ] = await Promise.all([
+      Task.find({
+        $or: [
+          { assignees: { $in: candidates } },
+          { assignees: { $in: candidateRegexes } },
+          { assignee: { $in: candidates } },
+          { assignee: { $in: candidateRegexes } },
+        ],
+      }).sort({ updatedAt: -1 }).lean(),
+
+      Event.find({ assignee: employee.name })
+        .sort({ createdAt: -1 })
+        .limit(10)
+        .lean(),
+
+      TimeEntry.findOne({
+        employee: employee.name,
+        date: { $gte: start, $lte: end },
+      }).sort({ createdAt: -1 }).lean(),
+
+      Message.countDocuments({
+        type: "direct",
+        recipient: employee.name,
+        status: { $ne: "read" },
+      }),
+
+      PayrollRecord.aggregate([
+        { $match: { employeeId: employee._id } },
+        { $group: { _id: null, totalEarnings: { $sum: "$net" } } },
+      ]),
+
+      TimeEntry.aggregate([
+        { $match: { employee: employee.name } },
+        { $group: { _id: null, totalHours: { $sum: "$totalHours" } } },
+      ]),
+
+      EmpDocument.find({ employeeId: employee._id }).lean(),
+    ]);
+
+    // =========================
+    // TASK STATS
+    // =========================
+    const totalTasks = tasks.length;
+    const completedTasks = tasks.filter(
+      (t) => String(t.status).toLowerCase() === "completed"
+    ).length;
+
+    const pendingTasks = tasks.filter(
+      (t) => String(t.status).toLowerCase() === "pending"
+    ).length;
+
+    const inProgressTasks = tasks.filter(
+      (t) => String(t.status).toLowerCase() === "in-progress"
+    ).length;
+
+    // =========================
+    // PAYROLL + HOURS
+    // =========================
+    const earnings = payrollAgg[0]?.totalEarnings || 0;
+    const hoursWorked = timeLogsAgg[0]?.totalHours || 0;
+
+    // =========================
+    // DOCUMENT MAP (IMPORTANT FIX)
+    // =========================
+    const docMap = {};
+    documents.forEach((d) => {
+      docMap[d.docType] = d;
+    });
+
+    // =========================
+    // ALERTS (FIXED LOGIC)
+    // =========================
+    const alerts = [];
+
+    REQUIRED_DOCS.forEach((type) => {
+      const doc = docMap[type];
+
+      if (!doc) {
+        alerts.push(`Missing ${type} document`);
+      } else if (doc.status === "completed") {
+        alerts.push(`${type} document: Completed`);
+      } else if (doc.status === "pending") {
+        alerts.push(`${type} document: Pending approval`);
+      } else {
+        alerts.push(`${type} document: ${doc.status}`);
+      }
+    });
+
+    if (!earnings) alerts.push("No payroll records found");
+
+    // =========================
+    // ACTIONS
+    // =========================
+    const actions = [];
+
+    if (!earnings) {
+      actions.push({ type: "add_payroll", label: "Add Payroll Info" });
+    }
+
+    if (!hoursWorked) {
+      actions.push({ type: "add_time", label: "Add Time Log" });
+    }
+
+    if (REQUIRED_DOCS.some((t) => !docMap[t])) {
+      actions.push({ type: "upload_docs", label: "Upload Documents" });
+    }
+
+    // =========================
+    // RESPONSE
+    // =========================
+    res.json({
+      item: {
+        earnings,
+        hoursWorked,
+        alerts,
+        actions,
+
+        tasks: {
+          total: totalTasks,
+          completed: completedTasks,
+          pending: pendingTasks,
+          inProgress: inProgressTasks,
+        },
+
+        clock: {
+          clockIn: todayEntry?.clockIn || "",
+          clockOut: todayEntry?.clockOut || "",
+          status: todayEntry?.status || "",
+        },
+
+        scheduleCount: schedule.length,
+        unreadMessages: Number(unreadMessages || 0),
+
+        recentTasks: tasks
+          .slice()
+          .sort(
+            (a, b) =>
+              new Date(b.updatedAt || b.createdAt || 0) -
+              new Date(a.updatedAt || a.createdAt || 0)
+          )
+          .slice(0, 5)
+          .map((t) => ({
+            id: String(t._id),
+            title: t.title,
+            status: t.status,
+            priority: t.priority,
+            dueDate: t.dueDate
+              ? new Date(t.dueDate).toISOString().slice(0, 10)
+              : "",
           })),
       },
     });
@@ -740,5 +992,241 @@ router.post("/:id/reset-password", requireAuth, requireRole(["super-admin"]), as
     return next(err);
   }
 });
+
+
+
+
+router.get("/me/payroll", requireAuth, async (req, res, next) => {
+  try {
+    const ctx = await requireEmployeeSelf(req, res);
+    if (!ctx) return;
+
+    const { employee } = ctx;
+
+    const records = await PayrollRecord.find({
+      employeeId: employee._id,
+    })
+      .sort({ createdAt: -1 })
+      .lean();
+
+    res.json({
+      items: records.map((r) => ({
+        id: String(r._id),
+        payPeriod: r.payPeriod,
+        gross: r.gross,
+        net: r.net,
+        taxes: r.taxes,
+        deductions: r.deductions,
+        pdfUrl: r.pdfUrl, // S3 pre-signed URL
+      })),
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+
+
+
+
+router.get("/me/tax-docs", requireAuth, async (req, res, next) => {
+  try {
+    const ctx = await requireEmployeeSelf(req, res);
+    if (!ctx) return;
+
+    const { employee } = ctx;
+    const { year } = req.query;
+
+    const query = { employeeId: employee._id };
+    if (year) query.year = Number(year);
+
+    const docs = await TaxDocument.find(query).lean();
+
+    res.json({
+      items: docs.map((d) => ({
+        id: String(d._id),
+        year: d.year,
+        type: d.type,
+        fileUrl: d.fileUrl,
+      })),
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get("/me/time-logs", requireAuth, async (req, res, next) => {
+  try {
+    const ctx = await requireEmployeeSelf(req, res);
+    if (!ctx) return;
+
+    const { employee } = ctx;
+
+    const logs = await TimeEntry.find({
+      employee: employee.name,
+    })
+      .sort({ date: -1 })
+      .lean();
+
+    res.json({
+      items: logs.map((l) => ({
+        id: String(l._id),
+        date: l.date,
+        clockIn: l.clockIn,
+        clockOut: l.clockOut,
+        totalHours: l.totalHours,
+      })),
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+
+
+
+router.get("/me/documents", requireAuth, async (req, res, next) => {
+  try {
+    const ctx = await requireEmployeeSelf(req, res);
+    if (!ctx) return;
+
+    const { employee } = ctx;
+
+    const docs = await EmpDocument.find({
+      employeeId: employee._id,
+    }).lean();
+
+    res.json({
+      items: docs.map((d) => ({
+        id: String(d._id),
+        docType: d.docType,
+        status: d.status,
+        fileUrl: d.fileUrl,
+      })),
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+
+/*router.post("/me/documents", requireAuth, async (req, res) => {
+  const ctx = await requireEmployeeSelf(req, res);
+  if (!ctx) return;
+
+  const { employee } = ctx;
+  const { docType, file } = req.body;
+
+  const created = await EmpDocument.create({
+    employeeId: employee._id,
+    docType,
+    status: "pending",
+    fileUrl: file, // later replace with S3
+  });
+
+  res.json({ item: created });
+});*/
+
+
+router.post(
+  "/me/documents",
+  requireAuth,
+  async (req, res, next) => {
+    const ctx = await requireEmployeeSelf(req, res);
+    if (!ctx) return;
+
+    req.employee = ctx.employee; 
+    next(); 
+  },
+  upload.single("file"), 
+  async (req, res) => {
+    console.log("EMPLOYEE:", req.employee); 
+
+    const created = await EmpDocument.create({
+      employeeId: req.employee._id,
+      docType: req.body.docType,
+      status: "pending",
+      fileUrl: `${req.protocol}://${req.get("host")}/${req.file.path}`,
+    });
+
+    res.json({
+      item: {
+        id: created._id,
+        docType: created.docType,
+        status: created.status,
+        fileUrl: created.fileUrl,
+      },
+    });
+  }
+);
+
+router.put("/me/profile", requireAuth, async (req, res, next) => {
+  try {
+    const ctx = await requireEmployeeSelf(req, res);
+    if (!ctx) return;
+
+    const { employee } = ctx;
+
+    const updated = await Employee.findByIdAndUpdate(
+      employee._id,
+      req.body,
+      { new: true }
+    ).lean();
+
+    res.json({ item: updated });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.put("/me/profile/bank", requireAuth, async (req, res) => {
+  const ctx = await requireEmployeeSelf(req, res);
+  if (!ctx) return;
+
+  const updated = await Employee.findByIdAndUpdate(
+    ctx.employee._id,
+    {
+      bankInfo: req.body.bankInfo,
+    },
+    { new: true }
+  );
+
+  res.json({ success: true });
+});
+router.put("/me/profile/tax", requireAuth, async (req, res) => {
+  const ctx = await requireEmployeeSelf(req, res);
+  if (!ctx) return;
+
+  const updated = await Employee.findByIdAndUpdate(
+    ctx.employee._id,
+    {
+      taxSettings: req.body.taxSettings,
+    },
+    { new: true }
+  );
+
+  res.json({ success: true });
+});
+
+router.get("/me/onboarding-status", requireAuth, async (req, res) => {
+  const ctx = await requireEmployeeSelf(req, res);
+  if (!ctx) return;
+
+  const docs = await EmpDocument.find({
+    employeeId: ctx.employee._id,
+  });
+
+  const hasW4 = docs.some(d => d.docType === "W-4" && d.status === "completed");
+  const hasI9 = docs.some(d => d.docType === "I-9" && d.status === "completed");
+
+  res.json({
+    completed: hasW4 && hasI9,
+    missing: [
+      !hasW4 && "W-4",
+      !hasI9 && "I-9",
+    ].filter(Boolean),
+  });
+});
+
 
 module.exports = router;

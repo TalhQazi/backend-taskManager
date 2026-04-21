@@ -17,6 +17,25 @@ const EmployeeSchema = new mongoose.Schema(
     hireDate: { type: String, default: "" },
     joinDate: { type: Date },
     passwordHash: { type: String, default: "" },
+    address: { type: String, default: "" },
+
+emergencyContact: {
+  name: { type: String, default: "" },
+  phone: { type: String, default: "" },
+  relation: { type: String, default: "" },
+},
+
+bankInfo: {
+  accountName: { type: String, default: "" },
+  accountNumber: { type: String, default: "" }, // encrypt later
+  ifsc: { type: String, default: "" },
+  bankName: { type: String, default: "" },
+},
+
+taxSettings: {
+  withholdingStatus: { type: String, default: "" },
+  extraWithholding: { type: Number, default: 0 },
+},
   },
   { timestamps: true }
 );

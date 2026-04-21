@@ -68,7 +68,8 @@ const io = new Server(httpServer, {
         "http://localhost:3001",
         "https://task.se7eninc.com",
         "http://localhost:8080",
-        "http://192.168.31.13:8080"
+        "http://192.168.31.13:8080",
+        "http://192.168.31.250:8080"
       );
       
       if (!origin) return callback(null, true);
@@ -153,7 +154,7 @@ configuredOrigins.push(
 
 const isDev = String(process.env.NODE_ENV || "").toLowerCase() !== "production";
 
-app.use(
+/*app.use(
   cors({
     origin(origin, callback) {
       if (!origin) return callback(null, true);
@@ -179,7 +180,10 @@ app.use(
     },
     credentials: true,
   })
-);
+);*/
+
+app.use(cors());
+app.options("*", cors());
 
 app.use((req, res, next) => {
   const ct = req.headers['content-type'] || '';
