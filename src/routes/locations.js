@@ -182,19 +182,28 @@ router.get("/:id/render-photo", async (req, res) => {
       return res.status(404).send("Not found");
     }
 
-    const matches = loc.photoDataUrl.match(/^data:([A-Za-z-+/]+);base64,(.+)$/);
-    if (!matches || matches.length !== 3) {
-      return res.status(400).send("Invalid image data");
+    let contentType = "image/png";
+    let base64Data = "";
+
+    if (loc.photoDataUrl.startsWith("data:")) {
+      const parts = loc.photoDataUrl.split(";base64,");
+      if (parts.length === 2) {
+        contentType = parts[0].replace("data:", "");
+        base64Data = parts[1];
+      } else {
+         return res.status(400).send("Invalid data URI format");
+      }
+    } else {
+      // Fallback if it's just raw base64 (not recommended but seen in some legacy data)
+      base64Data = loc.photoDataUrl;
     }
 
-    const contentType = matches[1];
-    const base64Data = matches[2];
     const buffer = Buffer.from(base64Data, 'base64');
 
     res.writeHead(200, {
       "Content-Type": contentType,
       "Content-Length": buffer.length,
-      "Cache-Control": "public, max-age=86400" // Cache for 1 day
+      "Cache-Control": "public, max-age=86400"
     });
     res.end(buffer);
   } catch (err) {

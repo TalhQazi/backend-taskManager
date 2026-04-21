@@ -93,19 +93,21 @@ const upload = multer({
   limits: { fileSize: 10 * 1024 * 1024 },
 });
 
+const vehicleStatusEnum = ["active", "inactive", "maintenance", "available", "in-use"];
+
 const createSchema = z.object({
   name: z.string().min(1),
   type: z.string().optional().default(""),
   licensePlate: z.string().min(1),
-  status: z.enum(["available", "in-use", "maintenance"]).optional(),
+  status: z.enum(vehicleStatusEnum).optional(),
   assignedTo: z.string().nullable().optional(),
-  fuelLevel: z.number().min(0).max(100).optional(),
-  mileage: z.number().min(0).optional(),
+  fuelLevel: z.union([z.number(), z.string()]).optional(),
+  mileage: z.union([z.number(), z.string()]).optional(),
   lastInspection: z.union([z.string(), z.date()]).optional(),
   nextInspection: z.union([z.string(), z.date()]).optional(),
   tagPhotoFileName: z.string().optional().default(""),
   tagPhotoDataUrl: z.string().optional().default(""),
-});
+}).passthrough();
 
 const adminUiSchema = z.object({
   make: z.string().min(1),
@@ -113,32 +115,16 @@ const adminUiSchema = z.object({
   year: z.string().min(1),
   licensePlate: z.string().min(1),
   vin: z.string().optional().default(""),
-  mileage: z.string().optional().default(""),
-  status: z.enum(["active", "inactive", "maintenance"]).optional(),
+  mileage: z.union([z.number(), z.string()]).optional().default(""),
+  status: z.enum(vehicleStatusEnum).optional(),
   lastInspection: z.string().optional().default(""),
   nextInspection: z.string().optional().default(""),
   assignedTo: z.string().optional().default(""),
   tagPhotoFileName: z.string().optional().default(""),
   tagPhotoDataUrl: z.string().optional().default(""),
-});
+}).passthrough();
 
-const adminUiUpdateSchema = z
-  .object({
-    make: z.string().optional(),
-    model: z.string().optional(),
-    year: z.string().optional(),
-    licensePlate: z.string().optional(),
-    vin: z.string().optional(),
-    mileage: z.string().optional(),
-    status: z.enum(["active", "inactive", "maintenance"]).optional(),
-    lastInspection: z.string().optional(),
-    nextInspection: z.string().optional(),
-    assignedTo: z.string().optional(),
-    tagPhotoFileName: z.string().optional(),
-    tagPhotoDataUrl: z.string().optional(),
-  })
-  .partial();
-
+const adminUiUpdateSchema = adminUiSchema.partial();
 const updateSchema = createSchema.partial();
 
 function withId(doc) {

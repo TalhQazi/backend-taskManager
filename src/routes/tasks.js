@@ -262,61 +262,71 @@ router.get("/", requireAuth, async (req, res, next) => {
     const priorityQ = String(req.query.priority || "").trim();
     const projectIdQ = String(req.query.projectId || "").trim();
 
-    let filter = {};
+    const conditions = [];
+    const username = String(req.user?.username || "").trim();
+    const name = String(req.user?.name || "").trim();
+    const fullName = String(req.user?.fullName || "").trim();
+    const candidates = [username, name, fullName].filter(Boolean);
 
-    if (projectIdQ) {
-      if (projectIdQ === "none") {
-        filter.projectId = { $exists: false };
-      } else {
-        try {
-          filter.projectId = new mongoose.Types.ObjectId(projectIdQ);
-        } catch (err) {
-          // ignore invalid project IDs
-        }
-      }
-    }
-
+    // 1. Accessibility Filter for Employees
     if (role !== "admin" && role !== "super-admin" && role !== "manager") {
-      // Employees only see tasks assigned to them
-      const username = String(req.user?.username || "").trim();
-      const name = String(req.user?.name || "").trim();
-      const candidates = [username, name].filter(Boolean);
-
       if (candidates.length === 0) {
         return res.json(paginatedResponse([], 0, page, limit));
       }
-      const conditions = candidates.flatMap((c) => [
-        { assignees: { $elemMatch: { $regex: new RegExp(`^${escapeRegExp(c)}$`, "i") } } },
-        { assignee: { $regex: new RegExp(`^${escapeRegExp(c)}$`, "i") } },
-      ]);
-      filter = { $or: conditions };
+
+      // Find projects where the user is an assignee
+      const Project = require("../models/Project");
+      const assignedProjects = await Project.find({
+        assignees: { $elemMatch: { $regex: new RegExp(`^(${candidates.map(escapeRegExp).join("|")})$`, "i") } }
+      }).select("_id").lean();
+      const assignedProjectIds = assignedProjects.map(p => p._id);
+
+      conditions.push({
+        $or: [
+          ...candidates.flatMap((c) => [
+            { assignees: { $elemMatch: { $regex: new RegExp(`^${escapeRegExp(c)}$`, "i") } } },
+            { assignee: { $regex: new RegExp(`^${escapeRegExp(c)}$`, "i") } }, // Legacy
+          ]),
+          { projectId: { $in: assignedProjectIds } }
+        ]
+      });
     }
 
-    // Apply search filter
+    // 2. Project Filter
+    if (projectIdQ) {
+      if (projectIdQ === "none") {
+        conditions.push({ projectId: { $exists: false } });
+      } else {
+        try {
+          conditions.push({ projectId: new mongoose.Types.ObjectId(projectIdQ) });
+        } catch (err) { /* ignore invalid IDs */ }
+      }
+    }
+
+    // 3. Search Filter
     if (searchQ) {
       const searchRegex = new RegExp(escapeRegExp(searchQ), "i");
-      const searchCondition = { 
+      conditions.push({ 
         $or: [
           { title: searchRegex }, 
           { description: searchRegex },
           { assignees: { $elemMatch: { $regex: searchRegex } } },
-          { assignee: searchRegex } // Legacy support
+          { assignee: searchRegex }
         ] 
-      };
-      filter = filter.$or
-        ? { $and: [filter, searchCondition] }
-        : searchCondition;
+      });
     }
 
-    // Apply status filter
+    // 4. Status Filter
     if (statusQ && statusQ !== "all") {
-      filter.status = statusQ;
+      conditions.push({ status: statusQ });
     }
 
-    // Apply priority filter
+    // 5. Priority Filter
     if (priorityQ && priorityQ !== "all") {
-      filter.priority = priorityQ;
+      conditions.push({ priority: priorityQ });
     }
+
+    const filter = conditions.length > 0 ? { $and: conditions } : {};
 
     const cacheKey = `tasks:list:${role}:${req.user?.sub || ''}:p${page}:l${limit}:s${searchQ}:st${statusQ}:pr${priorityQ}`;
     const result = await cacheWrap(cacheKey, async () => {

@@ -23,6 +23,7 @@ const ProjectSchema = new mongoose.Schema(
     createdByUserId: { type: String, default: "" },
     createdByUsername: { type: String, default: "" },
     createdByRole: { type: String, default: "" },
+    introVideoUrl: { type: String, default: "" },
     status: { type: String, default: "Pending", index: true },
   },
   { timestamps: true }
