@@ -203,7 +203,7 @@ router.get("/:id/render-photo", async (req, res) => {
     res.writeHead(200, {
       "Content-Type": contentType,
       "Content-Length": buffer.length,
-      "Cache-Control": "public, max-age=86400"
+      "Cache-Control": "no-cache"
     });
     res.end(buffer);
   } catch (err) {
