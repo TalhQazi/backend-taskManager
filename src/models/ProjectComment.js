@@ -1,12 +1,12 @@
 const mongoose = require("mongoose");
 
-const TaskCommentSchema = new mongoose.Schema(
+const ProjectCommentSchema = new mongoose.Schema(
   {
-    taskId: { type: mongoose.Schema.Types.ObjectId, ref: "Task", required: true, index: true },
+    projectId: { type: mongoose.Schema.Types.ObjectId, ref: "Project", required: true, index: true },
     authorUserId: { type: String, default: "" },
     authorUsername: { type: String, default: "" },
     authorRole: { type: String, default: "" },
-    message: { type: String, default: "" },
+    message: { type: String, required: true },
     attachments: [
       {
         fileName: { type: String, default: "" },
@@ -20,7 +20,7 @@ const TaskCommentSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-// Compound index for listing comments by task in order
-TaskCommentSchema.index({ taskId: 1, createdAt: 1 });
+// Compound index for listing comments by project in order
+ProjectCommentSchema.index({ projectId: 1, createdAt: 1 });
 
-module.exports = mongoose.model("TaskComment", TaskCommentSchema);
+module.exports = mongoose.model("ProjectComment", ProjectCommentSchema);

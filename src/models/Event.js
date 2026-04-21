@@ -2,9 +2,9 @@ const mongoose = require("mongoose");
 
 const EventSchema = new mongoose.Schema(
   {
-    day: { type: String, enum: ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"], required: true },
+    day: { type: String, enum: ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"], required: true, index: true },
     title: { type: String, required: true },
-    assignee: { type: String, required: true },
+    assignee: { type: String, required: true, index: true },
     location: { type: String, required: true },
     startTime: { type: String, required: true },
     endTime: { type: String, required: true },
@@ -12,5 +12,9 @@ const EventSchema = new mongoose.Schema(
   },
   { timestamps: true }
 );
+
+// Compound index for schedule lookups
+EventSchema.index({ assignee: 1, day: 1 });
+EventSchema.index({ createdAt: -1 });
 
 module.exports = mongoose.model("Event", EventSchema);

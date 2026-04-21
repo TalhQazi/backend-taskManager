@@ -1,5 +1,7 @@
 const express = require("express");
 const cors = require("cors");
+
+const compression = require("compression");
 const morgan = require("morgan");
 const path = require("path");
 const fs = require("fs");
@@ -7,12 +9,9 @@ const { createServer } = require("http");
 const { Server } = require("socket.io");
 require("dotenv").config();
 
-const http = require("http");
-
-
 const { connectDb } = require("./lib/db");
+const { initRedis } = require("./lib/cache");
 const { notFoundHandler, errorHandler } = require("./middleware/error");
-const { auditLogMiddleware } = require("./middleware/auditLog");
 
 const authRoutes = require("./routes/auth");
 const tasksRoutes = require("./routes/tasks");
@@ -43,6 +42,10 @@ const socialMediaRoutes = require("./routes/socialMedia");
 const patentsRoutes = require("./routes/patents");
 const credentialsRoutes = require("./routes/credentials");
 const archiveRoutes = require("./routes/archive");
+
+const { router: founderMessagesRoutes, initializeMessages } = require("./routes/founderMessages");
+const notesRoutes = require("./routes/notes");
+
 
 //going to express now
 const app = express();
@@ -183,19 +186,62 @@ app.use((req, res, next) => {
   if (ct.includes('multipart/form-data')) {
     return next();
   }
-  // For other requests, use JSON parser
   express.json({ limit: "50mb" })(req, res, next);
- 
 });
- app.use(express.urlencoded({ limit: "50mb", extended: true }));
-app.use(morgan("dev"));
 
-app.use(auditLogMiddleware());
+app.use(express.urlencoded({ limit: "50mb", extended: true }));
+
+
+
+// Gzip compression — reduces response sizes by 60-80%
+app.use(compression());
+
+// Only log in development (morgan is noisy in production)
+if (isDev) {
+  app.use(morgan("dev"));
+} else {
+  app.use(morgan("combined", {
+    skip: (req) => req.method === "GET" && req.url === "/health",
+  }));
+}
 
 app.use("/uploads", express.static(uploadsDir));
 
 app.get("/health", (_req, res) => {
   res.json({ ok: true });
+});
+
+// S3 Proxy endpoint — serves S3 files through the backend to avoid CORS/OpaqueResponseBlocking issues
+const { getFromS3 } = require("./lib/s3");
+const { requireAuth } = require("./middleware/auth");
+
+app.get("/api/s3-proxy/*", requireAuth, async (req, res) => {
+  try {
+    // Extract the S3 key from the URL path after /api/s3-proxy/
+    const s3Key = req.params[0];
+    if (!s3Key) {
+      return res.status(400).json({ error: { message: "Missing S3 key" } });
+    }
+
+    const { stream, contentType, contentLength } = await getFromS3(s3Key);
+
+    // Set proper headers for caching and content type
+    res.set("Content-Type", contentType);
+    if (contentLength) {
+      res.set("Content-Length", String(contentLength));
+    }
+    res.set("Cache-Control", "public, max-age=86400, immutable"); // Cache for 24h
+    res.set("Access-Control-Allow-Origin", "*");
+
+    // Pipe the S3 stream directly to the response
+    stream.pipe(res);
+  } catch (err) {
+    if (err.name === "NoSuchKey" || err.$metadata?.httpStatusCode === 404) {
+      return res.status(404).json({ error: { message: "File not found" } });
+    }
+    console.error("[S3 Proxy] Error:", err.message || err);
+    return res.status(500).json({ error: { message: "Failed to fetch file" } });
+  }
 });
 
 app.use("/api/auth", authRoutes);
@@ -230,30 +276,30 @@ app.use("/api/patents", patentsRoutes);
 app.use("/api/credentials", credentialsRoutes);
 app.use("/api/archive", archiveRoutes);
 
+app.use("/api/founder-messages", founderMessagesRoutes);
+app.use("/api/notes", notesRoutes);
+
+
 app.use(notFoundHandler);
 app.use(errorHandler);
 
 const port = Number(process.env.PORT || 5001);
 
 connectDb()
-  .then(() => {
-    const server = httpServer.listen(port, () => {
-      console.log(`✅ Backend listening on http://localhost:${port}`);
-      console.log(`✅ WebSocket server ready`);
-    });
-
-    server.on("error", (err) => {
-      if (err.code === "EADDRINUSE") {
-        console.log(`❌ Port ${port} is busy. Trying 5002...`);
-        httpServer.listen(5002, () => {
-          console.log(`✅ Backend switched to http://localhost:5002`);
-        });
-      } else {
-        console.error(err);
-      }
+  .then(async () => {
+    // Initialize Redis cache (graceful — falls back to memory if unavailable)
+    await initRedis();
+    
+    // Initialize default founder messages
+    await initializeMessages();
+    
+    httpServer.listen(port, () => {
+      console.log(`Backend listening on http://localhost:${port}`);
+      console.log(`WebSocket server ready`);
     });
   })
   .catch((err) => {
+    
     console.error("Failed to connect to DB", err);
     process.exit(1);
   });

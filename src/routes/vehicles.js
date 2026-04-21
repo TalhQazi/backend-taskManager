@@ -10,6 +10,7 @@ const AssetSequence = require("../models/AssetSequence");
 const Appliance = require("../models/Appliance");
 const ActivityLog = require("../models/ActivityLog");
 const { requireAuth, requireRole } = require("../middleware/auth");
+const { cacheWrap, cacheDel } = require("../lib/cache");
 
 const router = express.Router();
 
@@ -168,10 +169,28 @@ async function logActivity(req, action, resourceType, resourceId, resourceName, 
 
 router.get("/", requireAuth, async (_req, res, next) => {
   try {
-    const items = await Vehicle.find().sort({ createdAt: -1 }).lean();
-    res.json({ items: items.map(withId) });
+    const result = await cacheWrap("vehicles:list", async () => {
+      const items = await Vehicle.find()
+        .sort({ name: 1 })
+        .lean();
+      return { items: items.map(withId) };
+    }, 60);
+    res.json(result);
   } catch (err) {
     next(err);
+  }
+});
+
+router.get("/:id", requireAuth, async (req, res, next) => {
+  try {
+    const id = String(req.params.id || "").trim();
+    const item = await Vehicle.findById(id).lean();
+    if (!item) {
+      return res.status(404).json({ error: { message: "Vehicle not found" } });
+    }
+    return res.json({ item: withId(item) });
+  } catch (err) {
+    return next(err);
   }
 });
 
@@ -243,7 +262,7 @@ router.post("/", requireAuth, async (req, res, next) => {
       
       // Log activity
       await logActivity(req, "VEHICLE_CREATE", "vehicle", created._id, created.name, `Created vehicle: ${created.name}`);
-      
+
       // Create notification
       await createNotification({
         actor: req.user?.username || req.user?.name || "Admin",
@@ -254,7 +273,7 @@ router.post("/", requireAuth, async (req, res, next) => {
         details: `License: ${created.licensePlate}`,
         resourceId: String(created._id),
       });
-      
+      cacheDel("vehicles:list");
       return res.status(201).json({ item: withId(obj) });
     }
 
@@ -273,6 +292,7 @@ router.post("/", requireAuth, async (req, res, next) => {
     });
 
     const obj = created.toObject();
+    cacheDel("vehicles:list");
     return res.status(201).json({ item: withId(obj) });
   } catch (err) {
     return next(err);
@@ -331,6 +351,7 @@ router.post("/upload", requireAuth, upload.fields([{ name: "registrationFile", m
     });
 
     const obj = created.toObject();
+    cacheDel("vehicles:list");
     return res.status(201).json({ item: withId(obj) });
   } catch (err) {
     return next(err);
@@ -377,7 +398,7 @@ router.put("/:id", requireAuth, async (req, res, next) => {
       
       // Log activity
       await logActivity(req, "VEHICLE_UPDATE", "vehicle", req.params.id, updated.name, `Updated vehicle: ${updated.name}`);
-      
+
       // Create notification
       await createNotification({
         actor: req.user?.username || req.user?.name || "Admin",
@@ -388,7 +409,7 @@ router.put("/:id", requireAuth, async (req, res, next) => {
         details: patch.status ? `Status: ${patch.status}` : "",
         resourceId: String(req.params.id),
       });
-      
+      cacheDel("vehicles:list");
       return res.json({ item: withId(updated) });
     }
 
@@ -408,6 +429,23 @@ router.put("/:id", requireAuth, async (req, res, next) => {
       new: true,
     }).lean();
 
+    if (patch.status === "inactive") {
+      const archived = await archiveVehicleById(req.params.id, req.user);
+      if (archived) {
+         // Create notification
+        await createNotification({
+          actor: req.user?.username || req.user?.name || "Admin",
+          actorRole: req.user?.role || "admin",
+          action: "archived (deactivated)",
+          resourceType: "vehicle",
+          resourceName: archived.name,
+          resourceId: String(req.params.id),
+        });
+        cacheDel("vehicles:list");
+        return res.json({ item: withId(archived), archived: true });
+      }
+    }
+
     if (!updated) {
       return res.status(404).json({ error: { message: "Vehicle not found" } });
     }
@@ -424,33 +462,58 @@ router.put("/:id", requireAuth, async (req, res, next) => {
       resourceName: updated.name,
       resourceId: String(req.params.id),
     });
-
+    cacheDel("vehicles:list");
     return res.json({ item: withId(updated) });
   } catch (err) {
     return next(err);
   }
 });
 
+async function archiveVehicleById(vehicleId, archivedBy) {
+  const Vehicle = require("../models/Vehicle");
+  const Archive = require("../models/Archive");
+  
+  const vehicle = await Vehicle.findById(vehicleId).lean();
+  if (!vehicle) return null;
+
+  await Archive.create({
+    itemType: "vehicle",
+    itemData: {
+      originalId: String(vehicle._id),
+      ...vehicle,
+    },
+    parentType: "organization",
+    parentId: "system",
+    parentName: "Vehicles",
+    archivedByUserId: String(archivedBy.sub || archivedBy.id || ""),
+    archivedByUsername: String(archivedBy.username || archivedBy.name || ""),
+    archivedByRole: String(archivedBy.role || ""),
+  });
+
+  await Vehicle.findByIdAndDelete(vehicleId);
+  return vehicle;
+}
+
 router.delete("/:id", requireAuth, async (req, res, next) => {
   try {
-    const deleted = await Vehicle.findByIdAndDelete(req.params.id).lean();
+    const deleted = await archiveVehicleById(req.params.id, req.user);
     if (!deleted) {
       return res.status(404).json({ error: { message: "Vehicle not found" } });
     }
     
     // Log activity
-    await logActivity(req, "VEHICLE_DELETE", "vehicle", req.params.id, deleted.name, `Deleted vehicle: ${deleted.name}`);
-    
+    await logActivity(req, "VEHICLE_ARCHIVE", "vehicle", req.params.id, deleted.name, `Archived vehicle: ${deleted.name}`);
+
     // Create notification
     await createNotification({
       actor: req.user?.username || req.user?.name || "Admin",
       actorRole: req.user?.role || "admin",
-      action: "deleted",
+      action: "archived",
       resourceType: "vehicle",
       resourceName: deleted.name,
       resourceId: String(req.params.id),
     });
-    
+    cacheDel("vehicles:list");
     return res.status(204).send();
   } catch (err) {
     return next(err);

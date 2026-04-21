@@ -1,15 +1,15 @@
 const express = require("express");
 const Archive = require("../models/Archive");
 const { requireAuth } = require("../middleware/auth");
-const bcrypt = require("bcryptjs");
+const { parsePagination, paginatedResponse } = require("../lib/pagination");
 
 const router = express.Router();
 
-// GET all archived items (with optional filters)
+// GET all archived items (with optional filters + pagination)
 router.get("/", requireAuth, async (req, res, next) => {
   try {
     const role = String(req.user?.role || "").toLowerCase();
-    if (role !== "admin" && role !== "super-admin") {
+    if (role !== "admin" && role !== "super-admin" && role !== "manager") {
       return res.status(403).json({ error: { message: "Forbidden" } });
     }
 
@@ -18,20 +18,32 @@ router.get("/", requireAuth, async (req, res, next) => {
     if (req.query.parentType) filter.parentType = req.query.parentType;
     if (req.query.parentId) filter.parentId = req.query.parentId;
 
-    const items = await Archive.find(filter).sort({ createdAt: -1 }).lean();
-    res.json({
-      items: items.map((i) => ({
-        id: String(i._id),
-        itemType: i.itemType,
-        itemData: i.itemData,
-        parentType: i.parentType,
-        parentId: i.parentId,
-        parentName: i.parentName,
-        archivedByUsername: i.archivedByUsername,
-        archivedByRole: i.archivedByRole,
-        createdAt: i.createdAt,
-      })),
-    });
+    const { page, limit, skip } = parsePagination(req.query);
+
+    const [total, items] = await Promise.all([
+      Archive.countDocuments(filter).maxTimeMS(5000),
+      Archive.find(filter)
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .maxTimeMS(8000)
+        .allowDiskUse(true)
+        .lean(),
+    ]);
+
+    const enriched = items.map((i) => ({
+      id: String(i._id),
+      itemType: i.itemType,
+      itemData: i.itemData,
+      parentType: i.parentType,
+      parentId: i.parentId,
+      parentName: i.parentName,
+      archivedByUsername: i.archivedByUsername,
+      archivedByRole: i.archivedByRole,
+      createdAt: i.createdAt,
+    }));
+
+    res.json(paginatedResponse(enriched, total, page, limit));
   } catch (err) {
     next(err);
   }
@@ -125,6 +137,7 @@ router.post("/:id/restore", requireAuth, async (req, res, next) => {
             authorUserId: cd.authorUserId,
             authorUsername: cd.authorUsername,
             authorRole: cd.authorRole,
+            attachments: cd.attachments || []
           });
           await Archive.findByIdAndDelete(ac._id);
         }

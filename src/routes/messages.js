@@ -6,6 +6,8 @@ const Employee = require("../models/Employee");
 const { requireAuth } = require("../middleware/auth");
 const { encryptString, decryptString } = require("../lib/encryption");
 const { checkAndFlagOffTheClock } = require("../lib/offTheClockWork");
+const { parsePagination, paginatedResponse } = require("../lib/pagination");
+const { cacheWrap, cacheDel } = require("../lib/cache");
 
 const router = express.Router();
 
@@ -45,6 +47,7 @@ const updateSchema = createSchema.partial();
 router.get("/", requireAuth, async (req, res, next) => {
   try {
     const { sender, recipient, type, user } = req.query;
+    const { page, limit, skip } = parsePagination(req.query);
     let query = {};
 
     // If 'user' param provided, get all messages where user is sender OR recipient
@@ -67,12 +70,40 @@ router.get("/", requireAuth, async (req, res, next) => {
         const role = String(req.user?.role || "").trim();
         const username = String(req.user?.username || req.user?.name || "").trim();
         const userId = String(req.user?.sub || req.user?.id || "").trim();
-        query.recipient = { $in: ["all", role, username, userId].filter(Boolean) };
+
+        query.type = "broadcast";
+        if (role === "super-admin") {
+          // super-admin sees all broadcast notifications
+        } else {
+          const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+          const candidates = [role, username, userId].filter(Boolean);
+          query.$or = candidates.map((c) => ({
+            recipient: { $regex: new RegExp(`(^|,)${escapeRegex(c)}(,|$)`, "i") }
+          }));
+        }
       }
     }
 
-    const items = await Message.find(query).sort({ createdAt: -1 }).lean();
-    res.json({ items: items.map((x) => withId(decryptOut(x))) });
+    const cacheKey = `messages:list:${user || 'all'}:${sender || 'any'}:${recipient || 'any'}:${type || 'any'}:p${page}:l${limit}:${req.user?.sub || ''}`;
+    
+    const result = await cacheWrap(cacheKey, async () => {
+      const [items, total] = await Promise.all([
+        Message.find(query).sort({ createdAt: -1 }).skip(skip).limit(limit).lean(),
+        Message.countDocuments(query),
+      ]);
+
+      const currentUser = String(req.user?.username || req.user?.name || "").trim();
+      const enriched = items.map((x) => {
+        const doc = withId(decryptOut(x));
+        const readByList = Array.isArray(x.readBy) ? x.readBy : [];
+        const isReadByMe = currentUser && readByList.includes(currentUser);
+        return { ...doc, status: isReadByMe ? "read" : "sent" };
+      });
+
+      return paginatedResponse(enriched, total, page, limit);
+    }, 15);
+
+    res.json(result);
   } catch (err) {
     next(err);
   }
@@ -210,6 +241,9 @@ router.post("/mark-read", requireAuth, async (req, res, next) => {
       { $set: { status: "read" } }
     );
 
+    // Invalidate message caches
+    cacheDel("messages:list:*").catch(() => {});
+
     res.json({ success: true, message: "Messages marked as read" });
   } catch (err) {
     next(err);
@@ -255,20 +289,6 @@ router.post("/", requireAuth, async (req, res, next) => {
     const parsed = createSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: { message: "Invalid payload" } });
 
-    await checkAndFlagOffTheClock({
-      employee: parsed.data.sender,
-      userId: String(req.user?.sub || ""),
-      timestamp: parsed.data.timestamp,
-      activityType: "message_create",
-      metadata: { recipient: parsed.data.recipient, type: parsed.data.type },
-    });
-
-   /* const created = await Message.create({
-      ...parsed.data,
-      title: typeof parsed.data.title === "string" ? encryptString(parsed.data.title) : "",
-      content: encryptString(parsed.data.content),
-    });
-    return res.status(201).json({ item: withId(decryptOut(created.toObject())) });*/
     const created = await Message.create({
       ...parsed.data,
       title: typeof parsed.data.title === "string" ? encryptString(parsed.data.title) : "",
@@ -278,12 +298,67 @@ router.post("/", requireAuth, async (req, res, next) => {
     const finalData = withId(decryptOut(created.toObject()));
     const io = global.io;
 
+    // Fire-and-forget side effects
+    Promise.allSettled([
+      checkAndFlagOffTheClock({
+        employee: parsed.data.sender,
+        userId: String(req.user?.sub || ""),
+        timestamp: parsed.data.timestamp,
+        activityType: "message_create",
+        metadata: { recipient: parsed.data.recipient, type: parsed.data.type },
+      }),
+      cacheDel("messages:list:*")
+    ]).catch(() => {});
+
     if (io) {
       io.emit("new-message", finalData);
     }
 
     return res.status(201).json({ item: finalData });
 
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Mark a single broadcast notification as read for the current user
+router.post("/:id/mark-read", requireAuth, async (req, res, next) => {
+  try {
+    const currentUser = String(req.user?.username || req.user?.name || "").trim();
+    if (!currentUser) return res.status(400).json({ error: { message: "Cannot identify user" } });
+
+    await Message.findByIdAndUpdate(req.params.id, {
+      $addToSet: { readBy: currentUser },
+    });
+
+    return res.json({ success: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Mark all unread broadcast notifications as read for the current user
+router.post("/mark-all-read", requireAuth, async (req, res, next) => {
+  try {
+    const role = String(req.user?.role || "").trim();
+    const currentUser = String(req.user?.username || req.user?.name || "").trim();
+    if (!currentUser) return res.status(400).json({ error: { message: "Cannot identify user" } });
+
+    let query = { type: "broadcast" };
+    if (role !== "super-admin") {
+      const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const candidates = [role, currentUser].filter(Boolean);
+      query.$or = candidates.map((c) => ({
+        recipient: { $regex: new RegExp(`(^|,)${escapeRegex(c)}(,|$)`, "i") }
+      }));
+    }
+
+    await Message.updateMany(
+      { ...query, readBy: { $ne: currentUser } },
+      { $addToSet: { readBy: currentUser } }
+    );
+
+    return res.json({ success: true });
   } catch (err) {
     next(err);
   }
@@ -323,6 +398,9 @@ router.delete("/:id", requireAuth, async (req, res, next) => {
   try {
     const deleted = await Message.findByIdAndDelete(req.params.id).lean();
     if (!deleted) return res.status(404).json({ error: { message: "Message not found" } });
+    
+    cacheDel("messages:list:*").catch(() => {});
+    
     res.status(204).send();
   } catch (err) {
     next(err);

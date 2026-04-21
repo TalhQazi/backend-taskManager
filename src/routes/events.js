@@ -5,6 +5,7 @@ const Event = require("../models/Event");
 const { createNotification } = require("../utils/notifications");
 const { requireAuth } = require("../middleware/auth");
 const { checkAndFlagOffTheClock } = require("../lib/offTheClockWork");
+const { cacheWrap, cacheDel } = require("../lib/cache");
 
 const router = express.Router();
 
@@ -36,8 +37,11 @@ const updateSchema = createSchema.partial();
 
 router.get("/", requireAuth, async (_req, res, next) => {
   try {
-    const items = await Event.find().sort({ createdAt: -1 }).lean();
-    res.json({ items: items.map(withId) });
+    const result = await cacheWrap("events:list", async () => {
+      const items = await Event.find().sort({ createdAt: -1 }).lean();
+      return { items: items.map(withId) };
+    }, 30);
+    res.json(result);
   } catch (err) {
     next(err);
   }
@@ -70,6 +74,7 @@ router.post("/", requireAuth, async (req, res, next) => {
         details: created.assignee ? `Assigned to: ${created.assignee}` : "",
       });
       
+      cacheDel("events:list");
       return res.status(201).json({ item: withId(created.toObject()) });
     }
 
@@ -85,7 +90,7 @@ router.post("/", requireAuth, async (req, res, next) => {
     });
 
     const created = await Event.create(parsed.data);
-    
+
     // Create notification
     await createNotification({
       actor: req.user?.username || req.user?.name || "Admin",
@@ -95,7 +100,7 @@ router.post("/", requireAuth, async (req, res, next) => {
       resourceName: created.title,
       details: created.assignee ? `Assigned to: ${created.assignee}` : "",
     });
-    
+    cacheDel("events:list");
     res.status(201).json({ item: withId(created.toObject()) });
   } catch (err) {
     next(err);
@@ -134,6 +139,7 @@ router.put("/:id", requireAuth, async (req, res, next) => {
         details: patch.assignee ? `Reassigned to: ${patch.assignee}` : "",
       });
       
+      cacheDel("events:list");
       return res.json({ item: withId(updated) });
     }
 
@@ -150,7 +156,7 @@ router.put("/:id", requireAuth, async (req, res, next) => {
 
     const updated = await Event.findByIdAndUpdate(req.params.id, parsed.data, { new: true }).lean();
     if (!updated) return res.status(404).json({ error: { message: "Event not found" } });
-    
+
     // Create notification
     await createNotification({
       actor: req.user?.username || req.user?.name || "Admin",
@@ -159,7 +165,7 @@ router.put("/:id", requireAuth, async (req, res, next) => {
       resourceType: "event",
       resourceName: updated.title,
     });
-
+    cacheDel("events:list");
     res.json({ item: withId(updated) });
   } catch (err) {
     next(err);
@@ -179,7 +185,7 @@ router.delete("/:id", requireAuth, async (req, res, next) => {
       resourceType: "event",
       resourceName: deleted.title,
     });
-    
+    cacheDel("events:list");
     res.status(204).send();
   } catch (err) {
     next(err);

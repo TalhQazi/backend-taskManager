@@ -41,20 +41,43 @@ router.put("/", requireAuth, async (req, res, next) => {
       }
     }
 
-    let settings = await HeaderSettings.findOne();
-    if (!settings) {
-      settings = await HeaderSettings.create(updateData);
-    } else {
-      // Update fields
-      if (updateData.backgroundType !== undefined) settings.backgroundType = updateData.backgroundType;
-      if (updateData.colorConfig) settings.colorConfig = { ...settings.colorConfig, ...updateData.colorConfig };
-      if (updateData.imageConfig) settings.imageConfig = { ...settings.imageConfig, ...updateData.imageConfig };
-      if (updateData.height !== undefined) settings.height = updateData.height;
-      if (updateData.overlay) settings.overlay = { ...settings.overlay, ...updateData.overlay };
-      await settings.save();
+    // Build the $set object for atomic update
+    const $set = {};
+    if (updateData.backgroundType !== undefined) $set.backgroundType = updateData.backgroundType;
+    if (updateData.height !== undefined) $set.height = Number(updateData.height);
+
+    if (updateData.colorConfig) {
+      if (updateData.colorConfig.from) $set["colorConfig.from"] = updateData.colorConfig.from;
+      if (updateData.colorConfig.via) $set["colorConfig.via"] = updateData.colorConfig.via;
+      if (updateData.colorConfig.to) $set["colorConfig.to"] = updateData.colorConfig.to;
     }
 
-    res.json({ item: settings.toObject() });
+    if (updateData.imageConfig) {
+      // Only store dataUrl once (url is redundant and doubles the size)
+      if (updateData.imageConfig.dataUrl) {
+        $set["imageConfig.dataUrl"] = updateData.imageConfig.dataUrl;
+        $set["imageConfig.url"] = updateData.imageConfig.dataUrl;
+      } else if (updateData.imageConfig.url) {
+        $set["imageConfig.url"] = updateData.imageConfig.url;
+        $set["imageConfig.dataUrl"] = updateData.imageConfig.url;
+      }
+      if (updateData.imageConfig.repeat) $set["imageConfig.repeat"] = updateData.imageConfig.repeat;
+      if (updateData.imageConfig.size) $set["imageConfig.size"] = updateData.imageConfig.size;
+      if (updateData.imageConfig.position) $set["imageConfig.position"] = updateData.imageConfig.position;
+    }
+
+    if (updateData.overlay) {
+      if (updateData.overlay.enabled !== undefined) $set["overlay.enabled"] = updateData.overlay.enabled;
+      if (updateData.overlay.color) $set["overlay.color"] = updateData.overlay.color;
+    }
+
+    const settings = await HeaderSettings.findOneAndUpdate(
+      {},
+      { $set },
+      { new: true, upsert: true, setDefaultsOnInsert: true }
+    ).lean();
+
+    res.json({ item: settings });
   } catch (err) {
     next(err);
   }

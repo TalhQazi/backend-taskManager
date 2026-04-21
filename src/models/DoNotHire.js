@@ -12,4 +12,7 @@ const DoNotHireSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+DoNotHireSchema.index({ createdAt: -1 });
+DoNotHireSchema.index({ fullName: 1 });
+
 module.exports = mongoose.model("DoNotHire", DoNotHireSchema);

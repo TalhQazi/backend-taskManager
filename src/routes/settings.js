@@ -4,6 +4,7 @@ const multer = require("multer");
 
 const Settings = require("../models/Settings");
 const { requireAuth } = require("../middleware/auth");
+const { uploadToS3, base64ToBuffer } = require("../lib/s3");
 
 const router = express.Router();
 
@@ -72,7 +73,19 @@ router.put("/", requireAuth, async (req, res, next) => {
     const parsed = settingsSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: { message: "Invalid payload" } });
 
-    const patch = parsed.data;
+    const patch = { ...parsed.data };
+
+    // If avatarDataUrl is sent as base64 in the body, upload to S3
+    if (patch.avatarDataUrl && patch.avatarDataUrl.startsWith("data:")) {
+      try {
+        const { buffer, mimeType } = base64ToBuffer(patch.avatarDataUrl);
+        const s3Url = await uploadToS3(buffer, `avatar-${userId}`, mimeType, "avatars");
+        patch.avatarDataUrl = s3Url;
+        patch.avatarUrl = s3Url;
+      } catch (err) {
+        console.error("Failed to upload avatar from base64 to S3:", err);
+      }
+    }
 
     const updated = await Settings.findOneAndUpdate(
       { userId },
@@ -101,17 +114,24 @@ router.post("/avatar", requireAuth, upload.single("avatar"), async (req, res, ne
       return res.status(400).json({ error: { message: "No file uploaded" } });
     }
 
-    // Convert file buffer to base64 data URL
-    const base64 = req.file.buffer.toString("base64");
-    const avatarDataUrl = `data:${req.file.mimetype};base64,${base64}`;
+    // Upload file buffer to S3
+    let avatarUrl = "";
+    try {
+      avatarUrl = await uploadToS3(req.file.buffer, req.file.originalname, req.file.mimetype, "avatars");
+    } catch (err) {
+      console.error("Failed to upload avatar to S3:", err);
+      // Fallback to base64 if S3 fails
+      const base64 = req.file.buffer.toString("base64");
+      avatarUrl = `data:${req.file.mimetype};base64,${base64}`;
+    }
 
     const updated = await Settings.findOneAndUpdate(
       { userId },
-      { $set: { avatarUrl: "", avatarDataUrl } },
+      { $set: { avatarUrl: avatarUrl, avatarDataUrl: avatarUrl } },
       { new: true, upsert: true }
     ).lean();
 
-    res.json({ item: updated, avatarUrl: avatarDataUrl, avatarDataUrl });
+    res.json({ item: updated, avatarUrl, avatarDataUrl: avatarUrl });
   } catch (err) {
     next(err);
   }

@@ -19,4 +19,10 @@ const LocationSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+// Indexes for common queries
+LocationSchema.index({ status: 1 });
+LocationSchema.index({ name: 1 });
+LocationSchema.index({ city: 1 });
+LocationSchema.index({ createdAt: -1 });
+
 module.exports = mongoose.model("Location", LocationSchema);

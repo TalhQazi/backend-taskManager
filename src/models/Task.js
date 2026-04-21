@@ -8,6 +8,7 @@ const TaskSchema = new mongoose.Schema(
     assignees: { type: [String], default: [], index: true },
     priority: { type: String, enum: ["high", "medium", "low"], default: "medium", index: true },
     status: { type: String, enum: ["pending", "in-progress", "completed", "overdue"], default: "pending", index: true },
+    category: { type: String, enum: ["task", "bug", "feature", "maintenance"], default: "task", index: true },
     dueDate: { type: Date, index: true },
     dueTime: { type: String, default: "" },
     createdAt: { type: String, default: "", index: true },
@@ -28,6 +29,8 @@ const TaskSchema = new mongoose.Schema(
         uploadedAt: { type: Date, default: Date.now },
       },
     ],
+    startedAt: { type: Date },
+    totalTimeSpent: { type: Number, default: 0 }, // cumulative time in seconds
   },
   { timestamps: true }
 );
@@ -37,5 +40,7 @@ TaskSchema.index({ projectId: 1, status: 1 });
 TaskSchema.index({ assignees: 1, status: 1 });
 TaskSchema.index({ createdAt: -1, status: 1 });
 TaskSchema.index({ projectId: 1, createdAt: -1 });
+// Text index for search queries (replaces regex scans)
+TaskSchema.index({ title: "text", description: "text" });
 
 module.exports = mongoose.model("Task", TaskSchema);

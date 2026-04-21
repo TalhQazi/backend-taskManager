@@ -1,4 +1,5 @@
 const express = require("express");
+const mongoose = require("mongoose");
 const { z } = require("zod");
 const multer = require("multer");
 const path = require("path");
@@ -11,6 +12,9 @@ const User = require("../models/User");
 const { requireAuth } = require("../middleware/auth");
 const { checkAndFlagOffTheClock } = require("../lib/offTheClockWork");
 const { createNotification } = require("../utils/notifications");
+const { parsePagination, paginatedResponse } = require("../lib/pagination");
+const { cacheWrap, cacheDel } = require("../lib/cache");
+const { uploadToS3, base64ToBuffer } = require("../lib/s3");
 
 
 const router = express.Router();
@@ -46,19 +50,53 @@ const createSchema = z.object({
   status: z.enum(["pending", "in-progress", "completed", "overdue"]).optional(),
   dueDate: z.union([z.string(), z.date()]).optional(),
   dueTime: z.string().optional().default(""),
+  location: z.string().optional().default(""),
   createdAt: z.string().optional().default(""),
   attachmentFileName: z.string().optional().default(""),
   attachmentNote: z.string().optional().default(""),
+  attachment: z.object({
+    fileName: z.string().optional().default(""),
+    url: z.string().optional().default(""),
+    mimeType: z.string().optional().default(""),
+    size: z.number().optional().default(0),
+    uploadedAt: z.union([z.date(), z.string()]).optional(),
+  }).optional(),
   attachments: z.array(z.object({
     fileName: z.string().optional().default(""),
     url: z.string().optional().default(""),
     mimeType: z.string().optional().default(""),
     size: z.number().optional().default(0),
-    uploadedAt: z.date().optional(),
+    uploadedAt: z.union([z.date(), z.string()]).optional(),
   })).optional().default([]),
 });
 
-const updateSchema = createSchema.partial();
+const updateSchema = z.object({
+  title: z.string().min(1).optional(),
+  description: z.string().min(1).optional(),
+  projectId: z.string().optional(),
+  assignees: z.array(z.string()).optional(),
+  priority: z.enum(["high", "medium", "low"]).optional(),
+  status: z.enum(["pending", "in-progress", "completed", "overdue"]).optional(),
+  dueDate: z.union([z.string(), z.date()]).optional(),
+  dueTime: z.string().optional(),
+  location: z.string().optional(),
+  attachmentFileName: z.string().optional(),
+  attachmentNote: z.string().optional(),
+  attachment: z.object({
+    fileName: z.string().optional(),
+    url: z.string().optional(),
+    mimeType: z.string().optional(),
+    size: z.number().optional(),
+    uploadedAt: z.union([z.date(), z.string()]).optional(),
+  }).optional(),
+  attachments: z.array(z.object({
+    fileName: z.string().optional(),
+    url: z.string().optional(),
+    mimeType: z.string().optional(),
+    size: z.number().optional(),
+    uploadedAt: z.union([z.date(), z.string()]).optional(),
+  })).optional(),
+});
 
 function withId(doc) {
   if (!doc) return doc;
@@ -69,7 +107,17 @@ function withId(doc) {
       ? [legacyAssignee]
       : [];
   const { assignee, assigneeInitials, location, ...rest } = doc;
-  return { ...rest, assignees: nextAssignees, id: String(doc._id) };
+  return { 
+    ...rest, 
+    assignees: nextAssignees, 
+    id: String(doc._id),
+    attachments: doc.attachments,
+    attachment: doc.attachment,
+    attachmentFileName: doc.attachmentFileName,
+    attachmentNote: doc.attachmentNote,
+    startedAt: doc.startedAt,
+    totalTimeSpent: doc.totalTimeSpent || 0,
+  };
 }
 
 function normalizeAssignees(input) {
@@ -200,10 +248,79 @@ async function logActivity(req, action, resourceType, resourceId, resourceName, 
   }
 }
 
-router.get("/", requireAuth, async (_req, res, next) => {
+function escapeRegExp(s) {
+  return String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+
+router.get("/", requireAuth, async (req, res, next) => {
   try {
-    const items = await Task.find().sort({ createdAt: -1 }).lean();
-    res.json({ items: items.map(withId) });
+    const role = String(req.user?.role || "").trim().toLowerCase();
+    const { page, limit, skip } = parsePagination(req.query);
+    const searchQ = String(req.query.search || "").trim();
+    const statusQ = String(req.query.status || "").trim();
+    const priorityQ = String(req.query.priority || "").trim();
+    const projectIdQ = String(req.query.projectId || "").trim();
+
+    let filter = {};
+
+    if (projectIdQ) {
+      if (projectIdQ === "none") {
+        filter.projectId = { $exists: false };
+      } else {
+        try {
+          filter.projectId = new mongoose.Types.ObjectId(projectIdQ);
+        } catch (err) {
+          // ignore invalid project IDs
+        }
+      }
+    }
+
+    if (role !== "admin" && role !== "super-admin" && role !== "manager") {
+      // Employees only see tasks assigned to them
+      const username = String(req.user?.username || "").trim();
+      const name = String(req.user?.name || "").trim();
+      const candidates = [username, name].filter(Boolean);
+
+      if (candidates.length === 0) {
+        return res.json(paginatedResponse([], 0, page, limit));
+      }
+      const conditions = candidates.flatMap((c) => [
+        { assignees: { $elemMatch: { $regex: new RegExp(`^${escapeRegExp(c)}$`, "i") } } },
+        { assignee: { $regex: new RegExp(`^${escapeRegExp(c)}$`, "i") } },
+      ]);
+      filter = { $or: conditions };
+    }
+
+    // Apply search filter
+    if (searchQ) {
+      const searchRegex = new RegExp(escapeRegExp(searchQ), "i");
+      const searchCondition = { $or: [{ title: searchRegex }, { description: searchRegex }] };
+      filter = filter.$or
+        ? { $and: [filter, searchCondition] }
+        : searchCondition;
+    }
+
+    // Apply status filter
+    if (statusQ && statusQ !== "all") {
+      filter.status = statusQ;
+    }
+
+    // Apply priority filter
+    if (priorityQ && priorityQ !== "all") {
+      filter.priority = priorityQ;
+    }
+
+    const cacheKey = `tasks:list:${role}:${req.user?.sub || ''}:p${page}:l${limit}:s${searchQ}:st${statusQ}:pr${priorityQ}`;
+    const result = await cacheWrap(cacheKey, async () => {
+      const [items, total] = await Promise.all([
+        Task.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit).lean(),
+        Task.countDocuments(filter),
+      ]);
+      return paginatedResponse(items.map(withId), total, page, limit);
+    }, 15);
+
+    res.json(result);
   } catch (err) {
     next(err);
   }
@@ -239,6 +356,17 @@ router.get("/:id", requireAuth, async (req, res, next) => {
   }
 });
 
+// Get task attachment lazily to avoid massive JSON payloads in project views
+router.get("/:id/attachment", requireAuth, async (req, res, next) => {
+  try {
+    const task = await Task.findById(req.params.id).select("attachment").lean();
+    if (!task) return res.status(404).json({ error: { message: "Task not found" } });
+    res.json({ attachment: task.attachment || { fileName: "", url: "", mimeType: "", size: 0 } });
+  } catch (err) {
+    next(err);
+  }
+});
+
 router.post("/", requireAuth, async (req, res, next) => {
   try {
     // Manual validation for title and description
@@ -249,48 +377,96 @@ router.post("/", requireAuth, async (req, res, next) => {
       return res.status(400).json({ error: { message: "Task description is required" } });
     }
 
+    // Clean empty projectId to avoid Mongoose CastError
+    const body = { ...req.body };
+    if (body.projectId === "" || body.projectId === null || body.projectId === "undefined") {
+      delete body.projectId;
+    }
+
     const parsed = createSchema.safeParse({
-      ...req.body,
-      assignees: normalizeAssignees(req.body?.assignees ?? req.body?.assignee),
+      ...body,
+      assignees: normalizeAssignees(body?.assignees ?? body?.assignee),
     });
+    
     if (!parsed.success) {
       return res.status(400).json({ error: { message: "Invalid payload", details: parsed.error.errors } });
     }
 
-    const dueDate = parsed.data.dueDate ? new Date(parsed.data.dueDate) : undefined;
-    const createdAt = parsed.data.createdAt || new Date().toISOString().split("T")[0];
-    const firstAssignee = parsed.data.assignees?.[0] || "";
+    const data = parsed.data;
+
+    // Convert Base64 attachments to S3 URLs if present
+    if (data.attachment?.url && data.attachment.url.startsWith("data:")) {
+      try {
+        const { buffer, mimeType } = base64ToBuffer(data.attachment.url);
+        const s3Url = await uploadToS3(buffer, data.attachment.fileName || "attachment", mimeType, "tasks");
+        data.attachment.url = s3Url;
+      } catch (err) {
+        console.error("Failed to upload primary attachment to S3:", err);
+      }
+    }
+
+    if (Array.isArray(data.attachments) && data.attachments.length > 0) {
+      data.attachments = await Promise.all(data.attachments.map(async (att) => {
+        if (att.url && att.url.startsWith("data:")) {
+          try {
+            const { buffer, mimeType } = base64ToBuffer(att.url);
+            const s3Url = await uploadToS3(buffer, att.fileName || "attachment", mimeType, "tasks");
+            return { ...att, url: s3Url, uploadedAt: att.uploadedAt || new Date() };
+          } catch (err) {
+            console.error("Failed to upload multi-attachment to S3:", err);
+            return att;
+          }
+        }
+        return att;
+      }));
+    }
+
+    const dueDate = data.dueDate ? new Date(data.dueDate) : undefined;
+    const createdAt = data.createdAt || new Date().toISOString().split("T")[0];
+    const firstAssignee = data.assignees?.[0] || "";
 
     const created = await Task.create({
-      ...parsed.data,
+      ...data,
       createdAt,
       dueDate,
     });
 
-    await checkAndFlagOffTheClock({
-      employee: firstAssignee,
-      userId: String(req.user?.sub || ""),
-      timestamp: new Date(),
-      activityType: "task_create",
-      metadata: { taskId: String(created._id), title: created.title },
-    });
-
     const obj = created.toObject();
-    
-    // Log activity
-    await logActivity(req, "TASK_CREATE", "task", created._id, created.title, `Created task: ${created.title}`);
 
-    await createNotification({
-      actor: req.user?.username || req.user?.name || "System",
-      actorRole: req.user?.role || "",
-      action: "created",
-      resourceType: "task",
-      resourceName: created.title,
-      resourceId: String(created._id),
+    // Fire-and-forget side effects (don't block response)
+    Promise.allSettled([
+      checkAndFlagOffTheClock({
+        employee: firstAssignee,
+        userId: String(req.user?.sub || ""),
+        timestamp: new Date(),
+        activityType: "task_create",
+        metadata: { taskId: String(created._id), title: created.title },
+      }),
+      logActivity(req, "TASK_CREATE", "task", created._id, created.title, `Created task: ${created.title}`),
+      createNotification({
+        actor: req.user?.username || req.user?.name || "System",
+        actorRole: req.user?.role || "",
+        action: "created",
+        resourceType: "task",
+        resourceName: created.title,
+        assignees: Array.isArray(created.assignees) ? created.assignees : [],
+        resourceId: String(created._id),
+      }),
+      cacheDel("tasks:list:*"),
+      created.projectId ? cacheDel(`project:${created.projectId}`) : Promise.resolve(),
+    ]).catch((err) => {
+      console.error("Task creation side-effects error:", err);
     });
-    
+
     return res.status(201).json({ item: withId(obj) });
   } catch (err) {
+    console.error("POST /api/tasks Error:", err);
+    if (err.name === 'ValidationError') {
+      return res.status(400).json({ error: { message: err.message, details: err.errors } });
+    }
+    if (err.name === 'CastError') {
+      return res.status(400).json({ error: { message: `Invalid value for field ${err.path}: ${err.value}` } });
+    }
     return next(err);
   }
 });
@@ -298,9 +474,6 @@ router.post("/", requireAuth, async (req, res, next) => {
 // Upload endpoint with multiple file support (up to 16MB each, MongoDB limit)
 router.post("/upload", requireAuth, upload.array("files", 10), async (req, res, next) => {
   try {
-    console.log("Upload endpoint hit");
-    console.log("Request files:", req.files ? req.files.map(f => ({ name: f.originalname, size: f.size, mimetype: f.mimetype })) : "No files");
-    
     const body = req.body || {};
 
     // Manual validation for title and description
@@ -337,7 +510,6 @@ router.post("/upload", requireAuth, upload.array("files", 10), async (req, res, 
 
     const parsed = createSchema.safeParse(payload);
     if (!parsed.success) {
-      console.error("Validation failed:", parsed.error);
       return res.status(400).json({ error: { message: "Invalid payload", details: parsed.error } });
     }
 
@@ -351,11 +523,21 @@ router.post("/upload", requireAuth, upload.array("files", 10), async (req, res, 
     let attachment = undefined;
     
     if (files.length > 0) {
-      console.log("Processing files:", files.length);
-      attachments = files.map(f => {
-        if (f.buffer) {
+      attachments = await Promise.all(files.map(async (f) => {
+        try {
+          // Upload Buffer to S3
+          const s3Url = await uploadToS3(f.buffer, f.originalname, f.mimetype, "tasks");
+          return {
+            fileName: f.originalname,
+            url: s3Url,
+            mimeType: f.mimetype,
+            size: f.size,
+            uploadedAt: new Date(),
+          };
+        } catch (err) {
+          console.error("Failed to upload file to S3 in multipart route:", err);
+          // Fallback to base64 if S3 fails
           const base64Data = f.buffer.toString("base64");
-          console.log(`File ${f.originalname} - Base64 length:`, base64Data.length);
           return {
             fileName: f.originalname,
             url: `data:${f.mimetype};base64,${base64Data}`,
@@ -364,16 +546,14 @@ router.post("/upload", requireAuth, upload.array("files", 10), async (req, res, 
             uploadedAt: new Date(),
           };
         }
-        return null;
-      }).filter(Boolean);
-     
+
+      }));
+      
+      // Set first attachment as legacy single attachment
+
       attachment = attachments[0];
-      console.log("Attachments created:", attachments.length, "First attachment URL length:", attachment?.url?.length);
-    } else {
-      console.log("No files uploaded");
     }
 
-    console.log("Creating task with attachments:", attachments.length);
     const created = await Task.create({
       ...parsed.data,
       createdAt,
@@ -383,30 +563,31 @@ router.post("/upload", requireAuth, upload.array("files", 10), async (req, res, 
       attachments: attachments.length > 0 ? attachments : undefined,
     });
 
-    await checkAndFlagOffTheClock({
-      employee: firstAssignee,
-      userId: String(req.user?.sub || ""),
-      timestamp: new Date(),
-      activityType: "task_create_with_attachment",
-      metadata: { taskId: String(created._id), title: created.title },
-    });
-
-    console.log("Task created with ID:", created._id);
     const obj = created.toObject();
-    
-    // Log activity
-    await logActivity(req, "TASK_CREATE", "task", created._id, created.title, `Created task with attachment: ${created.title}`);
 
-    // Create notification for task creation
-    await createNotification({
-      actor: req.user?.username || req.user?.name || "System",
-      actorRole: req.user?.role || "",
-      action: "created",
-      resourceType: "task",
-      resourceName: created.title,
-      resourceId: String(created._id),
-    });
-    
+    // Fire-and-forget side effects
+    Promise.allSettled([
+      checkAndFlagOffTheClock({
+        employee: firstAssignee,
+        userId: String(req.user?.sub || ""),
+        timestamp: new Date(),
+        activityType: "task_create_with_attachment",
+        metadata: { taskId: String(created._id), title: created.title },
+      }),
+      logActivity(req, "TASK_CREATE", "task", created._id, created.title, `Created task with attachment: ${created.title}`),
+      createNotification({
+        actor: req.user?.username || req.user?.name || "System",
+        actorRole: req.user?.role || "",
+        action: "created",
+        resourceType: "task",
+        resourceName: created.title,
+        assignees: Array.isArray(created.assignees) ? created.assignees : [],
+        resourceId: String(created._id),
+      }),
+      cacheDel("tasks:list:*"),
+      created.projectId ? cacheDel(`project:${created.projectId}`) : Promise.resolve(),
+    ]).catch(() => {});
+
     return res.status(201).json({ item: withId(obj) });
   } catch (err) {
     console.error("Upload error:", err);
@@ -427,6 +608,18 @@ router.get("/:id/comments", requireAuth, async (req, res, next) => {
 
     const items = await TaskComment.find({ taskId: task._id }).sort({ createdAt: 1 }).lean();
 
+    const Settings = require("../models/Settings");
+    const userIds = [...new Set(items.map(c => c.authorUserId))].filter(Boolean);
+    const settingsList = await Settings.find({ userId: { $in: userIds } }).lean();
+    
+    const settingsMap = {};
+    settingsList.forEach(s => {
+      settingsMap[s.userId] = {
+        fullName: s.fullName || "",
+        avatar: s.avatarDataUrl || s.avatarUrl || ""
+      };
+    });
+
     return res.json({
       items: items.map((c) => ({
         id: String(c._id),
@@ -434,7 +627,15 @@ router.get("/:id/comments", requireAuth, async (req, res, next) => {
         message: String(c.message || ""),
         authorUserId: String(c.authorUserId || ""),
         authorUsername: String(c.authorUsername || ""),
+        authorFullName: (c.authorUserId && settingsMap[c.authorUserId]?.fullName) || "",
+        authorAvatar: (c.authorUserId && settingsMap[c.authorUserId]?.avatar) || "",
         authorRole: String(c.authorRole || ""),
+        attachments: Array.isArray(c.attachments) ? c.attachments.map(a => ({
+          fileName: a.fileName || "",
+          mimeType: a.mimeType || "",
+          size: a.size || 0,
+          uploadedAt: a.uploadedAt
+        })) : [],
         createdAt: c.createdAt,
       })),
     });
@@ -455,8 +656,11 @@ router.post("/:id/comments", requireAuth, async (req, res, next) => {
     }
 
     const message = String(req.body?.message || "").trim();
-    if (!message) {
-      return res.status(400).json({ error: { message: "Message is required" } });
+    const attachments = Array.isArray(req.body?.attachments) ? req.body.attachments : [];
+    
+    // We can allow either a message or an attachment
+    if (!message && attachments.length === 0) {
+      return res.status(400).json({ error: { message: "Message or attachment is required" } });
     }
 
     const created = await TaskComment.create({
@@ -465,18 +669,66 @@ router.post("/:id/comments", requireAuth, async (req, res, next) => {
       authorUsername: String(req.user?.username || ""),
       authorRole: String(req.user?.role || ""),
       message,
+      attachments
     });
 
     await logActivity(req, "TASK_COMMENT_CREATE", "task", task._id, task.title, `Comment added on task: ${task.title}`);
+
+    // Process Mentions
+    if (message.includes("@")) {
+      const Employee = require("../models/Employee");
+      const activeEmployees = await Employee.find({ status: "active" }).select("name").lean();
+      const mentionedUsers = [];
+      const lowerMessage = message.toLowerCase();
+      
+      activeEmployees.forEach(emp => {
+        if (lowerMessage.includes("@" + emp.name.toLowerCase())) {
+          mentionedUsers.push(emp.name);
+        }
+      });
+
+      // Also allow mentioning admins if they are in the User collection
+      const activeUsers = await User.find({}).select("username").lean();
+      activeUsers.forEach(u => {
+        if (u.username && lowerMessage.includes("@" + u.username.toLowerCase()) && !mentionedUsers.includes(u.username)) {
+          mentionedUsers.push(u.username);
+        }
+      });
+
+      if (mentionedUsers.length > 0) {
+        await createNotification({
+          actor: String(req.user?.username || "Someone"),
+          actorRole: String(req.user?.role || ""),
+          action: "mentioned you in a",
+          resourceType: "task comment",
+          resourceName: task.title,
+          assignees: mentionedUsers,
+          details: `"${message.length > 50 ? message.substring(0, 50) + "..." : message}"`,
+          resourceId: String(task._id),
+        });
+      }
+    }
+
+    const Settings = require("../models/Settings");
+    const authorUserId = String(req.user?.sub || req.user?.id || "");
+    const userSettings = await Settings.findOne({ userId: authorUserId }).lean();
 
     // Broadcast to all clients in the task room via WebSocket
     const commentData = {
       id: String(created._id),
       taskId: String(created.taskId),
       message: String(created.message || ""),
-      authorUserId: String(created.authorUserId || ""),
+      authorUserId: authorUserId,
       authorUsername: String(created.authorUsername || ""),
+      authorFullName: userSettings?.fullName || "",
+      authorAvatar: userSettings?.avatarDataUrl || userSettings?.avatarUrl || "",
       authorRole: String(created.authorRole || ""),
+      attachments: Array.isArray(created.attachments) ? created.attachments.map(a => ({
+        fileName: a.fileName || "",
+        mimeType: a.mimeType || "",
+        size: a.size || 0,
+        uploadedAt: a.uploadedAt
+      })) : [],
       createdAt: created.createdAt,
     };
     
@@ -488,6 +740,24 @@ router.post("/:id/comments", requireAuth, async (req, res, next) => {
     return res.status(201).json({
       item: commentData,
     });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// GET single comment attachment
+router.get("/:id/comments/:commentId/attachments/:index", requireAuth, async (req, res, next) => {
+  try {
+    const comment = await TaskComment.findById(req.params.commentId).select("attachments").lean();
+    if (!comment || !comment.attachments) {
+      return res.status(404).json({ error: { message: "Comment or attachment not found" } });
+    }
+    const idx = parseInt(req.params.index, 10);
+    const attachment = comment.attachments[idx];
+    if (!attachment) {
+      return res.status(404).json({ error: { message: "Attachment index out of bounds" } });
+    }
+    return res.json({ attachment: { url: attachment.url || "" } });
   } catch (err) {
     return next(err);
   }
@@ -620,10 +890,10 @@ router.post("/:id/archive", requireAuth, async (req, res, next) => {
 
     const Archive = require("../models/Archive");
 
-    // Archive task comments first
+    // Archive task comments first in bulk
     const taskComments = await TaskComment.find({ taskId: String(task._id) }).lean();
-    for (const comment of taskComments) {
-      await Archive.create({
+    if (taskComments.length > 0) {
+      const commentArchiveEntries = taskComments.map((comment) => ({
         itemType: "comment",
         itemData: {
           originalId: String(comment._id),
@@ -640,7 +910,8 @@ router.post("/:id/archive", requireAuth, async (req, res, next) => {
         archivedByUserId: String(req.user?.sub || req.user?.id || ""),
         archivedByUsername: String(req.user?.username || ""),
         archivedByRole: String(req.user?.role || ""),
-      });
+      }));
+      await Archive.insertMany(commentArchiveEntries);
     }
 
     // Archive the task itself
@@ -698,22 +969,43 @@ router.patch("/:id/status", requireAuth, async (req, res, next) => {
       return res.status(400).json({ error: { message: "Invalid status" } });
     }
 
-    const updated = await Task.findByIdAndUpdate(req.params.id, { status }, { new: true }).lean();
+    const update = { status };
+    
+    // Timer Logic
+    if (status === "in-progress" && task.status !== "in-progress") {
+      // Starting the task
+      update.startedAt = new Date();
+    } else if (task.status === "in-progress" && status !== "in-progress") {
+      // Stopping/Completing the task
+      const now = new Date();
+      const startedAt = task.startedAt ? new Date(task.startedAt) : null;
+      if (startedAt) {
+        const diffSeconds = Math.floor((now.getTime() - startedAt.getTime()) / 1000);
+        update.totalTimeSpent = (task.totalTimeSpent || 0) + diffSeconds;
+        update.startedAt = null; // Reset startedAt since it's not currently running
+      }
+    }
+
+    const updated = await Task.findByIdAndUpdate(req.params.id, update, { new: true }).lean();
     if (!updated) {
       return res.status(404).json({ error: { message: "Task not found" } });
     }
 
-    await logActivity(req, "TASK_STATUS_UPDATE", "task", req.params.id, updated.title, `Updated task status: ${updated.title} -> ${status}`);
-
-    await createNotification({
-      actor: req.user?.username || req.user?.name || "System",
-      actorRole: req.user?.role || "",
-      action: "status changed",
-      resourceType: "task",
-      resourceName: updated.title,
-      details: `Status -> ${status}`,
-      resourceId: String(req.params.id),
-    });
+    // Fire-and-forget
+    Promise.allSettled([
+      logActivity(req, "TASK_STATUS_UPDATE", "task", req.params.id, updated.title, `Updated task status: ${updated.title} -> ${status}`),
+      createNotification({
+        actor: req.user?.username || req.user?.name || "System",
+        actorRole: req.user?.role || "",
+        action: "status changed",
+        resourceType: "task",
+        resourceName: updated.title,
+        details: `Status -> ${status}`,
+        resourceId: String(req.params.id),
+      }),
+      cacheDel("tasks:list:*"),
+      updated.projectId ? cacheDel(`project:${updated.projectId}`) : Promise.resolve(),
+    ]).catch(() => {});
 
     return res.json({ item: withId(updated) });
   } catch (err) {
@@ -723,12 +1015,15 @@ router.patch("/:id/status", requireAuth, async (req, res, next) => {
 
 router.put("/:id", requireAuth, async (req, res, next) => {
   try {
-    const parsed = updateSchema.safeParse({
-      ...req.body,
-      assignees: normalizeAssignees(req.body?.assignees ?? req.body?.assignee),
-    });
+    console.log("PUT /api/tasks Update Payload:", JSON.stringify(req.body, null, 2));
+    const parseData = { ...req.body };
+    if (req.body?.assignees !== undefined || req.body?.assignee !== undefined) {
+      parseData.assignees = normalizeAssignees(req.body?.assignees ?? req.body?.assignee);
+    }
+
+    const parsed = updateSchema.safeParse(parseData);
     if (!parsed.success) {
-      return res.status(400).json({ error: { message: "Invalid payload" } });
+      return res.status(400).json({ error: { message: "Invalid payload", details: parsed.error.errors } });
     }
 
     const firstAssignee = parsed.data.assignees?.[0] || "";
@@ -743,10 +1038,43 @@ router.put("/:id", requireAuth, async (req, res, next) => {
 
     const patch = { ...parsed.data };
     if (patch.dueDate) {
-      patch.dueDate = new Date(patch.dueDate);
+      const d = new Date(patch.dueDate);
+      if (!isNaN(d.getTime())) {
+        patch.dueDate = d;
+      } else {
+        delete patch.dueDate;
+      }
+    } else if (patch.dueDate === "") {
+      patch.dueDate = null;
     }
 
-    delete patch.location;
+    // Convert Base64 attachments to S3 URLs if present on update
+    if (patch.attachment?.url && patch.attachment.url.startsWith("data:")) {
+      try {
+        const { buffer, mimeType } = base64ToBuffer(patch.attachment.url);
+        const s3Url = await uploadToS3(buffer, patch.attachment.fileName || "attachment", mimeType, "tasks");
+        patch.attachment.url = s3Url;
+      } catch (err) {
+        console.error("Failed to upload updated primary attachment to S3:", err);
+      }
+    }
+
+    if (Array.isArray(patch.attachments) && patch.attachments.length > 0) {
+      patch.attachments = await Promise.all(patch.attachments.map(async (att) => {
+        if (att.url && att.url.startsWith("data:")) {
+          try {
+            const { buffer, mimeType } = base64ToBuffer(att.url);
+            const s3Url = await uploadToS3(buffer, att.fileName || "attachment", mimeType, "tasks");
+            return { ...att, url: s3Url, uploadedAt: att.uploadedAt || new Date() };
+          } catch (err) {
+            console.error("Failed to upload updated multi-attachment to S3:", err);
+            return att;
+          }
+        }
+        return att;
+      }));
+    }
+
     delete patch.assignee;
     delete patch.assigneeInitials;
 
@@ -758,17 +1086,20 @@ router.put("/:id", requireAuth, async (req, res, next) => {
       return res.status(404).json({ error: { message: "Task not found" } });
     }
 
-    // Log activity
-    await logActivity(req, "TASK_UPDATE", "task", req.params.id, updated.title, `Updated task: ${updated.title}`);
-
-    await createNotification({
-      actor: req.user?.username || req.user?.name || "System",
-      actorRole: req.user?.role || "",
-      action: "updated",
-      resourceType: "task",
-      resourceName: updated.title,
-      resourceId: String(req.params.id),
-    });
+    // Fire-and-forget
+    Promise.allSettled([
+      logActivity(req, "TASK_UPDATE", "task", req.params.id, updated.title, `Updated task: ${updated.title}`),
+      createNotification({
+        actor: req.user?.username || req.user?.name || "System",
+        actorRole: req.user?.role || "",
+        action: "updated",
+        resourceType: "task",
+        resourceName: updated.title,
+        resourceId: String(req.params.id),
+      }),
+      cacheDel("tasks:list:*"),
+      updated.projectId ? cacheDel(`project:${updated.projectId}`) : Promise.resolve(),
+    ]).catch(() => {});
 
     return res.json({ item: withId(updated) });
   } catch (err) {
@@ -836,26 +1167,168 @@ router.put("/:id/reassign", requireAuth, async (req, res, next) => {
   }
 });
 
+async function archiveTaskById(taskId, archivedBy) {
+  const Task = require("../models/Task");
+  const Archive = require("../models/Archive");
+  
+  const task = await Task.findById(taskId).lean();
+  if (!task) return null;
+
+  await Archive.create({
+    itemType: "task",
+    itemData: {
+      originalId: String(task._id),
+      title: task.title,
+      description: task.description,
+      assignees: task.assignees,
+      priority: task.priority,
+      status: task.status,
+      dueDate: task.dueDate,
+      dueTime: task.dueTime,
+      location: task.location,
+      projectId: task.projectId,
+      attachment: task.attachment,
+      attachments: task.attachments,
+      createdAt: task.createdAt,
+      startedAt: task.startedAt,
+      totalTimeSpent: task.totalTimeSpent,
+    },
+    parentType: task.projectId ? "project" : "standalone",
+    parentId: String(task.projectId || ""),
+    parentName: task.projectId ? "Project Tasks" : "Standalone Tasks",
+    archivedByUserId: String(archivedBy.sub || archivedBy.id || ""),
+    archivedByUsername: String(archivedBy.username || archivedBy.name || ""),
+    archivedByRole: String(archivedBy.role || ""),
+  });
+
+  await Task.findByIdAndDelete(taskId);
+  return task;
+}
+
+router.post("/:id/archive", requireAuth, async (req, res, next) => {
+  try {
+    const role = String(req.user?.role || "").toLowerCase();
+    if (role !== "admin" && role !== "super-admin" && role !== "manager") {
+      return res.status(403).json({ error: { message: "Forbidden" } });
+    }
+
+    const task = await archiveTaskById(req.params.id, req.user);
+    if (!task) {
+      return res.status(404).json({ error: { message: "Task not found" } });
+    }
+
+    // Fire-and-forget
+    Promise.allSettled([
+      logActivity(req, "TASK_ARCHIVE", "task", req.params.id, task.title, `Archived task: ${task.title}`),
+      createNotification({
+        actor: req.user?.username || req.user?.name || "System",
+        actorRole: req.user?.role || "",
+        action: "archived",
+        resourceType: "task",
+        resourceName: task.title,
+        resourceId: String(req.params.id),
+      }),
+      cacheDel("tasks:list:*"),
+      task.projectId ? cacheDel(`project:${task.projectId}`) : Promise.resolve(),
+    ]).catch(() => {});
+
+    return res.json({ ok: true, message: "Task archived" });
+  } catch (err) {
+    return next(err);
+  }
+});
+
 router.delete("/:id", requireAuth, async (req, res, next) => {
   try {
-    const deleted = await Task.findByIdAndDelete(req.params.id).lean();
-    if (!deleted) {
+    const role = String(req.user?.role || "").toLowerCase();
+    if (role !== "admin" && role !== "super-admin") {
+      return res.status(403).json({ error: { message: "Forbidden" } });
+    }
+
+    const task = await archiveTaskById(req.params.id, req.user);
+    if (!task) {
       return res.status(404).json({ error: { message: "Task not found" } });
     }
     
-    // Log activity
-    await logActivity(req, "TASK_DELETE", "task", req.params.id, deleted.title, `Deleted task: ${deleted.title}`);
-
-    await createNotification({
-      actor: req.user?.username || req.user?.name || "System",
-      actorRole: req.user?.role || "",
-      action: "deleted",
-      resourceType: "task",
-      resourceName: deleted.title,
-      resourceId: String(req.params.id),
-    });
+    // Fire-and-forget
+    Promise.allSettled([
+      logActivity(req, "TASK_DELETE", "task", req.params.id, task.title, `Deleted (Archived) task: ${task.title}`),
+      createNotification({
+        actor: req.user?.username || req.user?.name || "System",
+        actorRole: req.user?.role || "",
+        action: "deleted",
+        resourceType: "task",
+        resourceName: task.title,
+        resourceId: String(req.params.id),
+      }),
+      cacheDel("tasks:list:*"),
+      task.projectId ? cacheDel(`project:${task.projectId}`) : Promise.resolve(),
+    ]).catch(() => {});
     
     return res.status(204).send();
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// Download task attachment by index
+router.get("/:id/attachments/:index/download", requireAuth, async (req, res, next) => {
+  try {
+    const task = await Task.findById(req.params.id).lean();
+    if (!task) {
+      return res.status(404).json({ error: { message: "Task not found" } });
+    }
+
+    const allowed = await canAccessTaskAsync(req.user, task);
+    if (!allowed) {
+      return res.status(403).json({ error: { message: "Forbidden" } });
+    }
+
+    const idx = parseInt(req.params.index, 10);
+    const attachments = Array.isArray(task.attachments) ? task.attachments : [];
+    
+    // Support legacy single attachment at index -1
+    let attachment = null;
+    if (idx === -1 && task.attachment) {
+      attachment = task.attachment;
+    } else if (idx >= 0 && idx < attachments.length) {
+      attachment = attachments[idx];
+    }
+
+    if (!attachment) {
+      return res.status(404).json({ error: { message: "Attachment not found" } });
+    }
+
+    // If attachment has data URL (base64), decode and serve
+    const url = attachment.url || "";
+    if (url.startsWith("data:")) {
+      const match = url.match(/^data:([^;]+);base64,(.+)$/);
+      if (match) {
+        const mimeType = match[1];
+        const base64Data = match[2];
+        const buffer = Buffer.from(base64Data, "base64");
+        res.setHeader("Content-Type", mimeType);
+        res.setHeader("Content-Disposition", `attachment; filename="${attachment.fileName || "download"}"`);
+        return res.send(buffer);
+      }
+    }
+
+    // If attachment has external URL, redirect to it
+    if (url.startsWith("http://") || url.startsWith("https://")) {
+      return res.redirect(url);
+    }
+
+    // If no URL but has fileName, try to serve from uploads folder
+    if (attachment.fileName) {
+      const filePath = path.join(uploadsDir, attachment.fileName);
+      if (fs.existsSync(filePath)) {
+        res.setHeader("Content-Type", attachment.mimeType || "application/octet-stream");
+        res.setHeader("Content-Disposition", `attachment; filename="${attachment.fileName}"`);
+        return res.sendFile(filePath);
+      }
+    }
+
+    return res.status(404).json({ error: { message: "Attachment file not available" } });
   } catch (err) {
     return next(err);
   }

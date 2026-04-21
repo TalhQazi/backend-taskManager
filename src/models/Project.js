@@ -23,6 +23,7 @@ const ProjectSchema = new mongoose.Schema(
     createdByUserId: { type: String, default: "" },
     createdByUsername: { type: String, default: "" },
     createdByRole: { type: String, default: "" },
+    status: { type: String, default: "Pending", index: true },
   },
   { timestamps: true }
 );
@@ -30,5 +31,7 @@ const ProjectSchema = new mongoose.Schema(
 // Compound indexes for common query patterns
 ProjectSchema.index({ createdAt: -1 });
 ProjectSchema.index({ assignees: 1, createdAt: -1 });
+// Text index for search queries (replaces regex scans)
+ProjectSchema.index({ name: "text", description: "text" });
 
 module.exports = mongoose.model("Project", ProjectSchema);

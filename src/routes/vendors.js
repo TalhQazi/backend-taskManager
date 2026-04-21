@@ -9,7 +9,7 @@ const router = express.Router();
 const vendorSchema = z.object({
   name: z.string().min(1, "Name is required"),
   phone: z.string().min(1, "Phone is required"),
-  email: z.string().email().optional().default(""),
+  email: z.union([z.string().email(), z.literal("")]).optional().default(""),
   address: z.string().optional().default(""),
   serviceType: z.string().min(1, "Service type is required"),
   location: z.string().min(1, "Location is required"),

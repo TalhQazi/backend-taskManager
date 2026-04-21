@@ -3,6 +3,7 @@ const bcrypt = require("bcryptjs");
 const { z } = require("zod");
 
 const User = require("../models/User");
+const Employee = require("../models/Employee");
 const Settings = require("../models/Settings");
 const { createNotification } = require("../utils/notifications");
 const { requireAuth, requireRole } = require("../middleware/auth"); 

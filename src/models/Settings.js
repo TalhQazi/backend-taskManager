@@ -25,4 +25,6 @@ const SettingsSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+SettingsSchema.index({ email: 1 });
+
 module.exports = mongoose.model("Settings", SettingsSchema);

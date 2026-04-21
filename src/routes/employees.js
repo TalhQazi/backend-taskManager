@@ -12,6 +12,8 @@ const ActivityLog = require("../models/ActivityLog");
 const Settings = require("../models/Settings");
 const { createNotification } = require("../utils/notifications");
 const { requireAuth, requireRole } = require("../middleware/auth");
+const { parsePagination, paginatedResponse } = require("../lib/pagination");
+const { cacheWrap, cacheDel } = require("../lib/cache");
 
 const router = express.Router();
 
@@ -94,6 +96,11 @@ function escapeRegExp(s) {
      const ctx = await requireEmployeeSelf(req, res);
      if (!ctx) return;
      const { user, employee } = ctx;
+
+     const userId = String(user._id || "");
+     const settings = userId ? await Settings.findOne({ userId }, { avatarUrl: 1, avatarDataUrl: 1 }).lean() : null;
+     const avatarUrl = String(settings?.avatarUrl || settings?.avatarDataUrl || "").trim();
+
      res.json({
        item: {
          id: String(employee._id),
@@ -103,6 +110,7 @@ function escapeRegExp(s) {
          company: employee.company || "",
          location: employee.location || "",
          status: employee.status || "active",
+         avatarUrl: avatarUrl || undefined,
          username: user.username || user.email || "",
          role: "employee",
        },
@@ -122,9 +130,6 @@ router.get("/me/tasks", requireAuth, async (req, res, next) => {
       .map((s) => String(s || "").trim())
       .filter(Boolean);
 
-    console.log("[DEBUG] /me/tasks - Employee:", employee.name, "Email:", employee.email, "User:", user.username);
-    console.log("[DEBUG] /me/tasks - Candidates:", candidates);
-
     // Build case-insensitive regex conditions for assignees array matching
     const assigneeConditions = candidates.flatMap((c) => [
       { assignees: { $elemMatch: { $regex: new RegExp(`^${escapeRegExp(c)}$`, "i") } } },
@@ -133,23 +138,9 @@ router.get("/me/tasks", requireAuth, async (req, res, next) => {
 
     const query = assigneeConditions.length > 0 ? { $or: assigneeConditions } : { _id: null };
 
-    console.log("[DEBUG] /me/tasks - MongoDB query:", JSON.stringify(query));
-
     const tasks = await Task.find(query)
       .sort({ updatedAt: -1 })
       .lean();
-
-    console.log("[DEBUG] /me/tasks - Found tasks:", tasks.length);
-    if (tasks.length > 0) {
-      console.log("[DEBUG] /me/tasks - First task assignees:", tasks[0].assignees);
-    }
-
-    // Also fetch all tasks to see what's in the database (for debugging)
-    const allTasks = await Task.find({}).limit(5).lean();
-    console.log("[DEBUG] /me/tasks - Sample tasks in DB:");
-    allTasks.forEach(t => {
-      console.log(`  Task: ${t.title}, assignees: ${JSON.stringify(t.assignees)}, assignee: ${t.assignee}`);
-    });
 
     res.json({
       items: tasks.map((t) => ({
@@ -408,34 +399,51 @@ async function logActivity(req, action, resourceType, resourceId, resourceName, 
 
 router.get("/", requireAuth, async (_req, res, next) => {
   try {
-    const items = await Employee.find().sort({ createdAt: -1 }).lean();
-    
-    // Get unique emails from employees to fetch their settings
-    const employeeEmails = items.map(e => e.email).filter(Boolean);
-    const settings = await Settings.find({ 
-      $or: [
-        { email: { $in: employeeEmails } },
-        { userId: { $in: items.map(e => String(e._id)) } }
-      ]
-    }).lean();
-    
-    // Create a map of email -> avatarUrl
-    const avatarMap = new Map();
-    settings.forEach(s => {
-      if (s.avatarDataUrl || s.avatarUrl) {
-        const avatar = s.avatarDataUrl || s.avatarUrl;
-        if (s.email) avatarMap.set(s.email, avatar);
-        if (s.userId) avatarMap.set(String(s.userId), avatar);
-      }
-    });
-    
-    // Merge employee data with avatar
-    const itemsWithAvatars = items.map(e => {
-      const avatarUrl = avatarMap.get(e.email) || avatarMap.get(String(e._id)) || "";
-      return { ...e, avatarUrl, avatarDataUrl: avatarUrl };
-    });
-    
-    res.json({ items: itemsWithAvatars.map(withId) });
+    const result = await cacheWrap('employees:list', async () => {
+      const items = await Employee.find().sort({ name: 1 }).lean();
+
+      // Resolve avatars from Settings. Settings are stored by User userId, not Employee _id.
+      const employeeEmails = items.map((e) => String(e.email || "").trim()).filter(Boolean);
+      const users = employeeEmails.length
+        ? await User.find(
+            { email: { $in: employeeEmails } },
+            { _id: 1, email: 1 }
+          ).lean()
+        : [];
+
+      const emailToUserId = new Map(
+        users
+          .map((u) => [String(u.email || "").trim(), String(u._id)])
+          .filter(([email, id]) => Boolean(email) && Boolean(id))
+      );
+
+      const userIds = Array.from(new Set(Array.from(emailToUserId.values())));
+      const settings = userIds.length
+        ? await Settings.find({ userId: { $in: userIds } })
+            .select("userId avatarUrl avatarDataUrl")
+            .lean()
+        : [];
+
+      const userIdToAvatar = new Map(
+        settings
+          .map((s) => [
+            String(s.userId),
+            String(s.avatarUrl || s.avatarDataUrl || "").trim(),
+          ])
+          .filter(([, url]) => Boolean(url))
+      );
+
+      const itemsWithAvatars = items.map((e) => {
+        const email = String(e.email || "").trim();
+        const userId = emailToUserId.get(email);
+        const avatarUrl = userId ? userIdToAvatar.get(String(userId)) || "" : "";
+        return { ...e, avatarUrl, avatarDataUrl: avatarUrl };
+      });
+
+      return { items: itemsWithAvatars.map(withId) };
+    }, 60);
+
+    res.json(result);
   } catch (err) {
     next(err);
   }
@@ -489,18 +497,19 @@ router.post("/", requireAuth, async (req, res, next) => {
 
     const obj = created.toObject();
     
-    // Log activity
-    await logActivity(req, "EMPLOYEE_CREATE", "employee", created._id, created.name, `Created employee: ${created.name}`);
-    
-    // Create notification for all admin/manager users
-    await createNotification({
-      actor: req.user?.username || req.user?.name || "Admin",
-      actorRole: req.user?.role || "admin",
-      action: "created",
-      resourceType: "employee",
-      resourceName: created.name,
-      resourceId: String(created._id),
-    });
+    // Fire-and-forget side effects
+    Promise.allSettled([
+      logActivity(req, "EMPLOYEE_CREATE", "employee", created._id, created.name, `Created employee: ${created.name}`),
+      createNotification({
+        actor: req.user?.username || req.user?.name || "Admin",
+        actorRole: req.user?.role || "admin",
+        action: "created",
+        resourceType: "employee",
+        resourceName: created.name,
+        resourceId: String(created._id),
+      }),
+      cacheDel("employees:list"),
+    ]).catch(() => {});
     
     return res.status(201).json({ item: withId(obj) });
   } catch (err) {
@@ -550,14 +559,61 @@ router.put("/:id", requireAuth, async (req, res, next) => {
     // Sync user account if password was updated
     if (patch.passwordHash) {
       try {
-        await User.findOneAndUpdate(
-          { email: updated.email },
-          { passwordHash: patch.passwordHash }
-        );
+        const authUserId = String(req.user?.sub || "").trim();
+        const authRole = String(req.user?.role || "").trim();
+
+        if (authRole === "employee" && authUserId) {
+          await User.findByIdAndUpdate(authUserId, { passwordHash: patch.passwordHash });
+        } else {
+          const email = String(updated.email || "").trim();
+          await User.findOneAndUpdate(
+            { email: new RegExp(`^${escapeRegExp(email)}$`, "i") },
+            { passwordHash: patch.passwordHash }
+          );
+        }
       } catch (userErr) {
         console.error("Failed to update user password:", userErr.message);
       }
     }
+
+    if (patch.status === "inactive") {
+      const archived = await archiveEmployeeById(req.params.id, req.user);
+      if (archived) {
+         // Create notification
+        await createNotification({
+          actor: req.user?.username || req.user?.name || "Admin",
+          actorRole: req.user?.role || "admin",
+          action: "archived (deactivated)",
+          resourceType: "employee",
+          resourceName: archived.name,
+          resourceId: String(req.params.id),
+        });
+        cacheDel("employees:list");
+        return res.json({ item: withId(archived), archived: true });
+      }
+    }
+
+    // Sync user account name when employee name changes (Admin panel reads from User collection)
+    if (typeof patch.name === "string" && patch.name.trim()) {
+      try {
+        const authUserId = String(req.user?.sub || "").trim();
+        const authRole = String(req.user?.role || "").trim();
+
+        if (authRole === "employee" && authUserId) {
+          await User.findByIdAndUpdate(authUserId, { name: updated.name });
+        }
+
+        const email = String(updated.email || "").trim();
+        await User.findOneAndUpdate(
+          { email: new RegExp(`^${escapeRegExp(email)}$`, "i") },
+          { name: updated.name }
+        );
+      } catch (userErr) {
+        console.error("Failed to update user name:", userErr.message);
+      }
+    }
+
+    await cacheDel("employees:list");
 
     // Create notification for all admin/manager users
     await createNotification({
@@ -575,33 +631,60 @@ router.put("/:id", requireAuth, async (req, res, next) => {
   }
 });
 
+async function archiveEmployeeById(employeeId, archivedBy) {
+  const Employee = require("../models/Employee");
+  const User = require("../models/User");
+  const Archive = require("../models/Archive");
+  
+  const employee = await Employee.findById(employeeId).lean();
+  if (!employee) return null;
+
+  await Archive.create({
+    itemType: "employee",
+    itemData: {
+      originalId: String(employee._id),
+      ...employee,
+    },
+    parentType: "organization",
+    parentId: "system",
+    parentName: "Employees",
+    archivedByUserId: String(archivedBy.sub || archivedBy.id || ""),
+    archivedByUsername: String(archivedBy.username || archivedBy.name || ""),
+    archivedByRole: String(archivedBy.role || ""),
+  });
+
+  // Delete from Employee and corresponding User
+  await Employee.findByIdAndDelete(employeeId);
+  try {
+    await User.deleteOne({ email: employee.email });
+  } catch (err) {
+    console.error("Failed to delete user account during archiving:", err);
+  }
+  
+  return employee;
+}
+
 router.delete("/:id", requireAuth, async (req, res, next) => {
   try {
-    const deleted = await Employee.findByIdAndDelete(req.params.id).lean();
+    const deleted = await archiveEmployeeById(req.params.id, req.user);
     if (!deleted) {
       return res.status(404).json({ error: { message: "Employee not found" } });
     }
     
-    // Also delete corresponding user account
-    try {
-      await User.deleteOne({ email: deleted.email });
-    } catch (userErr) {
-      console.error("Failed to delete user account:", userErr.message);
-    }
-    
     // Log activity
-    await logActivity(req, "EMPLOYEE_DELETE", "employee", req.params.id, deleted.name, `Deleted employee: ${deleted.name}`);
+    await logActivity(req, "EMPLOYEE_ARCHIVE", "employee", req.params.id, deleted.name, `Archived (Deleted) employee: ${deleted.name}`);
     
-    // Create notification for all admin/manager users
+    // Create notification
     await createNotification({
       actor: req.user?.username || req.user?.name || "Admin",
       actorRole: req.user?.role || "admin",
-      action: "deleted",
+      action: "archived",
       resourceType: "employee",
       resourceName: deleted.name,
       resourceId: String(req.params.id),
     });
     
+    cacheDel("employees:list");
     return res.status(204).send();
   } catch (err) {
     return next(err);

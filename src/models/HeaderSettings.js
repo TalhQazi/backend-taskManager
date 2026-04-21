@@ -44,18 +44,6 @@ const headerSettingsSchema = new mongoose.Schema(
   }
 );
 
-// Ensure only one document exists
-headerSettingsSchema.pre("save", async function (next) {
-  if (this.isNew) {
-    const count = await this.constructor.countDocuments();
-    if (count > 0) {
-      const error = new Error("Only one header settings document allowed");
-      return next(error);
-    }
-  }
-  next();
-});
-
 const HeaderSettings = mongoose.model("HeaderSettings", headerSettingsSchema);
 
 module.exports = HeaderSettings;
