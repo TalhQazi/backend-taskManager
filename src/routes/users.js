@@ -268,7 +268,12 @@ router.post("/:id/archive", requireAuth, requireRole(["super-admin", "admin"]), 
       `${user.name}`.trim(),
     ].filter(Boolean);
 
-    // Remove user from all projects
+    const { cacheDel } = require("../lib/cache");
+
+    // Remove user from all projects and capture their IDs to clear cache
+    const affectedProjects = await Project.find({ assignees: { $in: identifiers } }).select("_id").lean();
+    const projectIds = affectedProjects.map(p => String(p._id));
+
     await Project.updateMany(
       { assignees: { $in: identifiers } },
       { $pull: { assignees: { $in: identifiers } } }
@@ -279,6 +284,12 @@ router.post("/:id/archive", requireAuth, requireRole(["super-admin", "admin"]), 
       { assignees: { $in: identifiers } },
       { $pull: { assignees: { $in: identifiers } } }
     );
+
+    // Clear caches to reflect changes immediately
+    await cacheDel("tasks:list:*");
+    for (const pid of projectIds) {
+      await cacheDel(`project:${pid}`);
+    }
 
     await Archive.create({
       itemType: "user",
