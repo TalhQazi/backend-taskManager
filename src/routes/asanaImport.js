@@ -12,6 +12,12 @@ const AsanaAttachment = require("../models/AsanaAttachment");
 const AsanaUser = require("../models/AsanaUser");
 const ImportJob = require("../models/ImportJob");
 
+// Internal Task Manager Models
+const Project = require("../models/Project");
+const Task = require("../models/Task");
+const TaskComment = require("../models/TaskComment");
+const User = require("../models/User");
+
 const router = express.Router();
 
 function newJobId() {
@@ -298,6 +304,162 @@ router.get("/users", requireAuth, requireRole(["admin", "super-admin"]), async (
     return res.json({ ok: true, items });
   } catch (err) {
     return next(err);
+  }
+});
+
+// Transfer Asana Project to Internal Task Manager
+router.post("/transfer-project", requireAuth, requireRole(["admin", "super-admin"]), async (req, res, next) => {
+  try {
+    const { projectAsanaId } = req.body;
+    if (!projectAsanaId) {
+      return res.status(400).json({ error: { message: "projectAsanaId is required" } });
+    }
+
+    // 1. Fetch Asana Project
+    const asanaProject = await AsanaProject.findOne({ asanaId: projectAsanaId }).lean();
+    if (!asanaProject) {
+      return res.status(404).json({ error: { message: "Asana project not found" } });
+    }
+
+    // 2. Fetch all Asana Tasks for this project
+    const asanaTasks = await AsanaTask.find({ projectAsanaId }).lean();
+    
+    // 3. Prep User Mapping (Asana Email -> Internal User)
+    const asanaUsers = await AsanaUser.find({}).lean();
+    const internalUsers = await User.find({}).lean();
+    const emailToInternalUser = new Map(internalUsers.map(u => [u.email.toLowerCase(), u]));
+    
+    const asanaIdToInternalUser = new Map();
+    for (const au of asanaUsers) {
+      const internal = emailToInternalUser.get(au.email.toLowerCase());
+      if (internal) asanaIdToInternalUser.set(au.asanaId, internal);
+    }
+
+    // 4. Create Internal Project
+    const newProject = await Project.create({
+      name: asanaProject.name,
+      description: `Imported from Asana (ID: ${asanaProject.asanaId})`,
+      createdByUserId: req.user?._id || "",
+      createdByUsername: req.user?.username || "",
+      createdByRole: req.user?.role || "admin",
+      status: "Active"
+    });
+
+    let tasksCreated = 0;
+    let commentsCreated = 0;
+
+    // 5. Create Tasks and Subtasks
+    // To handle subtasks, we might need a mapping of Asana ID to Internal ID
+    const asanaIdToInternalTaskId = new Map();
+
+    // Process top-level tasks first
+    for (const at of asanaTasks.filter(t => !t.parentAsanaId)) {
+      const internalTask = await Task.create({
+        title: at.title,
+        description: at.description,
+        projectId: newProject._id,
+        status: at.completed ? "completed" : "pending",
+        dueDate: at.dueDate ? new Date(at.dueDate) : undefined,
+        createdBy: {
+          userId: req.user?._id || "",
+          name: req.user?.name || req.user?.username || "",
+          email: req.user?.email || "",
+          role: req.user?.role || "admin"
+        }
+      });
+      asanaIdToInternalTaskId.set(at.asanaId, internalTask._id);
+      tasksCreated++;
+
+      // Transfer Comments for this task
+      const asanaComments = await AsanaComment.find({ taskAsanaId: at.asanaId }).sort({ createdAtAsana: 1 }).lean();
+      for (const ac of asanaComments) {
+        const author = asanaIdToInternalUser.get(ac.authorAsanaId);
+        await TaskComment.create({
+          taskId: internalTask._id,
+          authorUserId: author?._id || "",
+          authorUsername: author?.name || author?.username || ac.authorName || "Asana User",
+          authorRole: author?.role || "",
+          message: ac.message,
+          createdAt: ac.createdAtAsana ? new Date(ac.createdAtAsana) : undefined
+        });
+        commentsCreated++;
+      }
+
+      // Transfer Attachments
+      const asanaAtts = await AsanaAttachment.find({ taskAsanaId: at.asanaId }).lean();
+      if (asanaAtts.length > 0) {
+        internalTask.attachments = asanaAtts.map(a => ({
+          fileName: a.fileName,
+          url: a.filePath,
+          mimeType: a.mimeType,
+          size: a.size,
+          uploadedAt: new Date()
+        }));
+        await internalTask.save();
+      }
+    }
+
+    // Process subtasks (at most one level deep supported for simplicity in this carbon-copy)
+    for (const st of asanaTasks.filter(t => t.parentAsanaId)) {
+      const parentId = asanaIdToInternalTaskId.get(st.parentAsanaId);
+      const internalSubtask = await Task.create({
+        title: `[Subtask] ${st.title}`,
+        description: st.description,
+        projectId: newProject._id,
+        // Optional: link to parent if your Task model supports it, 
+        // but often we just list them under the same project.
+        status: st.completed ? "completed" : "pending",
+        dueDate: st.dueDate ? new Date(st.dueDate) : undefined,
+        createdBy: {
+          userId: req.user?._id || "",
+          name: req.user?.name || req.user?.username || "",
+          email: req.user?.email || "",
+          role: req.user?.role || "admin"
+        }
+      });
+      tasksCreated++;
+
+      // Comments for subtask
+      const asanaComments = await AsanaComment.find({ taskAsanaId: st.asanaId }).sort({ createdAtAsana: 1 }).lean();
+      for (const ac of asanaComments) {
+        const author = asanaIdToInternalUser.get(ac.authorAsanaId);
+        await TaskComment.create({
+          taskId: internalSubtask._id,
+          authorUserId: author?._id || "",
+          authorUsername: author?.name || author?.username || ac.authorName || "Asana User",
+          authorRole: author?.role || "",
+          message: ac.message,
+          createdAt: ac.createdAtAsana ? new Date(ac.createdAtAsana) : undefined
+        });
+        commentsCreated++;
+      }
+
+      // Attachments for subtask
+      const asanaAtts = await AsanaAttachment.find({ taskAsanaId: st.asanaId }).lean();
+      if (asanaAtts.length > 0) {
+        internalSubtask.attachments = asanaAtts.map(a => ({
+          fileName: a.fileName,
+          url: a.filePath,
+          mimeType: a.mimeType,
+          size: a.size,
+          uploadedAt: new Date()
+        }));
+        await internalSubtask.save();
+      }
+    }
+
+    return res.json({ 
+      ok: true, 
+      message: "Project successfully transferred to Task Manager",
+      projectId: newProject._id,
+      stats: {
+        tasks: tasksCreated,
+        comments: commentsCreated
+      }
+    });
+
+  } catch (err) {
+    next(err);
   }
 });
 

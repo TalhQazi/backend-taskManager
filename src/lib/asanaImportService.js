@@ -52,11 +52,15 @@ async function importAsanaData({ token, workspaceId, onProgress }) {
 
   progress("users_save_start");
   for (const u of users) {
-    await AsanaUser.findOneAndUpdate(
-      { asanaId: String(u.gid) },
-      { $set: { asanaId: String(u.gid), name: String(u.name || ""), email: String(u.email || "") } },
-      { upsert: true, new: true }
-    );
+    const asanaId = String(u.gid);
+    const exists = await AsanaUser.exists({ asanaId });
+    if (!exists) {
+      await AsanaUser.create({
+        asanaId,
+        name: String(u.name || ""),
+        email: String(u.email || ""),
+      });
+    }
   }
   progress("users_save_done");
   await sleep(200);
@@ -73,11 +77,14 @@ async function importAsanaData({ token, workspaceId, onProgress }) {
 
   progress("workspaces_save_start");
   for (const w of workspaces) {
-    await AsanaWorkspace.findOneAndUpdate(
-      { asanaId: String(w.gid) },
-      { $set: { asanaId: String(w.gid), name: String(w.name || "") } },
-      { upsert: true, new: true }
-    );
+    const asanaId = String(w.gid);
+    const exists = await AsanaWorkspace.exists({ asanaId });
+    if (!exists) {
+      await AsanaWorkspace.create({
+        asanaId,
+        name: String(w.name || ""),
+      });
+    }
   }
   progress("workspaces_save_done");
   await sleep(200);
@@ -94,18 +101,16 @@ async function importAsanaData({ token, workspaceId, onProgress }) {
 
   progress("projects_save_start");
   for (const p of projects) {
-    await AsanaProject.findOneAndUpdate(
-      { asanaId: String(p.gid) },
-      {
-        $set: {
-          asanaId: String(p.gid),
-          workspaceAsanaId: String(workspaceId),
-          name: String(p.name || ""),
-          createdAtAsana: String(p.created_at || ""),
-        },
-      },
-      { upsert: true, new: true }
-    );
+    const asanaId = String(p.gid);
+    const exists = await AsanaProject.exists({ asanaId });
+    if (!exists) {
+      await AsanaProject.create({
+        asanaId,
+        workspaceAsanaId: String(workspaceId),
+        name: String(p.name || ""),
+        createdAtAsana: String(p.created_at || ""),
+      });
+    }
   }
   progress("projects_save_done");
   await sleep(200);
@@ -131,21 +136,19 @@ async function importAsanaData({ token, workspaceId, onProgress }) {
 
   progress("tasks_save_start");
   for (const t of tasks) {
-    await AsanaTask.findOneAndUpdate(
-      { asanaId: String(t.gid) },
-      {
-        $set: {
-          asanaId: String(t.gid),
-          projectAsanaId: String(t.__projectGid || ""),
-          parentAsanaId: String(t.parent?.gid || ""),
-          title: String(t.name || ""),
-          description: String(t.notes || ""),
-          dueDate: String(t.due_on || ""),
-          completed: !!t.completed,
-        },
-      },
-      { upsert: true, new: true }
-    );
+    const asanaId = String(t.gid);
+    const exists = await AsanaTask.exists({ asanaId });
+    if (!exists) {
+      await AsanaTask.create({
+        asanaId,
+        projectAsanaId: String(t.__projectGid || ""),
+        parentAsanaId: String(t.parent?.gid || ""),
+        title: String(t.name || ""),
+        description: String(t.notes || ""),
+        dueDate: String(t.due_on || ""),
+        completed: !!t.completed,
+      });
+    }
   }
   progress("tasks_save_done");
   await sleep(200);
@@ -170,21 +173,19 @@ async function importAsanaData({ token, workspaceId, onProgress }) {
 
   progress("subtasks_save_start");
   for (const s of subtasks) {
-    await AsanaTask.findOneAndUpdate(
-      { asanaId: String(s.gid) },
-      {
-        $set: {
-          asanaId: String(s.gid),
-          projectAsanaId: "",
-          parentAsanaId: String(s.__parentGid || s.parent?.gid || ""),
-          title: String(s.name || ""),
-          description: String(s.notes || ""),
-          dueDate: String(s.due_on || ""),
-          completed: !!s.completed,
-        },
-      },
-      { upsert: true, new: true }
-    );
+    const asanaId = String(s.gid);
+    const exists = await AsanaTask.exists({ asanaId });
+    if (!exists) {
+      await AsanaTask.create({
+        asanaId,
+        projectAsanaId: "",
+        parentAsanaId: String(s.__parentGid || s.parent?.gid || ""),
+        title: String(s.name || ""),
+        description: String(s.notes || ""),
+        dueDate: String(s.due_on || ""),
+        completed: !!s.completed,
+      });
+    }
   }
   progress("subtasks_save_done");
   await sleep(200);
@@ -210,19 +211,17 @@ async function importAsanaData({ token, workspaceId, onProgress }) {
 
   progress("comments_save_start");
   for (const c of comments) {
-    await AsanaComment.findOneAndUpdate(
-      { asanaId: String(c.gid) },
-      {
-        $set: {
-          asanaId: String(c.gid),
-          taskAsanaId: String(c.__taskGid),
-          authorAsanaId: String(c.created_by?.gid || ""),
-          message: String(c.text || ""),
-          createdAtAsana: String(c.created_at || ""),
-        },
-      },
-      { upsert: true, new: true }
-    );
+    const asanaId = String(c.gid);
+    const exists = await AsanaComment.exists({ asanaId });
+    if (!exists) {
+      await AsanaComment.create({
+        asanaId,
+        taskAsanaId: String(c.__taskGid),
+        authorAsanaId: String(c.created_by?.gid || ""),
+        message: String(c.text || ""),
+        createdAtAsana: String(c.created_at || ""),
+      });
+    }
   }
   progress("comments_save_done");
   await sleep(200);
