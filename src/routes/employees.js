@@ -14,7 +14,7 @@ const { createNotification } = require("../utils/notifications");
 const { requireAuth, requireRole } = require("../middleware/auth");
 const PayrollRecord = require("../models/employee/PayrollRecord");
 const EmpDocument = require("../models/employee/EmpDocument");
-
+const TaxDocument = require("../models/employee/TaxDocument");
 
 const multer = require("multer");
 const path = require("path");
@@ -65,59 +65,6 @@ const upload = multer({ storage });
 
 const { parsePagination, paginatedResponse } = require("../lib/pagination");
 const { cacheWrap, cacheDel } = require("../lib/cache");
-
-const PayrollRecord = require("../models/employee/PayrollRecord");
-const EmpDocument = require("../models/employee/EmpDocument");
-
-
-const multer = require("multer");
-const path = require("path");
-const fs = require("fs");
-const jwt = require("jsonwebtoken");
-
-
-const storage = multer.diskStorage({
-  destination: function (req, file, cb) {
-    const employeeId = req.employee?._id;
-
-    console.log("EMPLOYEE IN MULTER:", employeeId);
-
-    if (!employeeId) {
-      return cb(new Error("Employee not found"), "");
-    }
-
-    const { docType } = req.body;
-
-    let folder = "docs";
-
-    if (docType === "W-4" || docType === "I-9") {
-      folder = "tax";
-    } else if (docType === "Payslip") {
-      folder = "payroll";
-    }
-
-    const dir = `uploads/employees/${employeeId}/${folder}`;
-
-    console.log("FINAL DIR:", dir);
-
-    fs.mkdirSync(dir, { recursive: true });
-
-    cb(null, dir);
-  },
-
-  filename: function (req, file, cb) {
-    const ext = path.extname(file.originalname);
-    const name =
-      Date.now() + "-" + Math.random().toString(36).substring(7);
-
-    cb(null, name + ext);
-  },
-});
-
-const upload = multer({ storage });
-
-
-
 const router = express.Router();
 
 const createSchema = z.object({
