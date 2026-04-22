@@ -45,6 +45,7 @@ const { router: founderMessagesRoutes, initializeMessages } = require("./routes/
 const notesRoutes = require("./routes/notes");
 const assetLibraryRoutes = require("./routes/assetLibrary");
 const contributorsRoutes = require("./routes/contributors");
+const eodReportsRoutes = require("./routes/eodReports");
 
 //going to express now
 const app = express();
@@ -243,6 +244,8 @@ app.get("/api/s3-proxy/*", requireAuth, async (req, res) => {
 app.use("/api/auth", authRoutes);
 app.use("/api/tasks", tasksRoutes);
 app.use("/api/employees", employeesRoutes);
+app.use("/api/manager", eodReportsRoutes);
+app.use("/api/admin", eodReportsRoutes);
 app.use("/api/vehicles", vehiclesRoutes);
 app.use("/api/time-entries", timeEntriesRoutes);
 app.use("/api/appliances", appliancesRoutes);

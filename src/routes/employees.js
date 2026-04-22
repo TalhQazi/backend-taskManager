@@ -10,6 +10,7 @@ const TimeEntry = require("../models/TimeEntry");
 const Message = require("../models/Message");
 const ActivityLog = require("../models/ActivityLog");
 const Settings = require("../models/Settings");
+const EODReport = require("../models/EODReport");
 const { createNotification } = require("../utils/notifications");
 const { requireAuth, requireRole } = require("../middleware/auth");
 const { parsePagination, paginatedResponse } = require("../lib/pagination");
@@ -50,47 +51,47 @@ function escapeRegExp(s) {
   return String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
- function getDayRange(d = new Date()) {
-   const start = new Date(d);
-   start.setHours(0, 0, 0, 0);
-   const end = new Date(d);
-   end.setHours(23, 59, 59, 999);
-   return { start, end };
- }
+function getDayRange(d = new Date()) {
+  const start = new Date(d);
+  start.setHours(0, 0, 0, 0);
+  const end = new Date(d);
+  end.setHours(23, 59, 59, 999);
+  return { start, end };
+}
 
- async function requireEmployeeSelf(req, res) {
-   const role = String(req.user?.role || "").trim();
-   if (role !== "employee") {
-     res.status(403).json({ error: { message: "Forbidden" } });
-     return null;
-   }
+async function requireEmployeeSelf(req, res) {
+  const role = String(req.user?.role || "").trim();
+  if (role !== "employee") {
+    res.status(403).json({ error: { message: "Forbidden" } });
+    return null;
+  }
 
-   const userId = String(req.user?.sub || "").trim();
-   if (!userId) {
-     res.status(401).json({ error: { message: "Unauthorized" } });
-     return null;
-   }
+  const userId = String(req.user?.sub || "").trim();
+  if (!userId) {
+    res.status(401).json({ error: { message: "Unauthorized" } });
+    return null;
+  }
 
-   const user = await User.findById(userId, { name: 1, username: 1, email: 1, role: 1 }).lean();
-   if (!user) {
-     res.status(401).json({ error: { message: "Unauthorized" } });
-     return null;
-   }
+  const user = await User.findById(userId, { name: 1, username: 1, email: 1, role: 1 }).lean();
+  if (!user) {
+    res.status(401).json({ error: { message: "Unauthorized" } });
+    return null;
+  }
 
-   const email = String(user.email || "").trim();
-   const employee = email
-     ? await Employee.findOne({ email }, { passwordHash: 0 }).lean()
-     : null;
+  const email = String(user.email || "").trim();
+  const employee = email
+    ? await Employee.findOne({ email }, { passwordHash: 0 }).lean()
+    : null;
 
-   if (!employee) {
-     res.status(404).json({ error: { message: "Employee profile not found" } });
-     return null;
-   }
+  if (!employee) {
+    res.status(404).json({ error: { message: "Employee profile not found" } });
+    return null;
+  }
 
-   return { user, employee };
- }
+  return { user, employee };
+}
 
- // Employee self endpoints
+// Employee self endpoints
  router.get("/me", requireAuth, async (req, res, next) => {
    try {
      const ctx = await requireEmployeeSelf(req, res);
@@ -834,11 +835,13 @@ router.post("/me/clock-out-with-scrum", requireAuth, async (req, res, next) => {
 
     // Create notification for admin
     await createNotification({
-      title: "Employee Clocked Out with Scrum",
-      message: `${employee.name} has clocked out with scrum details`,
-      type: "info",
+      actor: employee.name,
+      actorRole: "employee",
+      action: "submitted",
+      resourceType: "scrum",
+      resourceName: "daily report",
+      details: "clocked out with scrum details",
       link: `/admin/time-tracking`,
-      recipients: [{ role: "admin" }],
     });
 
     return res.json({
@@ -888,6 +891,131 @@ router.get("/me/scrum-records", requireAuth, async (req, res, next) => {
     return res.json({ success: true, items });
   } catch (err) {
     return next(err);
+  }
+});
+
+// POST /api/employees/me/eod-report - Submit EOD report
+router.post("/me/eod-report", requireAuth, async (req, res, next) => {
+  try {
+    const schema = z.object({
+      tasksCompleted: z.string().min(10, "Tasks completed must be at least 10 characters"),
+      issuesBlockers: z.string().optional(),
+      notes: z.string().optional(),
+    });
+
+    const parsed = schema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ 
+        error: { 
+          message: parsed.error.errors[0]?.message || "Invalid payload" 
+        } 
+      });
+    }
+
+    const ctx = await requireEmployeeSelf(req, res);
+    if (!ctx) return;
+    const { employee, user } = ctx;
+
+    const { start, end } = getDayRange(new Date());
+
+    // Check if EOD report already exists for today
+    const existingReport = await EODReport.findOne({
+      userId: String(user._id),
+      date: { $gte: start, $lte: end },
+    });
+
+    if (existingReport) {
+      // Update existing report
+      existingReport.rawInput = JSON.stringify(parsed.data);
+      existingReport.status = "submitted";
+      await existingReport.save();
+      
+      cacheDel("eod-reports:*").catch(() => {});
+      
+      return res.json({ item: withId(existingReport.toObject()) });
+    }
+
+    // Find today's time entry
+    const timeEntry = await TimeEntry.findOne({
+      employee: employee.name,
+      date: { $gte: start, $lte: end },
+    });
+
+    // Create new EOD report
+    const dateObj = new Date();
+    const eodData = parsed.data;
+    const report = await EODReport.create({
+      userId: String(user._id),
+      employeeId: String(employee._id),
+      employeeName: employee.name,
+      date: dateObj,
+      rawInput: JSON.stringify(eodData),
+      inputType: "structured",
+      status: "submitted",
+      timeEntryId: timeEntry?._id || null,
+    });
+
+    // Create notification for admin
+    await createNotification({
+      actor: employee.name,
+      actorRole: "employee",
+      action: "submitted",
+      resourceType: "EOD report",
+      resourceName: dateObj.toISOString().split("T")[0],
+      details: "end-of-day report",
+      link: `/admin/eod-reports`,
+    });
+
+    cacheDel("eod-reports:*").catch(() => {});
+
+    return res.status(201).json({ item: withId(report.toObject()) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /api/employees/me/eod-reports - Get employee's EOD reports
+router.get("/me/eod-reports", requireAuth, async (req, res, next) => {
+  try {
+    const ctx = await requireEmployeeSelf(req, res);
+    if (!ctx) return;
+    const { user } = ctx;
+
+    const { from, to, page = 1, limit = 50 } = req.query;
+    const skip = (Number(page) - 1) * Number(limit);
+
+    const matchStage = { userId: String(user._id) };
+
+    // Date range filter
+    if (from || to) {
+      matchStage.date = {};
+      if (from) matchStage.date.$gte = new Date(from);
+      if (to) matchStage.date.$lte = new Date(to);
+    }
+
+    const [reports, total] = await Promise.all([
+      EODReport.find(matchStage)
+        .sort({ date: -1 })
+        .skip(skip)
+        .limit(Number(limit))
+        .lean(),
+      EODReport.countDocuments(matchStage),
+    ]);
+
+    const items = reports.map((report) => ({
+      id: String(report._id),
+      userId: report.userId,
+      employeeName: report.employeeName,
+      date: report.date,
+      rawInput: report.rawInput,
+      inputType: report.inputType,
+      status: report.status,
+      createdAt: report.createdAt,
+    }));
+
+    return res.json({ items, total, page: Number(page), limit: Number(limit) });
+  } catch (err) {
+    next(err);
   }
 });
 
