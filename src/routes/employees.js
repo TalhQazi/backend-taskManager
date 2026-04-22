@@ -234,6 +234,17 @@ router.post("/me/clock-in", requireAuth, async (req, res, next) => {
     if (!ctx) return;
     const { employee, user } = ctx;
 
+    // Check onboarding status
+    const Onboarding = require("../models/Onboarding");
+    const onboarding = await Onboarding.findOne({ userId: user._id });
+    if (!onboarding || onboarding.overallStatus !== "approved") {
+      return res.status(403).json({
+        error: {
+          message: "Complete onboarding and receive admin approval before clocking in",
+        },
+      });
+    }
+
     const { start, end } = getDayRange(new Date());
     const existing = await TimeEntry.findOne({ employee: employee.name, date: { $gte: start, $lte: end } })
       .sort({ createdAt: -1 })

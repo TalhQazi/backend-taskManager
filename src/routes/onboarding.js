@@ -1,301 +1,582 @@
 const express = require("express");
-const { z } = require("zod");
-const multer = require("multer");
-const path = require("path");
-const fs = require("fs");
-
 const Onboarding = require("../models/Onboarding");
+const Employee = require("../models/Employee");
+const User = require("../models/User");
+const { requireAuth, requireRole } = require("../middleware/auth");
 const { createNotification } = require("../utils/notifications");
-const { requireAuth } = require("../middleware/auth");
 
 const router = express.Router();
 
-const uploadsDir = path.resolve(__dirname, "..", "..", "uploads", "onboarding");
-try {
-  fs.mkdirSync(uploadsDir, { recursive: true });
-} catch {
-  
-}
-
-const storage = multer.memoryStorage();
-
-const upload = multer({
-  storage,
-  limits: { fileSize: 10 * 1024 * 1024 },
-});
-
-function withId(doc) {
-  if (!doc) return doc;
-  return { ...doc, id: String(doc._id) };
-}
-
-const adminUiSchema = z.object({
-  name: z.string().min(1),
-  email: z.string().optional(),
-  startDate: z.string().min(1),
-  progress: z.number().optional(),
-  approvalStatus: z.string().optional(),
-  w4FileName: z.string().optional(),
-  i9FileName: z.string().optional(),
-  signatureFileName: z.string().optional(),
-  generatedPdfFileName: z.string().optional(),
-});
-
-const createSchema = z.object({
-  employeeName: z.string().min(1),
-  role: z.string().min(1),
-  startDate: z.string().min(1),
-  progress: z.number().min(0).max(100),
-  documentsUploaded: z.number().min(0),
-  documentsRequired: z.number().min(0),
-  approvalStatus: z.enum(["pending", "approved", "rejected"]),
-  w4Attachment: z.object({
-    fileName: z.string().optional(),
-    url: z.string().optional(),
-    mimeType: z.string().optional(),
-    size: z.number().optional(),
-  }).optional(),
-  i9Attachment: z.object({
-    fileName: z.string().optional(),
-    url: z.string().optional(),
-    mimeType: z.string().optional(),
-    size: z.number().optional(),
-  }).optional(),
-  signatureAttachment: z.object({
-    fileName: z.string().optional(),
-    url: z.string().optional(),
-    mimeType: z.string().optional(),
-    size: z.number().optional(),
-  }).optional(),
-  generatedPdfAttachment: z.object({
-    fileName: z.string().optional(),
-    url: z.string().optional(),
-    mimeType: z.string().optional(),
-    size: z.number().optional(),
-  }).optional(),
-});
-
-const updateSchema = createSchema.partial();
-
-router.get("/", requireAuth, async (_req, res, next) => {
+// Helper function to get employee context
+async function requireEmployeeSelf(req, res) {
   try {
-    const items = await Onboarding.find().sort({ createdAt: -1 }).lean();
-    res.json({ items: items.map(withId) });
-  } catch (err) {
-    next(err);
-  }
-});
-
-router.post("/", requireAuth, async (req, res, next) => {
-  try {
-    const adminParsed = adminUiSchema.safeParse(req.body);
-    if (adminParsed.success) {
-      const docs = [
-        adminParsed.data.w4FileName,
-        adminParsed.data.i9FileName,
-        adminParsed.data.signatureFileName,
-        adminParsed.data.generatedPdfFileName,
-      ].filter((x) => typeof x === "string" && x.trim()).length;
-
-      const rawApproval = String(adminParsed.data.approvalStatus || "pending").toLowerCase();
-      const approval = ["pending", "approved", "rejected"].includes(rawApproval) ? rawApproval : "pending";
-
-      const created = await Onboarding.create({
-        employeeName: adminParsed.data.name,
-        role: "Employee",
-        startDate: adminParsed.data.startDate,
-        progress: Number.isFinite(adminParsed.data.progress) ? adminParsed.data.progress : 0,
-        documentsUploaded: docs,
-        documentsRequired: 4,
-        approvalStatus: approval,
-      });
-
-      // Create notification
-      await createNotification({
-        actor: req.user?.username || req.user?.name || "Admin",
-        actorRole: req.user?.role || "admin",
-        action: "created",
-        resourceType: "onboarding",
-        resourceName: created.employeeName,
-        details: `Status: ${created.approvalStatus}`,
-        resourceId: String(created._id),
-      });
-
-      return res.status(201).json({ item: withId(created.toObject()) });
+    const user = await User.findById(req.user.sub);
+    if (!user) {
+      res.status(404).json({ error: { message: "User not found" } });
+      return null;
     }
 
-    const parsed = createSchema.safeParse(req.body);
-    if (!parsed.success) return res.status(400).json({ error: { message: "Invalid payload" } });
+    const employee = await Employee.findOne({ email: user.email });
+    if (!employee) {
+      res.status(404).json({ error: { message: "Employee not found" } });
+      return null;
+    }
 
-    const created = await Onboarding.create(parsed.data);
-    
-    // Create notification
-    await createNotification({
-      actor: req.user?.username || req.user?.name || "Admin",
-      actorRole: req.user?.role || "admin",
-      action: "created",
-      resourceType: "onboarding",
-      resourceName: created.employeeName,
-      details: `Status: ${created.approvalStatus}`,
-      resourceId: String(created._id),
+    return { user, employee };
+  } catch (err) {
+    res.status(500).json({ error: { message: "Server error" } });
+    return null;
+  }
+}
+
+// Helper function to calculate onboarding progress
+function calculateProgress(onboarding) {
+  let completed = 0;
+  const total = 5; // 5 sections total
+
+  // Basic Information
+  if (onboarding.basicInfo?.completed) completed++;
+
+  // Identity Verification (both primary and secondary must be submitted)
+  if (onboarding.identityVerification?.primaryId?.status === "submitted" ||
+      onboarding.identityVerification?.primaryId?.status === "verified") {
+    if (onboarding.identityVerification?.secondaryId?.status === "submitted" ||
+        onboarding.identityVerification?.secondaryId?.status === "verified") {
+      completed++;
+    }
+  }
+
+  // W-4 Form
+  if (onboarding.w4Form?.status === "submitted" || onboarding.w4Form?.status === "verified") {
+    completed++;
+  }
+
+  // Employee Handbook
+  if (onboarding.employeeHandbook?.status === "submitted" || onboarding.employeeHandbook?.status === "verified") {
+    completed++;
+  }
+
+  // Digital Signature
+  if (onboarding.digitalSignature?.status === "submitted" || onboarding.digitalSignature?.status === "verified") {
+    completed++;
+  }
+
+  return Math.round((completed / total) * 100);
+}
+
+// GET /api/onboarding/me - Get employee's onboarding status
+router.get("/me", requireAuth, async (req, res, next) => {
+  try {
+    const ctx = await requireEmployeeSelf(req, res);
+    if (!ctx) return;
+    const { user, employee } = ctx;
+
+    let onboarding = await Onboarding.findOne({ userId: user._id });
+
+    if (!onboarding) {
+      // Create new onboarding record
+      onboarding = await Onboarding.create({
+        userId: user._id,
+        employeeId: employee._id,
+        employeeName: employee.name,
+      });
+    }
+
+    return res.json({
+      item: {
+        id: String(onboarding._id),
+        userId: String(onboarding.userId),
+        employeeId: String(onboarding.employeeId),
+        employeeName: onboarding.employeeName,
+        basicInfo: onboarding.basicInfo,
+        identityVerification: onboarding.identityVerification,
+        w4Form: onboarding.w4Form,
+        employeeHandbook: onboarding.employeeHandbook,
+        digitalSignature: onboarding.digitalSignature,
+        overallStatus: onboarding.overallStatus,
+        progress: calculateProgress(onboarding),
+        adminReview: onboarding.adminReview,
+        createdAt: onboarding.createdAt,
+        updatedAt: onboarding.updatedAt,
+      },
     });
-    
-    res.status(201).json({ item: withId(created.toObject()) });
   } catch (err) {
     next(err);
   }
 });
 
-router.put("/:id", requireAuth, async (req, res, next) => {
+// PUT /api/onboarding/me/basic-info - Update basic information
+router.put("/me/basic-info", requireAuth, async (req, res, next) => {
   try {
-    const adminParsed = adminUiSchema.partial().safeParse(req.body);
-    if (adminParsed.success) {
-      const patch = {};
-      if (typeof adminParsed.data.name === "string") patch.employeeName = adminParsed.data.name;
-      if (typeof adminParsed.data.startDate === "string") patch.startDate = adminParsed.data.startDate;
-      if (typeof adminParsed.data.progress === "number") patch.progress = adminParsed.data.progress;
+    const ctx = await requireEmployeeSelf(req, res);
+    if (!ctx) return;
+    const { user, employee } = ctx;
 
-      if (typeof adminParsed.data.approvalStatus === "string") {
-        const rawApproval = String(adminParsed.data.approvalStatus || "pending").toLowerCase();
-        patch.approvalStatus = ["pending", "approved", "rejected"].includes(rawApproval) ? rawApproval : "pending";
+    const { phone, location } = req.body;
+
+    if (!phone) {
+      return res.status(400).json({ error: { message: "Phone number is required" } });
+    }
+
+    let onboarding = await Onboarding.findOne({ userId: user._id });
+    if (!onboarding) {
+      onboarding = new Onboarding({
+        userId: user._id,
+        employeeId: employee._id,
+        employeeName: employee.name,
+      });
+    }
+
+    onboarding.basicInfo = {
+      completed: true,
+      email: user.email,
+      phone: phone,
+      location: location || "",
+    };
+
+    await onboarding.save();
+
+    return res.json({
+      item: {
+        id: String(onboarding._id),
+        basicInfo: onboarding.basicInfo,
+        overallStatus: onboarding.overallStatus,
+        progress: calculateProgress(onboarding),
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// PUT /api/onboarding/me/identity - Update identity verification
+router.put("/me/identity", requireAuth, async (req, res, next) => {
+  try {
+    const ctx = await requireEmployeeSelf(req, res);
+    if (!ctx) return;
+    const { user, employee } = ctx;
+
+    const { primaryId, secondaryId } = req.body;
+
+    let onboarding = await Onboarding.findOne({ userId: user._id });
+    if (!onboarding) {
+      onboarding = new Onboarding({
+        userId: user._id,
+        employeeId: employee._id,
+        employeeName: employee.name,
+      });
+    }
+
+    // Initialize identityVerification if it doesn't exist
+    if (!onboarding.identityVerification) {
+      onboarding.identityVerification = {
+        primaryId: { idType: "", frontImage: "", backImage: "", status: "not_started" },
+        secondaryId: { idType: "", image: "", status: "not_started" },
+      };
+    }
+
+    // Update primary ID if provided
+    if (primaryId) {
+      if (!primaryId.idType) {
+        return res.status(400).json({ error: { message: "Primary ID type is required" } });
+      }
+      if (!primaryId.frontImage) {
+        return res.status(400).json({ error: { message: "Primary ID front image is required" } });
+      }
+      if (!primaryId.backImage) {
+        return res.status(400).json({ error: { message: "Primary ID back image is required" } });
       }
 
-      const files = [
-        adminParsed.data.w4FileName,
-        adminParsed.data.i9FileName,
-        adminParsed.data.signatureFileName,
-        adminParsed.data.generatedPdfFileName,
-      ].filter((x) => typeof x === "string" && x.trim()).length;
-      if (files > 0) patch.documentsUploaded = files;
-
-      const updated = await Onboarding.findByIdAndUpdate(req.params.id, patch, { new: true }).lean();
-      if (!updated) return res.status(404).json({ error: { message: "Onboarding item not found" } });
-      
-      // Create notification
-      await createNotification({
-        actor: req.user?.username || req.user?.name || "Admin",
-        actorRole: req.user?.role || "admin",
-        action: "updated",
-        resourceType: "onboarding",
-        resourceName: updated.employeeName,
-        details: patch.approvalStatus ? `Status: ${patch.approvalStatus}` : "",
-        resourceId: String(req.params.id),
-      });
-      
-      return res.json({ item: withId(updated) });
+      onboarding.identityVerification.primaryId = {
+        idType: primaryId.idType,
+        frontImage: primaryId.frontImage,
+        backImage: primaryId.backImage,
+        status: "submitted",
+      };
     }
 
-    const parsed = updateSchema.safeParse(req.body);
-    if (!parsed.success) return res.status(400).json({ error: { message: "Invalid payload" } });
+    // Update secondary ID if provided
+    if (secondaryId) {
+      if (!secondaryId.idType) {
+        return res.status(400).json({ error: { message: "Secondary ID type is required" } });
+      }
+      if (!secondaryId.image) {
+        return res.status(400).json({ error: { message: "Secondary ID image is required" } });
+      }
 
-    const updated = await Onboarding.findByIdAndUpdate(req.params.id, parsed.data, { new: true }).lean();
-    if (!updated) return res.status(404).json({ error: { message: "Onboarding item not found" } });
+      onboarding.identityVerification.secondaryId = {
+        idType: secondaryId.idType,
+        image: secondaryId.image,
+        status: "submitted",
+      };
+    }
 
-    // Create notification
-    await createNotification({
-      actor: req.user?.username || req.user?.name || "Admin",
-      actorRole: req.user?.role || "admin",
-      action: "updated",
-      resourceType: "onboarding",
-      resourceName: updated.employeeName,
-      resourceId: String(req.params.id),
+    await onboarding.save();
+
+    return res.json({
+      item: {
+        id: String(onboarding._id),
+        identityVerification: onboarding.identityVerification,
+        overallStatus: onboarding.overallStatus,
+        progress: calculateProgress(onboarding),
+      },
     });
-
-    res.json({ item: withId(updated) });
   } catch (err) {
     next(err);
   }
 });
 
-router.post("/upload", requireAuth, upload.fields([
-  { name: "w4File", maxCount: 1 },
-  { name: "i9File", maxCount: 1 },
-  { name: "signatureFile", maxCount: 1 },
-  { name: "generatedPdfFile", maxCount: 1 },
-]), async (req, res, next) => {
+// PUT /api/onboarding/me/w4 - Update W-4 form
+router.put("/me/w4", requireAuth, async (req, res, next) => {
   try {
-    const body = req.body || {};
-    const files = req.files || {};
+    const ctx = await requireEmployeeSelf(req, res);
+    if (!ctx) return;
+    const { user, employee } = ctx;
 
-    const w4File = Array.isArray(files.w4File) ? files.w4File[0] : undefined;
-    const i9File = Array.isArray(files.i9File) ? files.i9File[0] : undefined;
-    const signatureFile = Array.isArray(files.signatureFile) ? files.signatureFile[0] : undefined;
-    const generatedPdfFile = Array.isArray(files.generatedPdfFile) ? files.generatedPdfFile[0] : undefined;
+    const { file } = req.body;
 
-    const docs = [
-      w4File?.originalname || body.w4FileName,
-      i9File?.originalname || body.i9FileName,
-      signatureFile?.originalname || body.signatureFileName,
-      generatedPdfFile?.originalname || body.generatedPdfFileName,
-    ].filter((x) => typeof x === "string" && x.trim()).length;
+    if (!file) {
+      return res.status(400).json({ error: { message: "W-4 form file is required" } });
+    }
 
-    const rawApproval = String(body.approvalStatus || "pending").toLowerCase();
-    const approval = ["pending", "approved", "rejected"].includes(rawApproval) ? rawApproval : "pending";
+    let onboarding = await Onboarding.findOne({ userId: user._id });
+    if (!onboarding) {
+      onboarding = new Onboarding({
+        userId: user._id,
+        employeeId: employee._id,
+        employeeName: employee.name,
+      });
+    }
 
-    const w4Attachment = w4File
-      ? { fileName: w4File.originalname, url: null, mimeType: w4File.mimetype, size: w4File.size }
-      : undefined;
-    const i9Attachment = i9File
-      ? { fileName: i9File.originalname, url: null, mimeType: i9File.mimetype, size: i9File.size }
-      : undefined;
-    const signatureAttachment = signatureFile
-      ? { fileName: signatureFile.originalname, url: null, mimeType: signatureFile.mimetype, size: signatureFile.size }
-      : undefined;
-    const generatedPdfAttachment = generatedPdfFile
-      ? { fileName: generatedPdfFile.originalname, url: null, mimeType: generatedPdfFile.mimetype, size: generatedPdfFile.size }
-      : undefined;
+    onboarding.w4Form = {
+      file: file,
+      status: "submitted",
+    };
 
-    const created = await Onboarding.create({
-      employeeName: body.name,
-      role: "Employee",
-      startDate: body.startDate,
-      progress: Number.isFinite(Number(body.progress)) ? Number(body.progress) : 0,
-      documentsUploaded: docs,
-      documentsRequired: 4,
-      approvalStatus: approval,
-      w4FileName: w4File?.originalname || body.w4FileName || "",
-      i9FileName: i9File?.originalname || body.i9FileName || "",
-      signatureFileName: signatureFile?.originalname || body.signatureFileName || "",
-      generatedPdfFileName: generatedPdfFile?.originalname || body.generatedPdfFileName || "",
-      w4Attachment,
-      i9Attachment,
-      signatureAttachment,
-      generatedPdfAttachment,
+    await onboarding.save();
+
+    return res.json({
+      item: {
+        id: String(onboarding._id),
+        w4Form: onboarding.w4Form,
+        overallStatus: onboarding.overallStatus,
+        progress: calculateProgress(onboarding),
+      },
     });
-
-    // Create notification
-    await createNotification({
-      actor: req.user?.username || req.user?.name || "Admin",
-      actorRole: req.user?.role || "admin",
-      action: "created",
-      resourceType: "onboarding",
-      resourceName: created.employeeName,
-      details: `With attachments, Status: ${created.approvalStatus}`,
-      resourceId: String(created._id),
-    });
-
-    return res.status(201).json({ item: withId(created.toObject()) });
   } catch (err) {
-    return next(err);
+    next(err);
   }
 });
 
-router.delete("/:id", requireAuth, async (req, res, next) => {
+// PUT /api/onboarding/me/handbook - Update employee handbook acknowledgment
+router.put("/me/handbook", requireAuth, async (req, res, next) => {
   try {
-    const deleted = await Onboarding.findByIdAndDelete(req.params.id).lean();
-    if (!deleted) return res.status(404).json({ error: { message: "Onboarding item not found" } });
-    
-    // Create notification
-    await createNotification({
-      actor: req.user?.username || req.user?.name || "Admin",
-      actorRole: req.user?.role || "admin",
-      action: "deleted",
-      resourceType: "onboarding",
-      resourceName: deleted.employeeName,
-      resourceId: String(req.params.id),
+    const ctx = await requireEmployeeSelf(req, res);
+    if (!ctx) return;
+    const { user, employee } = ctx;
+
+    const { signature } = req.body;
+
+    if (!signature) {
+      return res.status(400).json({ error: { message: "Signature is required" } });
+    }
+
+    let onboarding = await Onboarding.findOne({ userId: user._id });
+    if (!onboarding) {
+      onboarding = new Onboarding({
+        userId: user._id,
+        employeeId: employee._id,
+        employeeName: employee.name,
+      });
+    }
+
+    onboarding.employeeHandbook = {
+      acknowledged: true,
+      signature: signature,
+      signedAt: new Date(),
+      status: "submitted",
+    };
+
+    await onboarding.save();
+
+    return res.json({
+      item: {
+        id: String(onboarding._id),
+        employeeHandbook: onboarding.employeeHandbook,
+        overallStatus: onboarding.overallStatus,
+        progress: calculateProgress(onboarding),
+      },
     });
-    
-    res.status(204).send();
+  } catch (err) {
+    next(err);
+  }
+});
+
+// PUT /api/onboarding/me/signature - Update digital signature
+router.put("/me/signature", requireAuth, async (req, res, next) => {
+  try {
+    const ctx = await requireEmployeeSelf(req, res);
+    if (!ctx) return;
+    const { user, employee } = ctx;
+
+    const { signature } = req.body;
+
+    if (!signature) {
+      return res.status(400).json({ error: { message: "Signature is required" } });
+    }
+
+    let onboarding = await Onboarding.findOne({ userId: user._id });
+    if (!onboarding) {
+      onboarding = new Onboarding({
+        userId: user._id,
+        employeeId: employee._id,
+        employeeName: employee.name,
+      });
+    }
+
+    onboarding.digitalSignature = {
+      signature: signature,
+      status: "submitted",
+    };
+
+    await onboarding.save();
+
+    return res.json({
+      item: {
+        id: String(onboarding._id),
+        digitalSignature: onboarding.digitalSignature,
+        overallStatus: onboarding.overallStatus,
+        progress: calculateProgress(onboarding),
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /api/onboarding/me/submit - Submit onboarding for review
+router.post("/me/submit", requireAuth, async (req, res, next) => {
+  try {
+    const ctx = await requireEmployeeSelf(req, res);
+    if (!ctx) return;
+    const { user, employee } = ctx;
+
+    const onboarding = await Onboarding.findOne({ userId: user._id });
+    if (!onboarding) {
+      return res.status(404).json({ error: { message: "Onboarding not found" } });
+    }
+
+    // Check if all steps are submitted
+    if (!onboarding.basicInfo.completed ||
+        onboarding.identityVerification.primaryId.status !== "submitted" ||
+        onboarding.identityVerification.secondaryId.status !== "submitted" ||
+        onboarding.w4Form.status !== "submitted" ||
+        onboarding.employeeHandbook.status !== "submitted" ||
+        onboarding.digitalSignature.status !== "submitted") {
+      return res.status(400).json({
+        error: { message: "Complete all steps before submitting" },
+      });
+    }
+
+    onboarding.overallStatus = "submitted";
+    await onboarding.save();
+
+    // Notify admin
+    await createNotification({
+      actor: employee.name,
+      actorRole: "employee",
+      action: "submitted",
+      resourceType: "onboarding",
+      resourceName: employee.name,
+      details: "employee onboarding for review",
+      link: "/admin/onboarding",
+    });
+
+    return res.json({
+      item: {
+        id: String(onboarding._id),
+        overallStatus: onboarding.overallStatus,
+        progress: calculateProgress(onboarding),
+      },
+      message: "Onboarding submitted for review",
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ==================== ADMIN ENDPOINTS ====================
+
+// GET /api/onboarding/admin/all - Get all onboarding records (Admin)
+router.get("/admin/all", requireAuth, requireRole("admin"), async (req, res, next) => {
+  try {
+    const { status } = req.query;
+    const filter = {};
+    if (status) {
+      filter.overallStatus = status;
+    }
+
+    const onboardings = await Onboarding.find(filter)
+      .sort({ createdAt: -1 })
+      .lean();
+
+    const items = onboardings.map((o) => ({
+      id: String(o._id),
+      userId: String(o.userId),
+      employeeId: String(o.employeeId),
+      employeeName: o.employeeName,
+      basicInfo: o.basicInfo,
+      identityVerification: o.identityVerification,
+      w4Form: o.w4Form,
+      employeeHandbook: o.employeeHandbook,
+      digitalSignature: o.digitalSignature,
+      overallStatus: o.overallStatus,
+      progress: calculateProgress(o),
+      adminReview: o.adminReview,
+      createdAt: o.createdAt,
+      updatedAt: o.updatedAt,
+    }));
+
+    res.json({ items });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /api/onboarding/admin/:id - Get specific onboarding details (Admin)
+router.get("/admin/:id", requireAuth, requireRole("admin"), async (req, res, next) => {
+  try {
+    const onboarding = await Onboarding.findById(req.params.id).lean();
+    if (!onboarding) {
+      return res.status(404).json({ error: { message: "Onboarding not found" } });
+    }
+
+    res.json({
+      item: {
+        id: String(onboarding._id),
+        userId: String(onboarding.userId),
+        employeeId: String(onboarding.employeeId),
+        employeeName: onboarding.employeeName,
+        basicInfo: onboarding.basicInfo,
+        identityVerification: onboarding.identityVerification,
+        w4Form: onboarding.w4Form,
+        employeeHandbook: onboarding.employeeHandbook,
+        digitalSignature: onboarding.digitalSignature,
+        overallStatus: onboarding.overallStatus,
+        progress: calculateProgress(onboarding),
+        adminReview: onboarding.adminReview,
+        createdAt: onboarding.createdAt,
+        updatedAt: onboarding.updatedAt,
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// PUT /api/onboarding/admin/:id/approve - Approve onboarding (Admin)
+router.put("/admin/:id/approve", requireAuth, requireRole("admin"), async (req, res, next) => {
+  try {
+    const { comments } = req.body;
+
+    const onboarding = await Onboarding.findById(req.params.id);
+    if (!onboarding) {
+      return res.status(404).json({ error: { message: "Onboarding not found" } });
+    }
+
+    // Mark all submitted items as verified
+    if (onboarding.identityVerification.primaryId.status === "submitted") {
+      onboarding.identityVerification.primaryId.status = "verified";
+    }
+    if (onboarding.identityVerification.secondaryId.status === "submitted") {
+      onboarding.identityVerification.secondaryId.status = "verified";
+    }
+    if (onboarding.w4Form.status === "submitted") {
+      onboarding.w4Form.status = "verified";
+    }
+    if (onboarding.employeeHandbook.status === "submitted") {
+      onboarding.employeeHandbook.status = "verified";
+    }
+    if (onboarding.digitalSignature.status === "submitted") {
+      onboarding.digitalSignature.status = "verified";
+    }
+
+    onboarding.overallStatus = "approved";
+    onboarding.adminReview = {
+      reviewedBy: req.user.id,
+      reviewedAt: new Date(),
+      comments: comments || "",
+    };
+
+    await onboarding.save();
+
+    // Notify employee
+    await createNotification({
+      actor: req.user.username || req.user.name || "Admin",
+      actorRole: "admin",
+      action: "approved",
+      resourceType: "onboarding",
+      resourceName: onboarding.employeeName,
+      details: comments || "Onboarding approved",
+      resourceId: String(onboarding._id),
+    });
+
+    res.json({
+      item: {
+        id: String(onboarding._id),
+        overallStatus: onboarding.overallStatus,
+        progress: calculateProgress(onboarding),
+      },
+      message: "Onboarding approved successfully",
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// PUT /api/onboarding/admin/:id/reject - Reject onboarding (Admin)
+router.put("/admin/:id/reject", requireAuth, requireRole("admin"), async (req, res, next) => {
+  try {
+    const { reason } = req.body;
+
+    if (!reason) {
+      return res.status(400).json({ error: { message: "Rejection reason is required" } });
+    }
+
+    const onboarding = await Onboarding.findById(req.params.id);
+    if (!onboarding) {
+      return res.status(404).json({ error: { message: "Onboarding not found" } });
+    }
+
+    onboarding.overallStatus = "rejected";
+    onboarding.adminReview = {
+      reviewedBy: req.user.id,
+      reviewedAt: new Date(),
+      comments: "",
+      rejectionReason: reason,
+    };
+
+    await onboarding.save();
+
+    // Notify employee
+    await createNotification({
+      actor: req.user.username || req.user.name || "Admin",
+      actorRole: "admin",
+      action: "rejected",
+      resourceType: "onboarding",
+      resourceName: onboarding.employeeName,
+      details: reason,
+      resourceId: String(onboarding._id),
+    });
+
+    res.json({
+      item: {
+        id: String(onboarding._id),
+        overallStatus: onboarding.overallStatus,
+        progress: calculateProgress(onboarding),
+      },
+      message: "Onboarding rejected",
+    });
   } catch (err) {
     next(err);
   }
