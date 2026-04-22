@@ -172,9 +172,13 @@ router.post("/", requireAuth, async (req, res, next) => {
 
 router.get("/:id/photo", requireAuth, async (req, res, next) => {
   try {
-    const loc = await Location.findById(req.params.id).select("photoDataUrl photoFileName").lean();
+    const loc = await Location.findById(req.params.id).select("photoDataUrl photoFileName attachments").lean();
     if (!loc) return res.status(404).json({ error: { message: "Location not found" } });
-    res.json({ photoDataUrl: loc.photoDataUrl || "", photoFileName: loc.photoFileName || "" });
+    res.json({ 
+      photoDataUrl: loc.photoDataUrl || "", 
+      photoFileName: loc.photoFileName || "",
+      attachments: loc.attachments || []
+    });
   } catch (err) {
     next(err);
   }
