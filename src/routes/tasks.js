@@ -384,6 +384,21 @@ router.get("/:id/attachment", requireAuth, async (req, res, next) => {
   }
 });
 
+// Get task attachment by index from attachments array
+router.get("/:id/attachments/:index", requireAuth, async (req, res, next) => {
+  try {
+    const task = await Task.findById(req.params.id).select("attachments").lean();
+    if (!task) return res.status(404).json({ error: { message: "Task not found" } });
+    const idx = parseInt(req.params.index, 10);
+    const attachments = Array.isArray(task.attachments) ? task.attachments : [];
+    const attachment = attachments[idx];
+    if (!attachment) return res.status(404).json({ error: { message: "Attachment not found" } });
+    res.json({ url: attachment.url || "" });
+  } catch (err) {
+    next(err);
+  }
+});
+
 router.post("/", requireAuth, async (req, res, next) => {
   try {
     // Manual validation for title and description
