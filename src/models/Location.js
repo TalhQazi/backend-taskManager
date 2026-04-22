@@ -15,6 +15,12 @@ const LocationSchema = new mongoose.Schema(
     photoDataUrl: { type: String, default: "" },
     photoFileName: { type: String, default: "" },
     photoHeight: { type: Number, default: 48 },
+    attachments: [
+      {
+        fileName: { type: String, default: "" },
+        url: { type: String, default: "" },
+      },
+    ],
   },
   { timestamps: true }
 );

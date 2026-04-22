@@ -62,6 +62,10 @@ const adminUiSchema = z.object({
   status: z.enum(["active", "inactive"]).optional(),
   photoDataUrl: z.string().optional(),
   photoFileName: z.string().optional(),
+  attachments: z.array(z.object({
+    fileName: z.string().optional(),
+    url: z.string().optional()
+  })).optional(),
 });
 
 const updateSchema = createSchema.partial();
@@ -102,6 +106,7 @@ router.post("/", requireAuth, async (req, res, next) => {
         operatingHours: "",
         photoDataUrl: adminParsed.data.photoDataUrl || "",
         photoFileName: adminParsed.data.photoFileName || "",
+        attachments: Array.isArray(adminParsed.data.attachments) ? adminParsed.data.attachments : [],
       });
 
       const createdObj = withId(created.toObject());
@@ -231,6 +236,7 @@ router.put("/:id", requireAuth, async (req, res, next) => {
       if (typeof adminParsed.data.tasksCount === "number") patch.employeeCount = adminParsed.data.tasksCount;
       if (typeof adminParsed.data.photoDataUrl === "string") patch.photoDataUrl = adminParsed.data.photoDataUrl;
       if (typeof adminParsed.data.photoFileName === "string") patch.photoFileName = adminParsed.data.photoFileName;
+      if (Array.isArray(adminParsed.data.attachments)) patch.attachments = adminParsed.data.attachments;
 
       const updated = await Location.findByIdAndUpdate(req.params.id, patch, { new: true }).lean();
       if (!updated) return res.status(404).json({ error: { message: "Location not found" } });

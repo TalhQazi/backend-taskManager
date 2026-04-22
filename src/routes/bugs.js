@@ -17,7 +17,7 @@ router.post("/", requireAuth, async (req, res, next) => {
     const taskId = String(req.body?.taskId || "").trim();
     const title = String(req.body?.title || "").trim();
     const description = String(req.body?.description || "").trim();
-    const attachment = req.body?.attachment && typeof req.body.attachment === "object" ? req.body.attachment : null;
+    const attachmentsRaw = Array.isArray(req.body?.attachments) ? req.body.attachments : [];
     const sourceRaw = req.body?.source && typeof req.body.source === "object" ? req.body.source : null;
 
     if (!title) return res.status(400).json({ error: { message: "Bug title is required" } });
@@ -40,14 +40,12 @@ router.post("/", requireAuth, async (req, res, next) => {
             path: String(sourceRaw.path || ""),
           }
         : undefined,
-      attachment: attachment
-        ? {
-            fileName: String(attachment.fileName || ""),
-            url: String(attachment.url || ""),
-            mimeType: String(attachment.mimeType || ""),
-            size: Number(attachment.size || 0),
-          }
-        : undefined,
+      attachments: attachmentsRaw.map(attachment => ({
+        fileName: String(attachment.fileName || ""),
+        url: String(attachment.url || ""),
+        mimeType: String(attachment.mimeType || ""),
+        size: Number(attachment.size || 0),
+      })),
       createdByUserId: String(req.user?.sub || req.user?.id || ""),
       createdByUsername: String(req.user?.username || req.user?.name || ""),
       createdByRole: String(req.user?.role || ""),
