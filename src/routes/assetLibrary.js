@@ -105,6 +105,15 @@ router.get("/folders", requireAuth, async (_req, res, next) => {
   }
 });
 
+router.get("/stats", requireAuth, async (_req, res, next) => {
+  try {
+    const totalAssets = await AssetLibraryAsset.countDocuments({ status: "active" });
+    res.json({ totalAssets });
+  } catch (err) {
+    next(err);
+  }
+});
+
 router.post("/folders", requireAuth, requireRole(["super-admin", "admin"]), async (req, res, next) => {
   try {
     const parsed = folderCreateSchema.safeParse(req.body);
