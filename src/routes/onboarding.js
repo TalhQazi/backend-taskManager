@@ -16,6 +16,11 @@ async function requireEmployeeSelf(req, res) {
       return null;
     }
 
+    // For managers, return user as employee (they don't have employee records)
+    if (user.role === "manager") {
+      return { user, employee: { ...user.toObject(), _id: user._id, name: user.name } };
+    }
+
     const employee = await Employee.findOne({ email: user.email });
     if (!employee) {
       res.status(404).json({ error: { message: "Employee not found" } });
@@ -78,7 +83,7 @@ router.get("/me", requireAuth, async (req, res, next) => {
       onboarding = await Onboarding.create({
         userId: user._id,
         employeeId: employee._id,
-        employeeName: employee.name,
+        employeeName: employee.name || user.name,
       });
     }
 
@@ -99,6 +104,139 @@ router.get("/me", requireAuth, async (req, res, next) => {
         createdAt: onboarding.createdAt,
         updatedAt: onboarding.updatedAt,
       },
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /api/onboarding/me - Create or update full onboarding data
+router.post("/me", requireAuth, async (req, res, next) => {
+  try {
+    const ctx = await requireEmployeeSelf(req, res);
+    if (!ctx) return;
+    const { user, employee } = ctx;
+
+    const { personalInfo, identityVerification, taxInfo, bankInfo, documents } = req.body;
+
+    let onboarding = await Onboarding.findOne({ userId: user._id });
+    
+    if (!onboarding) {
+      onboarding = new Onboarding({
+        userId: user._id,
+        employeeId: employee._id,
+        employeeName: employee.name || user.name,
+      });
+    }
+
+    // Update basic info if provided
+    if (personalInfo) {
+      onboarding.basicInfo = {
+        completed: true,
+        email: user.email,
+        phone: personalInfo.phone || "",
+        location: personalInfo.address || "",
+      };
+    }
+
+    // Update identity verification if provided
+    if (identityVerification) {
+      if (!onboarding.identityVerification) {
+        onboarding.identityVerification = {
+          primaryId: { idType: "", frontImage: "", backImage: "", status: "not_started" },
+          secondaryId: { idType: "", image: "", status: "not_started" },
+        };
+      }
+      if (identityVerification.idType) {
+        onboarding.identityVerification.primaryId.idType = identityVerification.idType;
+      }
+      if (identityVerification.idNumber) {
+        onboarding.identityVerification.primaryId.idNumber = identityVerification.idNumber;
+      }
+      if (identityVerification.idFrontUrl) {
+        onboarding.identityVerification.primaryId.frontImage = identityVerification.idFrontUrl;
+        onboarding.identityVerification.primaryId.status = "submitted";
+      }
+      if (identityVerification.idBackUrl) {
+        onboarding.identityVerification.primaryId.backImage = identityVerification.idBackUrl;
+      }
+      if (identityVerification.secondaryIdType) {
+        onboarding.identityVerification.secondaryId.idType = identityVerification.secondaryIdType;
+      }
+      if (identityVerification.secondaryIdUrl) {
+        onboarding.identityVerification.secondaryId.image = identityVerification.secondaryIdUrl;
+        onboarding.identityVerification.secondaryId.status = "submitted";
+      }
+    }
+
+    // Update W-4 form if provided
+    if (documents && documents.w4FormUrl) {
+      if (!onboarding.w4Form) {
+        onboarding.w4Form = { status: "not_started", documentUrl: "" };
+      }
+      onboarding.w4Form.documentUrl = documents.w4FormUrl;
+      onboarding.w4Form.status = "submitted";
+    }
+
+    // Update employee handbook if provided
+    if (documents && documents.handbookSignatureUrl) {
+      if (!onboarding.employeeHandbook) {
+        onboarding.employeeHandbook = { status: "not_started", documentUrl: "" };
+      }
+      onboarding.employeeHandbook.documentUrl = documents.handbookSignatureUrl;
+      onboarding.employeeHandbook.status = "submitted";
+    }
+
+    // Update digital signature status if all docs are submitted
+    if (onboarding.basicInfo.completed &&
+        onboarding.identityVerification.primaryId.status === "submitted" &&
+        onboarding.identityVerification.secondaryId.status === "submitted" &&
+        onboarding.w4Form.status === "submitted" &&
+        onboarding.employeeHandbook.status === "submitted") {
+      if (!onboarding.digitalSignature) {
+        onboarding.digitalSignature = { status: "not_started", signatureData: "" };
+      }
+      onboarding.digitalSignature.status = "submitted";
+    }
+
+    // Calculate overall status
+    const allSubmitted = onboarding.basicInfo.completed &&
+                          onboarding.identityVerification.primaryId.status === "submitted" &&
+                          onboarding.identityVerification.secondaryId.status === "submitted" &&
+                          onboarding.w4Form.status === "submitted" &&
+                          onboarding.employeeHandbook.status === "submitted" &&
+                          onboarding.digitalSignature.status === "submitted";
+
+    if (allSubmitted) {
+      onboarding.overallStatus = "submitted";
+    } else {
+      onboarding.overallStatus = "in_progress";
+    }
+
+    await onboarding.save();
+
+    // Notify admin if submitted
+    if (onboarding.overallStatus === "submitted") {
+      await createNotification({
+        actor: employee.name,
+        actorRole: user.role,
+        action: "submitted",
+        resourceType: "onboarding",
+        resourceName: employee.name,
+        details: "onboarding for review",
+        link: "/admin/onboarding",
+      });
+    }
+
+    return res.json({
+      item: {
+        id: String(onboarding._id),
+        overallStatus: onboarding.overallStatus,
+        progress: calculateProgress(onboarding),
+      },
+      message: onboarding.overallStatus === "submitted" 
+        ? "Onboarding submitted for review" 
+        : "Onboarding saved successfully",
     });
   } catch (err) {
     next(err);

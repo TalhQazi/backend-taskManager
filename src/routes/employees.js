@@ -61,7 +61,7 @@ function getDayRange(d = new Date()) {
 
 async function requireEmployeeSelf(req, res) {
   const role = String(req.user?.role || "").trim();
-  if (role !== "employee") {
+  if (role !== "employee" && role !== "manager") {
     res.status(403).json({ error: { message: "Forbidden" } });
     return null;
   }
@@ -76,6 +76,11 @@ async function requireEmployeeSelf(req, res) {
   if (!user) {
     res.status(401).json({ error: { message: "Unauthorized" } });
     return null;
+  }
+
+  // For managers, return user as employee (they don't have employee records)
+  if (role === "manager") {
+    return { user, employee: { ...user, _id: user._id } };
   }
 
   const email = String(user.email || "").trim();
@@ -98,28 +103,30 @@ async function requireEmployeeSelf(req, res) {
      if (!ctx) return;
      const { user, employee } = ctx;
 
-     const userId = String(user._id || "");
-     const settings = userId ? await Settings.findOne({ userId }, { avatarUrl: 1, avatarDataUrl: 1 }).lean() : null;
-     const avatarUrl = String(settings?.avatarUrl || settings?.avatarDataUrl || "").trim();
+    const userId = String(user._id || "");
+    const settings = userId ? await Settings.findOne({ userId }, { avatarUrl: 1, avatarDataUrl: 1 }).lean() : null;
+    const avatarUrl = String(settings?.avatarUrl || settings?.avatarDataUrl || "").trim();
 
-     res.json({
-       item: {
-         id: String(employee._id),
-         name: employee.name,
-         email: employee.email,
-         phone: employee.phone || "",
-         company: employee.company || "",
-         location: employee.location || "",
-         status: employee.status || "active",
-         avatarUrl: avatarUrl || undefined,
-         username: user.username || user.email || "",
-         role: "employee",
-       },
-     });
-   } catch (err) {
-     next(err);
-   }
- });
+    res.json({
+      item: {
+        id: String(employee._id),
+        name: employee.name,
+        email: employee.email,
+        phone: employee.phone || "",
+        company: employee.company || "",
+        location: employee.location || "",
+        status: employee.status || "active",
+        avatarUrl: avatarUrl || undefined,
+        username: user.username || user.email || "",
+        role: "employee",
+        payType: employee.payType || "hourly",
+        payRate: employee.payRate || "0",
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+});
 
 router.get("/me/tasks", requireAuth, async (req, res, next) => {
   try {
@@ -961,7 +968,7 @@ router.post("/me/eod-report", requireAuth, async (req, res, next) => {
       employeeName: employee.name,
       date: dateObj,
       rawInput: JSON.stringify(eodData),
-      inputType: "structured",
+      inputType: "text",
       status: "submitted",
       timeEntryId: timeEntry?._id || null,
     });

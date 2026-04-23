@@ -17,7 +17,7 @@ const OnboardingSchema = new mongoose.Schema(
     // Step 2: Identity Verification
     identityVerification: {
       primaryId: {
-        idType: { type: String, enum: ["driver_license", "passport"] },
+        idType: { type: String, enum: ["driver_license", "passport", "national_id"] },
         frontImage: { type: String }, // Base64 or URL
         backImage: { type: String }, // Base64 or URL
         status: { type: String, enum: ["missing", "submitted", "verified"], default: "missing" },

@@ -221,7 +221,20 @@ router.get("/assets", requireAuth, async (req, res, next) => {
       AssetLibraryAsset.find(filter).sort(sortSpec).skip(skip).limit(limit).lean(),
     ]);
 
-    const items = docs.map((a) => ({ ...a, id: String(a._id) }));
+    const items = docs.map((a) => ({
+      ...a,
+      id: String(a._id),
+      urlThumbnail: a.urlOriginal || a.attachment?.url || "",
+      urlPreview: a.urlOriginal || a.attachment?.url || "",
+      attachment: a.attachment || {
+        fileName: a.originalFilename || "",
+        url: a.urlOriginal || "",
+        mimeType: a.mimeType || "",
+        size: a.sizeBytes || 0
+      }
+    }));
+    console.log("[asset-library] Returning items:", items.length, "Total:", total);
+    console.log("[asset-library] First item URL:", items[0]?.urlThumbnail, items[0]?.attachment?.url);
     res.json(paginatedResponse(items, total, page, limit));
   } catch (err) {
     next(err);
