@@ -46,6 +46,7 @@ const notesRoutes = require("./routes/notes");
 const assetLibraryRoutes = require("./routes/assetLibrary");
 const contributorsRoutes = require("./routes/contributors");
 const eodReportsRoutes = require("./routes/eodReports");
+const uiPreferencesRoutes = require("./routes/uiPreferences");
 
 //going to express now
 const app = express();
@@ -278,6 +279,7 @@ app.use("/api/founder-messages", founderMessagesRoutes);
 app.use("/api/notes", notesRoutes);
 app.use("/api/asset-library", assetLibraryRoutes);
 app.use("/api/contributors", contributorsRoutes);
+app.use("/api/ui-preferences", uiPreferencesRoutes);
 
 app.use(notFoundHandler);
 app.use(errorHandler);
