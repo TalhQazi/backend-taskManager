@@ -327,24 +327,11 @@ router.post(
         return res.status(400).json({ error: { message: "No files uploaded" } });
       }
 
-      const allowed = new Set([
-        "image/png",
-        "image/jpeg",
-        "image/jpg",
-        "image/webp",
-        "image/svg+xml",
-        "application/pdf",
-      ]);
-
       const uploadedBy = String(req.user?.sub || "");
-
       const created = [];
 
       for (const f of files) {
         const mimeType = String(f.mimetype || "");
-        if (!allowed.has(mimeType)) {
-          return res.status(400).json({ error: { message: `Unsupported file type: ${mimeType}` } });
-        }
 
         const originalFilename = String(f.originalname || "");
         const ext = path.extname(originalFilename).replace(".", "").toLowerCase();
