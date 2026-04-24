@@ -119,7 +119,7 @@ router.put("/:id", requireAuth, async (req, res, next) => {
 
 router.get("/", requireAuth, async (_req, res, next) => {
   try {
-    const items = await BugReport.find().sort({ createdAt: -1 }).lean();
+    const items = await BugReport.find().select("-attachments").sort({ createdAt: -1 }).lean();
     res.json({ items: items.map(withId) });
   } catch (err) {
     next(err);
