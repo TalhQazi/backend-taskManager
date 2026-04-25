@@ -47,7 +47,7 @@ router.put("/", requireAuth, async (req, res, next) => {
 
     // Validate theme if provided
     if (updates.theme) {
-      const validThemes = ["neon-tech", "metallic-elite", "executive-black", "dark-minimal", "high-contrast", "energy-mode"];
+      const validThemes = ["neon-tech", "metallic-elite", "executive-black", "dark-minimal", "high-contrast", "energy-mode", "crystal-white"];
       if (!validThemes.includes(updates.theme)) {
         return res.status(400).json({ error: { message: "Invalid theme" } });
       }
@@ -55,7 +55,7 @@ router.put("/", requireAuth, async (req, res, next) => {
 
     // Validate card style if provided
     if (updates.cardStyle) {
-      const validCardStyles = ["glass", "neon", "metallic"];
+      const validCardStyles = ["glass", "neon", "metallic", "flat"];
       if (!validCardStyles.includes(updates.cardStyle)) {
         return res.status(400).json({ error: { message: "Invalid card style" } });
       }

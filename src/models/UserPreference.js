@@ -7,13 +7,14 @@ const userPreferenceSchema = new mongoose.Schema({
   uiPreferences: {
     theme: {
       type: String,
-      enum: ["neon-tech", "metallic-elite", "executive-black", "dark-minimal", "high-contrast", "energy-mode"],
+      enum: ["neon-tech", "metallic-elite", "executive-black", "dark-minimal", "high-contrast", "energy-mode", "crystal-white"],
       default: "dark-minimal"
     },
     customColors: {
       primary: { type: String, default: "#133767" },
       secondary: { type: String, default: "#3b82f6" },
-      accent: { type: String, default: "#8b5cf6" }
+      accent: { type: String, default: "#8b5cf6" },
+      textColor: { type: String, default: "#ffffff" }
     },
     panelColors: {
       headerBackground: { type: String, default: "#133767" },
@@ -39,7 +40,7 @@ const userPreferenceSchema = new mongoose.Schema({
     },
     cardStyle: {
       type: String,
-      enum: ["glass", "neon", "metallic"],
+      enum: ["glass", "neon", "metallic", "flat"],
       default: "glass"
     },
     layoutDensity: {
