@@ -121,6 +121,9 @@ router.put("/", requireAuth, async (req, res, next) => {
       if (updates.customColors.accent && !colorRegex.test(updates.customColors.accent)) {
         return res.status(400).json({ error: { message: "Invalid accent color format" } });
       }
+      if (updates.customColors.textColor && !colorRegex.test(updates.customColors.textColor)) {
+        return res.status(400).json({ error: { message: "Invalid text color format" } });
+      }
     }
 
     let preferences = await UserPreference.findOne({ userId });
