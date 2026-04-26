@@ -47,6 +47,8 @@ const assetLibraryRoutes = require("./routes/assetLibrary");
 const contributorsRoutes = require("./routes/contributors");
 const eodReportsRoutes = require("./routes/eodReports");
 const uiPreferencesRoutes = require("./routes/uiPreferences");
+const vendorCategoriesRoutes = require("./routes/vendorCategories");
+const trademarksRoutes = require("./routes/trademarks");
 
 //going to express now
 const app = express();
@@ -280,6 +282,8 @@ app.use("/api/notes", notesRoutes);
 app.use("/api/asset-library", assetLibraryRoutes);
 app.use("/api/contributors", contributorsRoutes);
 app.use("/api/ui-preferences", uiPreferencesRoutes);
+app.use("/api/vendor-categories", vendorCategoriesRoutes);
+app.use("/api/trademarks", trademarksRoutes);
 
 app.use(notFoundHandler);
 app.use(errorHandler);

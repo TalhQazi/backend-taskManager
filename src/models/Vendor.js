@@ -5,7 +5,11 @@ const vendorSchema = new mongoose.Schema(
     name: { type: String, required: true },
     phone: { type: String, required: true },
     email: { type: String, default: "" },
-    address: { type: String, default: "" },
+    street: { type: String, default: "" },
+    city: { type: String, default: "" },
+    state: { type: String, default: "" },
+    zip: { type: String, default: "" },
+    website: { type: String, default: "" },
     serviceType: { type: String, required: true },
     location: { type: String, required: true },
     status: { 
