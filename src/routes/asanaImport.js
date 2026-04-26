@@ -463,4 +463,64 @@ router.post("/transfer-project", requireAuth, requireRole(["admin", "super-admin
   }
 });
 
+// Clear all imported Asana data so user can do a fresh re-import
+router.delete("/clear", requireAuth, requireRole(["admin", "super-admin"]), async (_req, res, next) => {
+  try {
+    const fs = require("fs");
+    const path = require("path");
+
+    // Count before deleting
+    const counts = {
+      workspaces: await AsanaWorkspace.countDocuments(),
+      projects: await AsanaProject.countDocuments(),
+      tasks: await AsanaTask.countDocuments(),
+      comments: await AsanaComment.countDocuments(),
+      attachments: await AsanaAttachment.countDocuments(),
+      users: await AsanaUser.countDocuments(),
+      jobs: await ImportJob.countDocuments(),
+    };
+
+    // Get all attachment file paths before deleting records
+    const allAttachments = await AsanaAttachment.find({}, { filePath: 1 }).lean();
+    
+    // Delete all Asana data from DB
+    await Promise.all([
+      AsanaWorkspace.deleteMany({}),
+      AsanaProject.deleteMany({}),
+      AsanaTask.deleteMany({}),
+      AsanaComment.deleteMany({}),
+      AsanaAttachment.deleteMany({}),
+      AsanaUser.deleteMany({}),
+      ImportJob.deleteMany({}),
+    ]);
+
+    // Try to delete downloaded files from disk
+    let filesDeleted = 0;
+    const baseUploads = path.resolve(__dirname, "..", "..", "uploads");
+    for (const att of allAttachments) {
+      if (!att.filePath) continue;
+      try {
+        // filePath is like /uploads/images/1234_file.pdf
+        const relativePath = att.filePath.replace(/^\/uploads\//, "");
+        const absPath = path.join(baseUploads, relativePath);
+        if (fs.existsSync(absPath)) {
+          fs.unlinkSync(absPath);
+          filesDeleted++;
+        }
+      } catch {
+        // ignore individual file delete errors
+      }
+    }
+
+    return res.json({
+      ok: true,
+      message: "All Asana imported data has been cleared. You can now run a fresh import.",
+      deleted: counts,
+      filesDeleted,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
 module.exports = router;

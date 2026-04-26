@@ -1,5 +1,6 @@
 const fs = require("fs");
 const path = require("path");
+const axios = require("axios");
 
 const AsanaUser = require("../models/AsanaUser");
 const AsanaWorkspace = require("../models/AsanaWorkspace");
@@ -278,8 +279,14 @@ async function importAsanaData({ token, workspaceId, onProgress }) {
     const fileName = safeFileName(a.name || `${asanaId}`);
 
     try {
-      // NOTE: Asana download_url is short-lived; we must download immediately.
-      const response = await client.get(downloadUrl, { responseType: "arraybuffer" });
+      // NOTE: Asana download_url is a full absolute URL (S3 etc).
+      // We must NOT use the Asana API client here because it prepends the API baseURL.
+      // Use raw axios instead so the full URL is used as-is.
+      const response = await axios.get(downloadUrl, {
+        responseType: "arraybuffer",
+        timeout: 60000,
+        // Don't send Asana auth headers to S3 - it can cause 400 errors
+      });
       const mimeType = String(response.headers?.["content-type"] || "");
       const size = Number(response.headers?.["content-length"] || 0) || Number(a.size || 0) || 0;
 
