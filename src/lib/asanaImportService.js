@@ -254,7 +254,23 @@ async function importAsanaData({ token, workspaceId, onProgress }) {
 
     const exists = await AsanaAttachment.findOne({ asanaId }).lean();
     if (exists?.filePath) {
-      continue;
+      // Check if the file on disk is valid (exists and not corrupted/tiny)
+      try {
+        const relativePath = exists.filePath.replace(/^\/uploads\//, "");
+        const absPath = path.join(baseUploads, relativePath);
+        const stat = fs.statSync(absPath);
+        // If file exists and is bigger than 5KB, it's likely valid — skip
+        if (stat.size > 5120) {
+          continue;
+        }
+        // File is suspiciously small (likely a saved error page) — re-download
+        console.log(`[ASANA-IMPORT] File ${exists.fileName} is only ${stat.size} bytes — re-downloading`);
+        // Delete the corrupted file
+        fs.unlinkSync(absPath);
+      } catch {
+        // File doesn't exist on disk — re-download
+        console.log(`[ASANA-IMPORT] File ${exists.fileName} missing from disk — re-downloading`);
+      }
     }
 
     const downloadUrl = String(a.download_url || "");
