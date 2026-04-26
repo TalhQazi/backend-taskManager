@@ -59,6 +59,7 @@ const TaskSchema = new mongoose.Schema(
         details: { type: String, default: "" },
       },
     ],
+    taskNumber: { type: Number, index: true },
   },
   { timestamps: true }
 );

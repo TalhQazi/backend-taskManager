@@ -457,8 +457,12 @@ router.post("/", requireAuth, async (req, res, next) => {
     const createdAt = data.createdAt || new Date().toISOString().split("T")[0];
     const firstAssignee = data.assignees?.[0] || "";
 
+    const lastTask = await Task.findOne().sort({ taskNumber: -1 }).select("taskNumber").lean();
+    const nextTaskNumber = (lastTask?.taskNumber || 0) + 1;
+
     const created = await Task.create({
       ...data,
+      taskNumber: nextTaskNumber,
       createdAt,
       dueDate,
     });
@@ -591,8 +595,12 @@ router.post("/upload", requireAuth, upload.array("files", 10), async (req, res, 
       attachment = attachments[0];
     }
 
+    const lastTask = await Task.findOne().sort({ taskNumber: -1 }).select("taskNumber").lean();
+    const nextTaskNumber = (lastTask?.taskNumber || 0) + 1;
+
     const created = await Task.create({
       ...parsed.data,
+      taskNumber: nextTaskNumber,
       createdAt,
       dueDate,
       attachmentFileName: attachments[0]?.fileName || parsed.data.attachmentFileName || "",
