@@ -25,7 +25,7 @@ const DROPBOX_CONFIG = Object.freeze({
 });
 
 /** Roles allowed to use Dropbox integration */
-const DROPBOX_ALLOWED_ROLES = ["super-admin", "admin", "manager"];
+const DROPBOX_ALLOWED_ROLES = ["super-admin"];
 
 // ── Helpers ──────────────────────────────────────────────────
 
