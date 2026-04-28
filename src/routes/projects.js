@@ -852,6 +852,33 @@ router.post("/:id/comments", requireAuth, async (req, res, next) => {
 
     await logActivity(req, "PROJECT_COMMENT_CREATE", "project", project._id, project.name, `Comment added on project: ${project.name}`);
 
+    // Create notification for project assignees + project creator
+    const assigneeList = Array.isArray(project.assignees) ? project.assignees : [];
+    const commentPreview = message.length > 50 ? message.substring(0, 50) + "..." : message;
+
+    const notificationAssignees = [
+      ...new Set(
+        [
+          ...assigneeList,
+          project.createdByUsername,
+          project.createdByUserId,
+        ].filter(Boolean)
+      ),
+    ];
+
+    if (notificationAssignees.length > 0) {
+      await createNotification({
+        actor: String(req.user?.username || "Someone"),
+        actorRole: String(req.user?.role || ""),
+        action: "commented on",
+        resourceType: "project",
+        resourceName: project.name,
+        assignees: notificationAssignees,
+        details: `"${commentPreview}"`,
+        resourceId: String(project._id),
+      });
+    }
+
     // Process Mentions
     if (message.includes("@")) {
       const Employee = require("../models/Employee");
