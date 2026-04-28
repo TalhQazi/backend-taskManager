@@ -4,6 +4,7 @@ const socialMediaAccountSchema = new mongoose.Schema(
   {
     platform: {
       type: String,
+      required: true,
       enum: [
         "Instagram", 
         "Facebook", 
@@ -31,7 +32,11 @@ const socialMediaAccountSchema = new mongoose.Schema(
       type: String,
       default: "",
     },
-    profileUrl: {
+    brand: {
+      type: String,
+      default: "",
+    },
+    url: {
       type: String,
       default: "",
     },

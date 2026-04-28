@@ -681,6 +681,7 @@ router.get("/:id/comments", requireAuth, async (req, res, next) => {
           size: a.size || 0,
           uploadedAt: a.uploadedAt
         })) : [],
+        reactions: Array.isArray(c.reactions) ? c.reactions : [],
         createdAt: c.createdAt,
       })),
     });
@@ -774,6 +775,7 @@ router.post("/:id/comments", requireAuth, async (req, res, next) => {
         size: a.size || 0,
         uploadedAt: a.uploadedAt
       })) : [],
+      reactions: [],
       createdAt: created.createdAt,
     };
     
@@ -785,6 +787,63 @@ router.post("/:id/comments", requireAuth, async (req, res, next) => {
     return res.status(201).json({
       item: commentData,
     });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// POST reaction to a comment
+router.post("/:id/comments/:commentId/reactions", requireAuth, async (req, res, next) => {
+  try {
+    const { emoji } = req.body;
+    if (!emoji) {
+      return res.status(400).json({ error: { message: "Emoji is required" } });
+    }
+
+    const userId = String(req.user?.sub || req.user?.id || "");
+    const username = String(req.user?.username || "");
+    
+    const Settings = require("../models/Settings");
+    const userSettings = await Settings.findOne({ userId }).lean();
+    const fullName = userSettings?.fullName || "";
+
+    const comment = await TaskComment.findById(req.params.commentId);
+    if (!comment) {
+      return res.status(404).json({ error: { message: "Comment not found" } });
+    }
+
+    // Toggle reaction
+    const existingIndex = comment.reactions.findIndex(
+      (r) => r.emoji === emoji && r.userId === userId
+    );
+
+    if (existingIndex > -1) {
+      // Remove
+      comment.reactions.splice(existingIndex, 1);
+    } else {
+      // Add
+      comment.reactions.push({
+        emoji,
+        userId,
+        username,
+        fullName,
+        createdAt: new Date(),
+      });
+    }
+
+    await comment.save();
+
+    const updatedReactions = comment.reactions;
+
+    // Broadcast update
+    if (global.io) {
+      global.io.to(`task-${req.params.id}`).emit("comment-reaction-updated", {
+        commentId: String(comment._id),
+        reactions: updatedReactions,
+      });
+    }
+
+    return res.json({ reactions: updatedReactions });
   } catch (err) {
     return next(err);
   }
