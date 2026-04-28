@@ -2,6 +2,12 @@ const mongoose = require("mongoose");
 
 const headerSettingsSchema = new mongoose.Schema(
   {
+    userId: {
+      type: String,
+      required: true,
+      unique: true,
+      index: true,
+    },
     // Background type: 'color' or 'image'
     backgroundType: {
       type: String,
