@@ -720,6 +720,48 @@ router.post("/:id/comments", requireAuth, async (req, res, next) => {
 
     await logActivity(req, "TASK_COMMENT_CREATE", "task", task._id, task.title, `Comment added on task: ${task.title}`);
 
+    // Create notification for all task assignees
+    const assigneeList = Array.isArray(task.assignees) ? task.assignees : [];
+    const commentPreview = message.length > 50 ? message.substring(0, 50) + "..." : message;
+    const currentUsername = String(req.user?.username || "").trim();
+    const currentUserId = String(req.user?.sub || req.user?.id || "").trim();
+    
+    if (assigneeList.length > 0 || task.createdBy) {
+      const creatorCandidates = [];
+      if (typeof task.createdBy === "string") {
+        creatorCandidates.push(task.createdBy);
+      } else if (task.createdBy && typeof task.createdBy === "object") {
+        if (task.createdBy.userId) creatorCandidates.push(task.createdBy.userId);
+        if (task.createdBy.name) creatorCandidates.push(task.createdBy.name);
+      }
+
+      const notificationAssignees = [
+        ...new Set([
+          ...assigneeList,
+          ...creatorCandidates,
+        ].filter(Boolean))
+      ];
+
+      const filteredAssignees = notificationAssignees.filter((x) => {
+        const v = String(x || "").trim();
+        if (!v) return false;
+        if (currentUsername && v.toLowerCase() === currentUsername.toLowerCase()) return false;
+        if (currentUserId && v === currentUserId) return false;
+        return true;
+      });
+      
+      await createNotification({
+        actor: String(req.user?.username || "Someone"),
+        actorRole: String(req.user?.role || ""),
+        action: "commented on",
+        resourceType: "task",
+        resourceName: task.title,
+        assignees: filteredAssignees,
+        details: `"${commentPreview}"`,
+        resourceId: String(task._id),
+      });
+    }
+
     // Process Mentions
     if (message.includes("@")) {
       const Employee = require("../models/Employee");
