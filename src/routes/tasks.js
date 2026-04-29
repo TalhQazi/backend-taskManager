@@ -46,6 +46,7 @@ const createSchema = z.object({
   description: z.string().min(1, "Task description is required"),
   projectId: z.string().optional(),
   assignees: z.array(z.string()).optional().default([]),
+  teamLead: z.string().optional().default(""),
   priority: z.enum(["high", "medium", "low"]).optional(),
   status: z.enum(["pending", "in-progress", "completed", "overdue"]).optional(),
   dueDate: z.union([z.string(), z.date()]).optional(),
@@ -75,6 +76,7 @@ const updateSchema = z.object({
   description: z.string().min(1).optional(),
   projectId: z.string().optional(),
   assignees: z.array(z.string()).optional(),
+  teamLead: z.string().optional(),
   priority: z.enum(["high", "medium", "low"]).optional(),
   status: z.enum(["pending", "in-progress", "completed", "overdue"]).optional(),
   dueDate: z.union([z.string(), z.date()]).optional(),
@@ -111,12 +113,15 @@ function withId(doc) {
     ...rest, 
     assignees: nextAssignees, 
     id: String(doc._id),
+    taskNumber: doc.taskNumber,
+    teamLead: doc.teamLead,
     attachments: doc.attachments,
     attachment: doc.attachment,
     attachmentFileName: doc.attachmentFileName,
     attachmentNote: doc.attachmentNote,
     startedAt: doc.startedAt,
     totalTimeSpent: doc.totalTimeSpent || 0,
+    executionPriority: doc.executionPriority,
   };
 }
 
@@ -328,7 +333,7 @@ router.get("/", requireAuth, async (req, res, next) => {
 
     const filter = conditions.length > 0 ? { $and: conditions } : {};
 
-    const cacheKey = `tasks:list:${role}:${req.user?.sub || ''}:p${page}:l${limit}:s${searchQ}:st${statusQ}:pr${priorityQ}`;
+    const cacheKey = `tasks:list:${role}:${req.user?.sub || ''}:p${page}:l${limit}:s${searchQ}:st${statusQ}:pr${priorityQ}:pid${projectIdQ}`;
     const result = await cacheWrap(cacheKey, async () => {
       const [items, total] = await Promise.all([
         Task.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit).lean(),
@@ -1555,6 +1560,235 @@ router.get("/:id/attachments/:index/download", requireAuth, async (req, res, nex
     }
 
     return res.status(404).json({ error: { message: "Attachment file not available" } });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// ============================================================================
+// Execution Priority System - Admin Only
+// ============================================================================
+
+// IMPORTANT: Place specific routes BEFORE parameterized routes
+// to avoid Express route matching issues
+
+// DELETE /api/tasks/priorities - Clear all execution priorities (standalone tasks)
+router.delete("/priorities", requireAuth, async (req, res, next) => {
+  try {
+    // Check admin role
+    if (req.user?.role !== "admin") {
+      return res.status(403).json({ error: { message: "Only admins can manage execution priorities" } });
+    }
+
+    // Clear execution priorities for all standalone tasks (no projectId)
+    await Task.updateMany(
+      { projectId: null, executionPriority: { $ne: null } },
+      { executionPriority: null }
+    );
+
+    // Log activity
+    await ActivityLog.create({
+      actorUserId: String(req.user?.sub || req.user?.id || "unknown"),
+      actorUsername: String(req.user?.username || req.user?.name || req.user?.email || "unknown"),
+      actorRole: String(req.user?.role || "unknown"),
+      action: "TASK_UPDATE",
+      resourceType: "task",
+      resourceId: "all-standalone",
+      resourceName: "All Standalone Tasks",
+      description: "Cleared all execution priorities for standalone tasks",
+    });
+
+    // Clear cache
+    await cacheDel("tasks:*");
+    await cacheDel("projects:*");
+
+    return res.status(200).json({
+      success: true,
+      message: "All execution priorities cleared for standalone tasks",
+    });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// POST /api/tasks/resequence - Global re-sequence of prioritized tasks
+router.post("/resequence", requireAuth, async (req, res, next) => {
+  try {
+    // Check admin role
+    if (req.user?.role !== "admin") {
+      return res.status(403).json({ error: { message: "Only admins can manage execution priorities" } });
+    }
+
+    const { taskIds } = req.body;
+
+    if (!Array.isArray(taskIds) || taskIds.length === 0) {
+      return res.status(400).json({ error: { message: "taskIds array is required" } });
+    }
+
+    // Validate all task IDs
+    const validIds = taskIds.filter(id => mongoose.Types.ObjectId.isValid(id));
+
+    // Update tasks with new sequential priorities
+    const updatedTasks = [];
+    for (let i = 0; i < validIds.length; i++) {
+      const task = await Task.findByIdAndUpdate(
+        validIds[i],
+        { executionPriority: i + 1 },
+        { new: true, runValidators: true }
+      );
+      if (task) {
+        updatedTasks.push(task);
+      }
+    }
+
+    // Log activity
+    await ActivityLog.create({
+      actorUserId: String(req.user?.sub || req.user?.id || "unknown"),
+      actorUsername: String(req.user?.username || req.user?.name || req.user?.email || "unknown"),
+      actorRole: String(req.user?.role || "unknown"),
+      action: "TASK_UPDATE",
+      resourceType: "task",
+      resourceId: "batch-resequence",
+      resourceName: "Batch Resequence",
+      description: `Resequenced ${updatedTasks.length} tasks with execution priorities`,
+    });
+
+    // Clear cache
+    await cacheDel("tasks:*");
+    await cacheDel("projects:*");
+
+    return res.status(200).json({
+      success: true,
+      items: updatedTasks,
+      message: "Tasks re-sequenced successfully",
+    });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// POST /api/tasks/:id/priority - Assign execution priority to a task
+router.post("/:id/priority", requireAuth, async (req, res, next) => {
+  try {
+    // Check admin role
+    if (req.user?.role !== "admin") {
+      return res.status(403).json({ error: { message: "Only admins can manage execution priorities" } });
+    }
+
+    const { id } = req.params;
+    const { executionPriority } = req.body;
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ error: { message: "Invalid task ID" } });
+    }
+
+    if (typeof executionPriority !== "number" || executionPriority < 1) {
+      return res.status(400).json({ error: { message: "executionPriority must be a positive number" } });
+    }
+
+    const task = await Task.findByIdAndUpdate(
+      id,
+      { executionPriority },
+      { new: true, runValidators: true }
+    );
+
+    if (!task) {
+      return res.status(404).json({ error: { message: "Task not found" } });
+    }
+
+    // Log activity
+    await ActivityLog.create({
+      actorUserId: String(req.user?.sub || req.user?.id || "unknown"),
+      actorUsername: String(req.user?.username || req.user?.name || req.user?.email || "unknown"),
+      actorRole: String(req.user?.role || "unknown"),
+      action: "TASK_UPDATE",
+      resourceType: "task",
+      resourceId: String(task._id),
+      resourceName: task.title || "",
+      description: `Assigned execution priority #${executionPriority} to task "${task.title}"`,
+    });
+
+    // Clear cache
+    await cacheDel("tasks:*");
+    await cacheDel(`task:${id}`);
+    await cacheDel("projects:*");
+    await cacheDel("project:*");
+
+    return res.status(200).json({
+      success: true,
+      item: task,
+      message: `Execution priority #${executionPriority} assigned successfully`,
+    });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// DELETE /api/tasks/:id/priority - Remove execution priority from a task
+router.delete("/:id/priority", requireAuth, async (req, res, next) => {
+  try {
+    // Check admin role
+    if (req.user?.role !== "admin") {
+      return res.status(403).json({ error: { message: "Only admins can manage execution priorities" } });
+    }
+
+    const { id } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ error: { message: "Invalid task ID" } });
+    }
+
+    const task = await Task.findByIdAndUpdate(
+      id,
+      { executionPriority: null },
+      { new: true, runValidators: true }
+    );
+
+    if (!task) {
+      return res.status(404).json({ error: { message: "Task not found" } });
+    }
+
+    // Re-sequence remaining prioritized tasks
+    const projectId = task.projectId;
+    const filter = projectId
+      ? { projectId, executionPriority: { $ne: null } }
+      : { projectId: null, executionPriority: { $ne: null } };
+
+    const prioritizedTasks = await Task.find(filter).sort({ executionPriority: 1 });
+
+    // Update priorities sequentially
+    for (let i = 0; i < prioritizedTasks.length; i++) {
+      await Task.findByIdAndUpdate(
+        prioritizedTasks[i]._id,
+        { executionPriority: i + 1 }
+      );
+    }
+
+    // Log activity
+    await ActivityLog.create({
+      actorUserId: String(req.user?.sub || req.user?.id || "unknown"),
+      actorUsername: String(req.user?.username || req.user?.name || req.user?.email || "unknown"),
+      actorRole: String(req.user?.role || "unknown"),
+      action: "TASK_UPDATE",
+      resourceType: "task",
+      resourceId: String(task._id),
+      resourceName: task.title || "",
+      description: `Removed execution priority from task "${task.title}" and re-sequenced remaining tasks`,
+    });
+
+    // Clear cache
+    await cacheDel("tasks:*");
+    await cacheDel(`task:${id}`);
+    await cacheDel("projects:*");
+
+    // Return updated task
+    const updatedTask = await Task.findById(id);
+
+    return res.status(200).json({
+      success: true,
+      item: updatedTask,
+      message: "Execution priority removed and tasks re-sequenced",
+    });
   } catch (err) {
     return next(err);
   }
