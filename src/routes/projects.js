@@ -9,7 +9,7 @@ const Settings = require("../models/Settings");
 const User = require("../models/User");
 const Archive = require("../models/Archive");
 const ActivityLog = require("../models/ActivityLog");
-const { requireAuth } = require("../middleware/auth");
+const { requireAuth, requireRole } = require("../middleware/auth");
 const { createNotification } = require("../utils/notifications");
 const { parsePagination, paginatedResponse } = require("../lib/pagination");
 const { cacheWrap, cacheDel } = require("../lib/cache");
@@ -108,7 +108,7 @@ const projectCreateSchema = z.object({
   tasks: z.array(taskCreateSchema).optional().default([]),
 });
 
-router.post("/", requireAuth, async (req, res, next) => {
+router.post("/", requireAuth, requireRole(["super-admin", "admin", "manager"]), async (req, res, next) => {
   try {
     const parsed = projectCreateSchema.safeParse({
       ...req.body,
@@ -542,7 +542,7 @@ const projectUpdateSchema = z.object({
   status: z.string().optional(),
 });
 
-router.put("/:id", requireAuth, async (req, res, next) => {
+router.put("/:id", requireAuth, requireRole(["super-admin", "admin", "manager"]), async (req, res, next) => {
   try {
     // Debug: Log incoming logo payload info (not the full base64)
     if (req.body?.logo) {

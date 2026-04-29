@@ -416,7 +416,7 @@ async function logActivity(req, action, resourceType, resourceId, resourceName, 
   }
 }
 
-router.get("/", requireAuth, async (_req, res, next) => {
+router.get("/", requireAuth, requireRole(["super-admin", "admin", "manager"]), async (_req, res, next) => {
   try {
     const result = await cacheWrap('employees:list', async () => {
       const items = await Employee.find().sort({ name: 1 }).lean();
@@ -468,7 +468,7 @@ router.get("/", requireAuth, async (_req, res, next) => {
   }
 });
 
-router.post("/", requireAuth, async (req, res, next) => {
+router.post("/", requireAuth, requireRole(["super-admin", "admin", "manager"]), async (req, res, next) => {
   try {
     const parsed = createSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -536,7 +536,7 @@ router.post("/", requireAuth, async (req, res, next) => {
   }
 });
 
-router.put("/:id", requireAuth, async (req, res, next) => {
+router.put("/:id", requireAuth, requireRole(["super-admin", "admin", "manager"]), async (req, res, next) => {
   try {
     const parsed = updateSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -696,7 +696,7 @@ async function archiveEmployeeById(employeeId, archivedBy) {
   return employee;
 }
 
-router.delete("/:id", requireAuth, async (req, res, next) => {
+router.delete("/:id", requireAuth, requireRole(["super-admin", "admin"]), async (req, res, next) => {
   try {
     const deleted = await archiveEmployeeById(req.params.id, req.user);
     if (!deleted) {
