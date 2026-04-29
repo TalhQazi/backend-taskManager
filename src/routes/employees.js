@@ -1481,6 +1481,7 @@ router.get("/me/onboarding-status", requireAuth, async (req, res) => {
 
 
 
+
 // GET /api/employees/me/eod-reports - Get employee's EOD reports
 router.get("/me/eod-reports", requireAuth, async (req, res, next) => {
   try {
@@ -1524,7 +1525,29 @@ router.get("/me/eod-reports", requireAuth, async (req, res, next) => {
   } catch (err) {
     next(err);
   }
+}
+);  
+
+router.post('/me/push-token', requireAuth, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { pushToken } = req.body;
+
+    if (!pushToken) {
+      return res.status(400).json({ message: 'Push token required' });
+    }
+
+    await Employee.findByIdAndUpdate(userId, {
+      pushToken,
+    });
+
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ message: 'Server error' });
+
+  }
 });
+
 
 
 module.exports = router;

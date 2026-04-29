@@ -9,7 +9,22 @@ const TaskSchema = new mongoose.Schema(
     priority: { type: String, enum: ["high", "medium", "low"], default: "medium", index: true },
     status: { type: String, enum: ["pending", "in-progress", "completed", "overdue"], default: "pending", index: true },
     category: { type: String, enum: ["task", "bug", "feature", "maintenance"], default: "task", index: true },
-    dueDate: { type: Date, index: true },
+
+     dueDate: { type: Date, index: true },
+     timerEnabled: { type: Boolean, default: true },
+
+      timerState: {
+        type: String,
+        enum: ["normal", "warning", "critical", "overdue"],
+        default: "normal",
+        index: true
+      },
+
+      lastCalculatedOffset: {
+        type: Number, 
+        default: 0
+      },
+
     dueTime: { type: String, default: "" },
     createdAt: { type: String, default: "", index: true },
     attachmentFileName: { type: String, default: "" },
