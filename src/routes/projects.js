@@ -105,7 +105,7 @@ const projectCreateSchema = z.object({
     size: z.number().optional().default(0),
     uploadedAt: z.date().optional(),
   })).optional().default([]),
-  tasks: z.array(taskCreateSchema).min(1, "At least one task is required"),
+  tasks: z.array(taskCreateSchema).optional().default([]),
 });
 
 router.post("/", requireAuth, async (req, res, next) => {
@@ -214,7 +214,7 @@ router.post("/", requireAuth, async (req, res, next) => {
       };
     }));
 
-    const createdTasks = await Task.insertMany(taskDocs, { ordered: true });
+    const createdTasks = taskDocs.length > 0 ? await Task.insertMany(taskDocs, { ordered: true }) : [];
 
     await logActivity(
       req,
