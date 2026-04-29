@@ -15,12 +15,16 @@ function withId(doc) {
 }
 
 const adminScheduleSchema = z.object({
-  location: z.string().min(1),
-  employee: z.string().min(1),
-  date: z.string().min(1),
+  location: z.string().optional(),
+  employee: z.string().optional(),
+  date: z.string().optional(),
   startTime: z.string().optional().default(""),
   endTime: z.string().optional().default(""),
   plannedTask: z.string().optional().default(""),
+  title: z.string().optional(),
+  assignee: z.string().optional(),
+  type: z.string().optional(),
+  status: z.string().optional(),
 });
 
 const createSchema = z.object({
@@ -50,19 +54,72 @@ router.get("/", requireAuth, async (_req, res, next) => {
 router.post("/", requireAuth, async (req, res, next) => {
   try {
     const adminParsed = adminScheduleSchema.safeParse(req.body);
+    const body = req.body || {};
+    
+    // If it looks like the frontend ScheduleItem format or the older format
     if (adminParsed.success) {
-      const d = new Date(adminParsed.data.date);
+      const dateStr = body.date || adminParsed.data.date;
+      if (!dateStr) return res.status(400).json({ error: { message: "Date is required" } });
+
+      const d = new Date(dateStr);
       const dayIndex = d.getDay();
       const dayMap = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+      
       const created = await Event.create({
         day: dayMap[Number.isFinite(dayIndex) ? dayIndex : 1],
-        title: adminParsed.data.plannedTask || "Shift",
-        assignee: adminParsed.data.employee,
-        location: adminParsed.data.location,
-        startTime: adminParsed.data.startTime || "",
-        endTime: adminParsed.data.endTime || "",
-        type: "task",
+        title: body.title || body.plannedTask || "Shift",
+        assignee: body.assignee || body.employee,
+        location: body.location || "Office",
+        startTime: body.startTime || "",
+        endTime: body.endTime || "",
+        type: body.type || "task",
       });
+
+      // SYNC: Create or Update WorkSchedule for the employee
+      try {
+        const WorkSchedule = require("../models/WorkSchedule");
+        const User = require("../models/User");
+        
+        const employeeName = body.assignee || body.employee;
+        const employeeUser = await User.findOne({ 
+            $or: [{ name: employeeName }, { username: employeeName }] 
+        }).select("_id").lean();
+
+        if (employeeUser && body.startTime && body.endTime) {
+            // Convert "05:10 PM" to "17:10" format if needed
+            const formatTime = (t) => {
+                if (!t) return "09:00";
+                if (/^\d{1,2}:\d{2}$/.test(t)) return t;
+                const match = t.match(/(\d{1,2}):(\d{2})\s*(AM|PM)/i);
+                if (match) {
+                    let h = parseInt(match[1]);
+                    const m = match[2];
+                    const ampm = match[3].toUpperCase();
+                    if (ampm === "PM" && h < 12) h += 12;
+                    if (ampm === "AM" && h === 12) h = 0;
+                    return `${String(h).padStart(2, '0')}:${m}`;
+                }
+                return t;
+            };
+
+            const shiftStart = formatTime(body.startTime);
+            const shiftEnd = formatTime(body.endTime);
+
+            await WorkSchedule.findOneAndUpdate(
+                { userId: employeeUser._id },
+                { 
+                    userId: employeeUser._id,
+                    shiftStart,
+                    shiftEnd,
+                    isActive: true,
+                    timezone: "America/New_York" // Default
+                },
+                { upsert: true, new: true }
+            );
+        }
+      } catch (syncErr) {
+        console.error("Failed to sync WorkSchedule:", syncErr);
+      }
       
       // Create notification
       await createNotification({

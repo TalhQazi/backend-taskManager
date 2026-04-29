@@ -311,6 +311,72 @@ router.post("/me/clock-in", requireAuth, async (req, res, next) => {
       });
     }
 
+    // Attendance Accountability: late arrival detection
+    let lateFlag = null;
+    try {
+      const AttendanceEvent = require("../models/AttendanceEvent");
+      const { parseHHMM, getNowPartsInTimeZone } = require("../services/eodEngine");
+
+      const tz = String(schedule.timezone || "America/New_York");
+      const shiftStartMins = parseHHMM(schedule.shiftStart);
+      const nowParts = getNowPartsInTimeZone(tz);
+
+      if (shiftStartMins !== null && nowParts !== null) {
+        const nowMinutes = nowParts.hour * 60 + nowParts.minute;
+        const minutesLate = nowMinutes - shiftStartMins;
+
+        if (minutesLate > 10) {
+          const level = minutesLate > 30 ? 2 : 1;
+          const createdLate = await AttendanceEvent.create({
+            userId: user._id,
+            employeeId: employee._id,
+            employeeName: employee.name,
+            type: "late_arrival",
+            level,
+            date: new Date(),
+            shiftStart: schedule.shiftStart,
+            timezone: tz,
+            minutesLate,
+            deviceInfo: req.headers["user-agent"]?.includes("Mobi") ? "mobile" : "web",
+            ipAddress: req.ip || req.headers["x-forwarded-for"] || req.socket.remoteAddress,
+            status: "open",
+          });
+
+          // Notifications
+          createNotification({
+            actor: "system",
+            actorRole: "system",
+            action: "late explanation required",
+            resourceType: "attendance",
+            resourceName: employee.name,
+            details: `You are ${minutesLate} minutes late. Explanation required.`,
+            assignees: [String(user._id)],
+            resourceId: String(createdLate._id),
+          }).catch(() => {});
+
+          createNotification({
+            actor: "system",
+            actorRole: "system",
+            action: "late arrival",
+            resourceType: "attendance",
+            resourceName: employee.name,
+            details: `${employee.name} clocked in ${minutesLate} minutes late (Level ${level})`,
+            assignees: ["manager", "admin", "super-admin"],
+            resourceId: String(createdLate._id),
+          }).catch(() => {});
+
+          lateFlag = {
+            attendanceEventId: String(createdLate._id),
+            minutesLate,
+            level,
+            requiresExplanation: true,
+          };
+        }
+      }
+    } catch (err) {
+      console.error("Late detection error:", err);
+    }
+
     const now = new Date();
     const hhmm = now.toTimeString().slice(0, 5);
 
@@ -332,6 +398,7 @@ router.post("/me/clock-in", requireAuth, async (req, res, next) => {
         clockIn: created.clockIn || "",
         clockOut: created.clockOut || "",
         status: created.status || "",
+        lateFlag,
       },
     });
   } catch (err) {

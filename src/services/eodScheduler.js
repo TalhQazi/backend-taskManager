@@ -1,5 +1,6 @@
 const { runEODTick } = require("./eodEngine");
 const { runWeeklyComplianceCheck } = require("./weeklyComplianceReport");
+const { runAttendanceTick } = require("./attendanceEngine");
 
 let interval = null;
 let weeklyInterval = null;
@@ -14,8 +15,10 @@ function startEODScheduler() {
 
   // Run once on start, then every minute
   runEODTick().catch((err) => console.error("[EOD Scheduler] Tick error:", err));
+  runAttendanceTick().catch((err) => console.error("[Attendance Scheduler] Tick error:", err));
   interval = setInterval(() => {
     runEODTick().catch((err) => console.error("[EOD Scheduler] Tick error:", err));
+    runAttendanceTick().catch((err) => console.error("[Attendance Scheduler] Tick error:", err));
   }, 60 * 1000);
 
   interval.unref?.();

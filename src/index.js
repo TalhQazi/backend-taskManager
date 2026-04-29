@@ -51,6 +51,7 @@ const vendorCategoriesRoutes = require("./routes/vendorCategories");
 const trademarksRoutes = require("./routes/trademarks");
 const workSchedulesRoutes = require("./routes/workSchedules");
 const leaveRequestsRoutes = require("./routes/leaveRequests");
+const attendanceRoutes = require("./routes/attendance");
 const { startEODScheduler } = require("./services/eodScheduler");
 
 //going to express now
@@ -289,6 +290,7 @@ app.use("/api/vendor-categories", vendorCategoriesRoutes);
 app.use("/api/trademarks", trademarksRoutes);
 app.use("/api/work-schedules", workSchedulesRoutes);
 app.use("/api/leave-requests", leaveRequestsRoutes);
+app.use("/api/attendance", attendanceRoutes);
 
 app.use(notFoundHandler);
 app.use(errorHandler);
