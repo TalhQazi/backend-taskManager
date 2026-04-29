@@ -8,6 +8,8 @@ const UserSchema = new mongoose.Schema(
     passwordHash: { type: String, required: true },
     role: { type: String, required: true, enum: ["super-admin", "admin", "manager", "developer", "employee"], index: true },
     status: { type: String, default: "active", index: true },
+    mfaEnabled: { type: Boolean, default: false },
+    mfaSecret: { type: String, default: "" },
   },
   { timestamps: true }
 );

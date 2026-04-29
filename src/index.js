@@ -4,6 +4,7 @@ const compression = require("compression");
 const morgan = require("morgan");
 const path = require("path");
 const fs = require("fs");
+const cookieParser = require("cookie-parser");
 const { createServer } = require("http");
 const { Server } = require("socket.io");
 require("dotenv").config();
@@ -184,6 +185,8 @@ app.use(
     credentials: true,
   })
 );
+
+app.use(cookieParser());
 
 app.use((req, res, next) => {
   const ct = req.headers['content-type'] || '';

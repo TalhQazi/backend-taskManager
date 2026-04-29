@@ -1,12 +1,18 @@
 const jwt = require("jsonwebtoken");
 
 function requireAuth(req, res, next) {
-  const header = req.headers.authorization || "";
-  let [type, token] = header.split(" ");
+  let token = req.cookies?.accessToken;
 
-  // Fallback to query parameter 'token' if header is missing or invalid
-  if ((type !== "Bearer" || !token) && req.query.token) {
-    token = req.query.token;
+  if (!token) {
+    const header = req.headers.authorization || "";
+    let [type, headerToken] = header.split(" ");
+    
+    // Fallback to query parameter 'token' if header is missing or invalid
+    if ((type !== "Bearer" || !headerToken) && req.query.token) {
+      token = req.query.token;
+    } else if (type === "Bearer" && headerToken) {
+      token = headerToken;
+    }
   }
 
   if (!token) {
