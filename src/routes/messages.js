@@ -1,5 +1,6 @@
 const express = require("express");
 const { z } = require("zod");
+const multer = require("multer");
 
 const Message = require("../models/Message");
 const Employee = require("../models/Employee");
@@ -8,6 +9,7 @@ const { encryptString, decryptString } = require("../lib/encryption");
 const { checkAndFlagOffTheClock } = require("../lib/offTheClockWork");
 const { parsePagination, paginatedResponse } = require("../lib/pagination");
 const { cacheWrap, cacheDel } = require("../lib/cache");
+const { uploadToS3 } = require("../lib/s3");
 
 const router = express.Router();
 
@@ -31,17 +33,59 @@ const notificationSchema = z.object({
   createdAt: z.string().optional(),
 });
 
+const attachmentSchema = z
+  .object({
+    fileName: z.string().optional().default(""),
+    url: z.string().optional().default(""),
+    mimeType: z.string().optional().default(""),
+    size: z.coerce.number().optional().default(0),
+  })
+  .optional();
+
 const createSchema = z.object({
   sender: z.string().min(1),
   senderAvatar: z.string().optional().default(""),
   recipient: z.string().min(1),
-  content: z.string().min(1),
+  content: z.string().optional().default(""),
   timestamp: z.string().min(1),
   type: z.enum(["direct", "broadcast"]),
   status: z.enum(["sent", "delivered", "read"]).optional(),
+  attachment: attachmentSchema,
 });
 
 const updateSchema = createSchema.partial();
+
+const storage = multer.memoryStorage();
+const upload = multer({
+  storage,
+  limits: { fileSize: 16 * 1024 * 1024 },
+});
+
+router.post("/upload", requireAuth, upload.single("file"), async (req, res, next) => {
+  try {
+    const file = req.file;
+    if (!file) return res.status(400).json({ error: { message: "No file provided" } });
+
+    let url = "";
+    try {
+      url = await uploadToS3(file.buffer, file.originalname, file.mimetype, "messages");
+    } catch (err) {
+      const base64Data = file.buffer.toString("base64");
+      url = `data:${file.mimetype};base64,${base64Data}`;
+    }
+
+    return res.json({
+      attachment: {
+        fileName: file.originalname,
+        url,
+        mimeType: file.mimetype,
+        size: file.size,
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+});
 
 // Get all messages (with optional filtering)
 router.get("/", requireAuth, async (req, res, next) => {
@@ -289,10 +333,21 @@ router.post("/", requireAuth, async (req, res, next) => {
     const parsed = createSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: { message: "Invalid payload" } });
 
+    const content = String(parsed.data.content || "");
+    const hasAttachment =
+      !!parsed.data.attachment &&
+      typeof parsed.data.attachment.url === "string" &&
+      parsed.data.attachment.url.trim().length > 0;
+
+    if (!content.trim() && !hasAttachment) {
+      return res.status(400).json({ error: { message: "Message content or attachment is required" } });
+    }
+
     const created = await Message.create({
       ...parsed.data,
       title: typeof parsed.data.title === "string" ? encryptString(parsed.data.title) : "",
-      content: encryptString(parsed.data.content),
+      content: encryptString(content),
+      attachment: parsed.data.attachment || undefined,
     });
 
     const finalData = withId(decryptOut(created.toObject()));

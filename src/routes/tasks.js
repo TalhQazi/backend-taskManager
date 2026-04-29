@@ -14,7 +14,8 @@ const { checkAndFlagOffTheClock } = require("../lib/offTheClockWork");
 const { createNotification } = require("../utils/notifications");
 const { parsePagination, paginatedResponse } = require("../lib/pagination");
 const { cacheWrap, cacheDel } = require("../lib/cache");
-const { uploadToS3, base64ToBuffer } = require("../lib/s3");
+const { uploadToS3, base64ToBuffer, getFromS3, extractS3Key } = require("../lib/s3");
+const contributionTracker = require("../utils/contributionTracker");
 
 
 const router = express.Router();
@@ -262,54 +263,71 @@ router.get("/", requireAuth, async (req, res, next) => {
     const priorityQ = String(req.query.priority || "").trim();
     const projectIdQ = String(req.query.projectId || "").trim();
 
-    let filter = {};
+    const conditions = [];
+    const username = String(req.user?.username || "").trim();
+    const name = String(req.user?.name || "").trim();
+    const fullName = String(req.user?.fullName || "").trim();
+    const candidates = [username, name, fullName].filter(Boolean);
 
-    if (projectIdQ) {
-      if (projectIdQ === "none") {
-        filter.projectId = { $exists: false };
-      } else {
-        try {
-          filter.projectId = new mongoose.Types.ObjectId(projectIdQ);
-        } catch (err) {
-          // ignore invalid project IDs
-        }
-      }
-    }
-
+    // 1. Accessibility Filter for Employees
     if (role !== "admin" && role !== "super-admin" && role !== "manager") {
-      // Employees only see tasks assigned to them
-      const username = String(req.user?.username || "").trim();
-      const name = String(req.user?.name || "").trim();
-      const candidates = [username, name].filter(Boolean);
-
       if (candidates.length === 0) {
         return res.json(paginatedResponse([], 0, page, limit));
       }
-      const conditions = candidates.flatMap((c) => [
-        { assignees: { $elemMatch: { $regex: new RegExp(`^${escapeRegExp(c)}$`, "i") } } },
-        { assignee: { $regex: new RegExp(`^${escapeRegExp(c)}$`, "i") } },
-      ]);
-      filter = { $or: conditions };
+
+      // Find projects where the user is an assignee
+      const Project = require("../models/Project");
+      const assignedProjects = await Project.find({
+        assignees: { $elemMatch: { $regex: new RegExp(`^(${candidates.map(escapeRegExp).join("|")})$`, "i") } }
+      }).select("_id").lean();
+      const assignedProjectIds = assignedProjects.map(p => p._id);
+
+      conditions.push({
+        $or: [
+          ...candidates.flatMap((c) => [
+            { assignees: { $elemMatch: { $regex: new RegExp(`^${escapeRegExp(c)}$`, "i") } } },
+            { assignee: { $regex: new RegExp(`^${escapeRegExp(c)}$`, "i") } }, // Legacy
+          ]),
+          { projectId: { $in: assignedProjectIds } }
+        ]
+      });
     }
 
-    // Apply search filter
+    // 2. Project Filter
+    if (projectIdQ) {
+      if (projectIdQ === "none") {
+        conditions.push({ projectId: { $exists: false } });
+      } else {
+        try {
+          conditions.push({ projectId: new mongoose.Types.ObjectId(projectIdQ) });
+        } catch (err) { /* ignore invalid IDs */ }
+      }
+    }
+
+    // 3. Search Filter
     if (searchQ) {
       const searchRegex = new RegExp(escapeRegExp(searchQ), "i");
-      const searchCondition = { $or: [{ title: searchRegex }, { description: searchRegex }] };
-      filter = filter.$or
-        ? { $and: [filter, searchCondition] }
-        : searchCondition;
+      conditions.push({ 
+        $or: [
+          { title: searchRegex }, 
+          { description: searchRegex },
+          { assignees: { $elemMatch: { $regex: searchRegex } } },
+          { assignee: searchRegex }
+        ] 
+      });
     }
 
-    // Apply status filter
+    // 4. Status Filter
     if (statusQ && statusQ !== "all") {
-      filter.status = statusQ;
+      conditions.push({ status: statusQ });
     }
 
-    // Apply priority filter
+    // 5. Priority Filter
     if (priorityQ && priorityQ !== "all") {
-      filter.priority = priorityQ;
+      conditions.push({ priority: priorityQ });
     }
+
+    const filter = conditions.length > 0 ? { $and: conditions } : {};
 
     const cacheKey = `tasks:list:${role}:${req.user?.sub || ''}:p${page}:l${limit}:s${searchQ}:st${statusQ}:pr${priorityQ}`;
     const result = await cacheWrap(cacheKey, async () => {
@@ -362,6 +380,21 @@ router.get("/:id/attachment", requireAuth, async (req, res, next) => {
     const task = await Task.findById(req.params.id).select("attachment").lean();
     if (!task) return res.status(404).json({ error: { message: "Task not found" } });
     res.json({ attachment: task.attachment || { fileName: "", url: "", mimeType: "", size: 0 } });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Get task attachment by index from attachments array
+router.get("/:id/attachments/:index", requireAuth, async (req, res, next) => {
+  try {
+    const task = await Task.findById(req.params.id).select("attachments").lean();
+    if (!task) return res.status(404).json({ error: { message: "Task not found" } });
+    const idx = parseInt(req.params.index, 10);
+    const attachments = Array.isArray(task.attachments) ? task.attachments : [];
+    const attachment = attachments[idx];
+    if (!attachment) return res.status(404).json({ error: { message: "Attachment not found" } });
+    res.json({ url: attachment.url || "" });
   } catch (err) {
     next(err);
   }
@@ -425,8 +458,12 @@ router.post("/", requireAuth, async (req, res, next) => {
     const createdAt = data.createdAt || new Date().toISOString().split("T")[0];
     const firstAssignee = data.assignees?.[0] || "";
 
+    const lastTask = await Task.findOne().sort({ taskNumber: -1 }).select("taskNumber").lean();
+    const nextTaskNumber = (lastTask?.taskNumber || 0) + 1;
+
     const created = await Task.create({
       ...data,
+      taskNumber: nextTaskNumber,
       createdAt,
       dueDate,
     });
@@ -454,6 +491,13 @@ router.post("/", requireAuth, async (req, res, next) => {
       }),
       cacheDel("tasks:list:*"),
       created.projectId ? cacheDel(`project:${created.projectId}`) : Promise.resolve(),
+      // Track contributor
+      contributionTracker.trackTaskCreation(created, {
+        userId: String(req.user?.sub || ""),
+        name: req.user?.name || req.user?.username || "Unknown",
+        email: req.user?.email || "",
+        role: req.user?.role || "employee",
+      }),
     ]).catch((err) => {
       console.error("Task creation side-effects error:", err);
     });
@@ -554,8 +598,12 @@ router.post("/upload", requireAuth, upload.array("files", 10), async (req, res, 
       attachment = attachments[0];
     }
 
+    const lastTask = await Task.findOne().sort({ taskNumber: -1 }).select("taskNumber").lean();
+    const nextTaskNumber = (lastTask?.taskNumber || 0) + 1;
+
     const created = await Task.create({
       ...parsed.data,
+      taskNumber: nextTaskNumber,
       createdAt,
       dueDate,
       attachmentFileName: attachments[0]?.fileName || parsed.data.attachmentFileName || "",
@@ -636,6 +684,7 @@ router.get("/:id/comments", requireAuth, async (req, res, next) => {
           size: a.size || 0,
           uploadedAt: a.uploadedAt
         })) : [],
+        reactions: Array.isArray(c.reactions) ? c.reactions : [],
         createdAt: c.createdAt,
       })),
     });
@@ -729,6 +778,7 @@ router.post("/:id/comments", requireAuth, async (req, res, next) => {
         size: a.size || 0,
         uploadedAt: a.uploadedAt
       })) : [],
+      reactions: [],
       createdAt: created.createdAt,
     };
     
@@ -740,6 +790,63 @@ router.post("/:id/comments", requireAuth, async (req, res, next) => {
     return res.status(201).json({
       item: commentData,
     });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// POST reaction to a comment
+router.post("/:id/comments/:commentId/reactions", requireAuth, async (req, res, next) => {
+  try {
+    const { emoji } = req.body;
+    if (!emoji) {
+      return res.status(400).json({ error: { message: "Emoji is required" } });
+    }
+
+    const userId = String(req.user?.sub || req.user?.id || "");
+    const username = String(req.user?.username || "");
+    
+    const Settings = require("../models/Settings");
+    const userSettings = await Settings.findOne({ userId }).lean();
+    const fullName = userSettings?.fullName || "";
+
+    const comment = await TaskComment.findById(req.params.commentId);
+    if (!comment) {
+      return res.status(404).json({ error: { message: "Comment not found" } });
+    }
+
+    // Toggle reaction
+    const existingIndex = comment.reactions.findIndex(
+      (r) => r.emoji === emoji && r.userId === userId
+    );
+
+    if (existingIndex > -1) {
+      // Remove
+      comment.reactions.splice(existingIndex, 1);
+    } else {
+      // Add
+      comment.reactions.push({
+        emoji,
+        userId,
+        username,
+        fullName,
+        createdAt: new Date(),
+      });
+    }
+
+    await comment.save();
+
+    const updatedReactions = comment.reactions;
+
+    // Broadcast update
+    if (global.io) {
+      global.io.to(`task-${req.params.id}`).emit("comment-reaction-updated", {
+        commentId: String(comment._id),
+        reactions: updatedReactions,
+      });
+    }
+
+    return res.json({ reactions: updatedReactions });
   } catch (err) {
     return next(err);
   }
@@ -805,6 +912,86 @@ router.post("/:id/comments/:commentId/archive", requireAuth, async (req, res, ne
     await logActivity(req, "COMMENT_ARCHIVE", "task", task._id, task.title, `Archived comment on task: ${task.title}`);
 
     return res.json({ ok: true, message: "Comment archived" });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// Edit a comment (Admin can edit any, users can edit their own)
+router.patch("/:id/comments/:commentId", requireAuth, async (req, res, next) => {
+  try {
+    const userId = String(req.user?.sub || req.user?.id || "");
+    const userRole = String(req.user?.role || "").toLowerCase();
+    const isAdmin = userRole === "admin" || userRole === "super-admin";
+
+    const task = await Task.findById(req.params.id).lean();
+    if (!task) {
+      return res.status(404).json({ error: { message: "Task not found" } });
+    }
+
+    const comment = await TaskComment.findById(req.params.commentId);
+    if (!comment) {
+      return res.status(404).json({ error: { message: "Comment not found" } });
+    }
+
+    // Check permissions: admin can edit any, user can only edit their own
+    if (!isAdmin && comment.authorUserId !== userId) {
+      return res.status(403).json({ error: { message: "Forbidden: You can only edit your own comments" } });
+    }
+
+    const { message, attachments } = req.body;
+    if (message !== undefined) comment.message = message;
+    if (attachments !== undefined) comment.attachments = attachments;
+    comment.updatedAt = new Date();
+
+    await comment.save();
+
+    await logActivity(req, "COMMENT_UPDATE", "task", task._id, task.title, `Comment updated on task: ${task.title}`);
+
+    return res.json({
+      item: {
+        id: String(comment._id),
+        taskId: String(comment.taskId),
+        message: String(comment.message || ""),
+        authorUserId: String(comment.authorUserId || ""),
+        authorUsername: String(comment.authorUsername || ""),
+        authorRole: String(comment.authorRole || ""),
+        attachments: comment.attachments || [],
+        createdAt: comment.createdAt,
+        updatedAt: comment.updatedAt,
+      },
+    });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// Delete a comment (Admin can delete any, users can delete their own)
+router.delete("/:id/comments/:commentId", requireAuth, async (req, res, next) => {
+  try {
+    const userId = String(req.user?.sub || req.user?.id || "");
+    const userRole = String(req.user?.role || "").toLowerCase();
+    const isAdmin = userRole === "admin" || userRole === "super-admin";
+
+    const task = await Task.findById(req.params.id).lean();
+    if (!task) {
+      return res.status(404).json({ error: { message: "Task not found" } });
+    }
+
+    const comment = await TaskComment.findById(req.params.commentId);
+    if (!comment) {
+      return res.status(404).json({ error: { message: "Comment not found" } });
+    }
+
+    // Check permissions: admin can delete any, user can only delete their own
+    if (!isAdmin && comment.authorUserId !== userId) {
+      return res.status(403).json({ error: { message: "Forbidden: You can only delete your own comments" } });
+    }
+
+    await TaskComment.findByIdAndDelete(req.params.commentId);
+    await logActivity(req, "COMMENT_DELETE", "task", task._id, task.title, `Comment deleted on task: ${task.title}`);
+
+    return res.json({ ok: true, message: "Comment deleted" });
   } catch (err) {
     return next(err);
   }
@@ -964,6 +1151,7 @@ router.patch("/:id/status", requireAuth, async (req, res, next) => {
     }
 
     const status = String(req.body?.status || "").trim();
+    const previousStatus = task.status;
     const allowed = new Set(["pending", "in-progress", "completed", "overdue"]);
     if (!allowed.has(status)) {
       return res.status(400).json({ error: { message: "Invalid status" } });
@@ -1005,6 +1193,32 @@ router.patch("/:id/status", requireAuth, async (req, res, next) => {
       }),
       cacheDel("tasks:list:*"),
       updated.projectId ? cacheDel(`project:${updated.projectId}`) : Promise.resolve(),
+      // Track contribution
+      (async () => {
+        const taskDoc = await Task.findById(req.params.id);
+        if (taskDoc) {
+          const changes = [{ field: "status", oldValue: previousStatus, newValue: status }];
+          await contributionTracker.trackTaskUpdate(taskDoc, {
+            userId: String(req.user?.sub || ""),
+            name: req.user?.name || req.user?.username || "Unknown",
+            email: req.user?.email || "",
+            role: req.user?.role || "employee",
+          }, changes, {
+            isStatusChange: true,
+            description: `Changed task status from "${previousStatus}" to "${status}"`,
+            impact: status === "completed" ? "high" : "medium",
+          });
+          // Track completion separately
+          if (status === "completed") {
+            await contributionTracker.trackTaskCompletion(taskDoc, {
+              userId: String(req.user?.sub || ""),
+              name: req.user?.name || req.user?.username || "Unknown",
+              email: req.user?.email || "",
+              role: req.user?.role || "employee",
+            });
+          }
+        }
+      })(),
     ]).catch(() => {});
 
     return res.json({ item: withId(updated) });
@@ -1313,8 +1527,23 @@ router.get("/:id/attachments/:index/download", requireAuth, async (req, res, nex
       }
     }
 
-    // If attachment has external URL, redirect to it
+    // If attachment has external URL, proxy S3 files with download headers
+    // (a plain redirect lets S3 serve images without Content-Disposition, so
+    // browsers preview PNG/WebP instead of downloading them)
     if (url.startsWith("http://") || url.startsWith("https://")) {
+      const s3Key = extractS3Key(url);
+      if (s3Key) {
+        try {
+          const { stream, contentType, contentLength } = await getFromS3(s3Key);
+          res.setHeader("Content-Type", attachment.mimeType || contentType);
+          res.setHeader("Content-Disposition", `attachment; filename="${attachment.fileName || "download"}"`);
+          if (contentLength) res.setHeader("Content-Length", String(contentLength));
+          return stream.pipe(res);
+        } catch (_) {
+          // S3 fetch failed — fall back to redirect
+          return res.redirect(url);
+        }
+      }
       return res.redirect(url);
     }
 

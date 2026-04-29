@@ -30,6 +30,7 @@ const TimeEntrySchema = new mongoose.Schema(
     totalHours: { type: Number, default: 0 },
     status: { type: String, enum: ["complete", "incomplete", "overtime"], default: "complete" },
     location: { type: String, default: "" },
+    scrum: { type: String, default: "" },
   },
   { timestamps: true }
 );

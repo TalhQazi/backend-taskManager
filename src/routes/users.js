@@ -59,17 +59,21 @@ router.get("/all", requireAuth, async (_req, res, next) => {
     // Get all employees to merge with users
     const employees = await Employee.find().sort({ name: 1 }).lean();
     
+    // Filter users and employees to only include active ones
+    const activeUsers = users.filter(u => (u.status || 'active') === 'active');
+    const activeEmployees = employees.filter(e => (e.status || 'active') === 'active');
+    
     // Fetch settings for avatar data
-    const userIds = users.map(u => String(u._id));
+    const userIds = activeUsers.map(u => String(u._id));
     const settings = await Settings.find({ userId: { $in: userIds } }).lean();
     const settingsMap = new Map(settings.map(s => [String(s.userId), s]));
     
     // Create a map of existing user emails to avoid duplicates
-    const existingEmails = new Set(users.map(u => String(u.email || '').toLowerCase()));
-    const existingUsernames = new Set(users.map(u => String(u.username || '').toLowerCase()));
+    const existingEmails = new Set(activeUsers.map(u => String(u.email || '').toLowerCase()));
+    const existingUsernames = new Set(activeUsers.map(u => String(u.username || '').toLowerCase()));
     
     // Convert employees to user format and add to list if not already present
-    const employeeUsers = employees
+    const employeeUsers = activeEmployees
       .filter(e => {
         const email = String(e.email || '').toLowerCase();
         const name = String(e.name || '').toLowerCase();
@@ -86,7 +90,7 @@ router.get("/all", requireAuth, async (_req, res, next) => {
       }));
     
     // Format users
-    const formattedUsers = users.map(u => {
+    const formattedUsers = activeUsers.map(u => {
       const userSettings = settingsMap.get(String(u._id));
       const avatarUrl = userSettings?.avatarDataUrl || userSettings?.avatarUrl || '';
       return {
@@ -253,6 +257,39 @@ router.post("/:id/archive", requireAuth, requireRole(["super-admin", "admin"]), 
     }
 
     const Archive = require("../models/Archive");
+    const Project = require("../models/Project");
+    const Task = require("../models/Task");
+
+    // Get potential identifier strings for the user in assignees arrays
+    const identifiers = [
+      user.name,
+      user.email,
+      user.username,
+      `${user.name}`.trim(),
+    ].filter(Boolean);
+
+    const { cacheDel } = require("../lib/cache");
+
+    // Remove user from all projects and capture their IDs to clear cache
+    const affectedProjects = await Project.find({ assignees: { $in: identifiers } }).select("_id").lean();
+    const projectIds = affectedProjects.map(p => String(p._id));
+
+    await Project.updateMany(
+      { assignees: { $in: identifiers } },
+      { $pull: { assignees: { $in: identifiers } } }
+    );
+
+    // Remove user from all tasks
+    await Task.updateMany(
+      { assignees: { $in: identifiers } },
+      { $pull: { assignees: { $in: identifiers } } }
+    );
+
+    // Clear caches to reflect changes immediately
+    await cacheDel("tasks:list:*");
+    for (const pid of projectIds) {
+      await cacheDel(`project:${pid}`);
+    }
 
     await Archive.create({
       itemType: "user",

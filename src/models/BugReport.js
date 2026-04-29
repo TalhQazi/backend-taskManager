@@ -10,12 +10,14 @@ const BugReportSchema = new mongoose.Schema(
       panel: { type: String, default: "" },
       path: { type: String, default: "" },
     },
-    attachment: {
-      fileName: { type: String, default: "" },
-      url: { type: String, default: "" },
-      mimeType: { type: String, default: "" },
-      size: { type: Number, default: 0 },
-    },
+    attachments: [
+      {
+        fileName: { type: String, default: "" },
+        url: { type: String, default: "" },
+        mimeType: { type: String, default: "" },
+        size: { type: Number, default: 0 },
+      },
+    ],
     status: { type: String, enum: ["open", "closed"], default: "open" },
     createdByUserId: { type: String, default: "" },
     createdByUsername: { type: String, default: "" },

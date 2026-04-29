@@ -275,7 +275,15 @@ router.get("/", requireAuth, async (req, res, next) => {
 
     if (searchQ) {
       const searchRegex = new RegExp(escapeRegExp(searchQ), "i");
-      matchStages.push({ $match: { $or: [{ name: searchRegex }, { description: searchRegex }] } });
+      matchStages.push({ 
+        $match: { 
+          $or: [
+            { name: searchRegex }, 
+            { description: searchRegex },
+            { assignees: { $elemMatch: { $regex: searchRegex } } }
+          ] 
+        } 
+      });
     }
 
     const shapeStages = [

@@ -4,13 +4,23 @@ const { requireAuth } = require("../middleware/auth");
 
 const router = express.Router();
 
-// Get header settings (public - no auth required for viewing)
-router.get("/", async (_req, res, next) => {
+// Helper function to get user ID from request
+const getUserId = (req) => {
+  return req.user?.sub || req.user?.id || req.user?._id || req.user?.userId;
+};
+
+// Get header settings for the current user
+router.get("/", requireAuth, async (req, res, next) => {
   try {
-    let settings = await HeaderSettings.findOne().lean();
+    const userId = getUserId(req);
+    if (!userId) {
+      return res.status(401).json({ error: { message: "User not authenticated" } });
+    }
+
+    let settings = await HeaderSettings.findOne({ userId }).lean();
     if (!settings) {
       // Create default settings if none exist
-      settings = await HeaderSettings.create({});
+      settings = await HeaderSettings.create({ userId });
     }
     res.json({ item: settings });
   } catch (err) {
@@ -18,12 +28,12 @@ router.get("/", async (_req, res, next) => {
   }
 });
 
-// Update header settings (requires admin/super-admin)
+// Update header settings (requires authenticated user)
 router.put("/", requireAuth, async (req, res, next) => {
   try {
-    const role = String(req.user?.role || "").toLowerCase();
-    if (role !== "admin" && role !== "super-admin") {
-      return res.status(403).json({ error: { message: "Forbidden: Admin access required" } });
+    const userId = getUserId(req);
+    if (!userId) {
+      return res.status(401).json({ error: { message: "User not authenticated" } });
     }
 
     const updateData = req.body;
@@ -72,7 +82,7 @@ router.put("/", requireAuth, async (req, res, next) => {
     }
 
     const settings = await HeaderSettings.findOneAndUpdate(
-      {},
+      { userId },
       { $set },
       { new: true, upsert: true, setDefaultsOnInsert: true }
     ).lean();
@@ -83,16 +93,16 @@ router.put("/", requireAuth, async (req, res, next) => {
   }
 });
 
-// Reset to defaults
+// Reset to defaults for the current user
 router.post("/reset", requireAuth, async (req, res, next) => {
   try {
-    const role = String(req.user?.role || "").toLowerCase();
-    if (role !== "admin" && role !== "super-admin") {
-      return res.status(403).json({ error: { message: "Forbidden: Admin access required" } });
+    const userId = getUserId(req);
+    if (!userId) {
+      return res.status(401).json({ error: { message: "User not authenticated" } });
     }
 
-    await HeaderSettings.deleteMany({});
-    const settings = await HeaderSettings.create({});
+    await HeaderSettings.deleteMany({ userId });
+    const settings = await HeaderSettings.create({ userId });
 
     res.json({ item: settings.toObject(), message: "Reset to defaults" });
   } catch (err) {

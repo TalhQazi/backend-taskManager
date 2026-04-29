@@ -64,10 +64,10 @@ router.get("/summary", requireAuth, async (_req, res, next) => {
       openBugReports
     ] = await Promise.all([
       Task.find().lean(),
-      Employee.countDocuments(),
+      Employee.countDocuments({ status: "active" }),
       TimeEntry.find({ date: { $gte: start, $lte: end } }).lean(),
       Vehicle.countDocuments(),
-      Patent.countDocuments(),
+      Patent.countDocuments({ patentType: "filed" }),
       Website.countDocuments(),
       Project.countDocuments(),
       require("../models/BugReport").countDocuments({ status: "open" })
