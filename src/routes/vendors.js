@@ -2,7 +2,7 @@ const express = require("express");
 const { z } = require("zod");
 const Vendor = require("../models/Vendor");
 const { createNotification } = require("../utils/notifications");
-const { requireAuth } = require("../middleware/auth");
+const { requireAuth, requireSuperAdmin, requireAdmin, requireManager } = require("../middleware/auth");
 
 const router = express.Router();
 

@@ -12,7 +12,7 @@ const ActivityLog = require("../models/ActivityLog");
 const Settings = require("../models/Settings");
 const EODReport = require("../models/EODReport");
 const { createNotification } = require("../utils/notifications");
-const { requireAuth, requireRole } = require("../middleware/auth");
+const { requireAuth, requireRole, requireSuperAdmin, requireAdmin, requireManager } = require("../middleware/auth");
 const { parsePagination, paginatedResponse } = require("../lib/pagination");
 const { cacheWrap, cacheDel } = require("../lib/cache");
 
@@ -416,7 +416,7 @@ async function logActivity(req, action, resourceType, resourceId, resourceName, 
   }
 }
 
-router.get("/", requireAuth, requireRole(["super-admin", "admin", "manager"]), async (_req, res, next) => {
+router.get("/", requireAuth, requireManager, async (_req, res, next) => {
   try {
     const result = await cacheWrap('employees:list', async () => {
       const items = await Employee.find().sort({ name: 1 }).lean();
@@ -468,7 +468,7 @@ router.get("/", requireAuth, requireRole(["super-admin", "admin", "manager"]), a
   }
 });
 
-router.post("/", requireAuth, requireRole(["super-admin", "admin", "manager"]), async (req, res, next) => {
+router.post("/", requireAuth, requireManager, async (req, res, next) => {
   try {
     const parsed = createSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -536,7 +536,7 @@ router.post("/", requireAuth, requireRole(["super-admin", "admin", "manager"]), 
   }
 });
 
-router.put("/:id", requireAuth, requireRole(["super-admin", "admin", "manager"]), async (req, res, next) => {
+router.put("/:id", requireAuth, requireManager, async (req, res, next) => {
   try {
     const parsed = updateSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -696,7 +696,7 @@ async function archiveEmployeeById(employeeId, archivedBy) {
   return employee;
 }
 
-router.delete("/:id", requireAuth, requireRole(["super-admin", "admin"]), async (req, res, next) => {
+router.delete("/:id", requireAuth, requireAdmin, async (req, res, next) => {
   try {
     const deleted = await archiveEmployeeById(req.params.id, req.user);
     if (!deleted) {
@@ -724,7 +724,7 @@ router.delete("/:id", requireAuth, requireRole(["super-admin", "admin"]), async 
 });
 
 // Super Admin: Reset Employee Password
-router.post("/:id/reset-password", requireAuth, requireRole(["super-admin"]), async (req, res, next) => {
+router.post("/:id/reset-password", requireAuth, requireSuperAdmin, async (req, res, next) => {
   try {
     const resetSchema = z.object({
       newPassword: z.string().min(6, "Password must be at least 6 characters"),

@@ -2,7 +2,7 @@ const express = require("express");
 const Onboarding = require("../models/Onboarding");
 const Employee = require("../models/Employee");
 const User = require("../models/User");
-const { requireAuth, requireRole } = require("../middleware/auth");
+const { requireAuth, requireRole, requireSuperAdmin, requireAdmin, requireManager } = require("../middleware/auth");
 const { createNotification } = require("../utils/notifications");
 
 const router = express.Router();

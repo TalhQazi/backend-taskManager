@@ -8,7 +8,7 @@ const { z } = require("zod");
 
 const User = require("../models/User");
 const RefreshToken = require("../models/RefreshToken");
-const { requireAuth } = require("../middleware/auth");
+const { requireAuth, requireSuperAdmin, requireAdmin, requireManager } = require("../middleware/auth");
 const { logLoginSuccess, logLoginFailure } = require("../middleware/auditLog");
 const ActivityLog = require("../models/ActivityLog");
 

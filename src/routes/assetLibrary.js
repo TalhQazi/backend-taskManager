@@ -4,7 +4,7 @@ const { z } = require("zod");
 const multer = require("multer");
 const path = require("path");
 
-const { requireAuth, requireRole } = require("../middleware/auth");
+const { requireAuth, requireRole, requireSuperAdmin, requireAdmin, requireManager } = require("../middleware/auth");
 const { uploadToS3, extractS3Key } = require("../lib/s3");
 const { parsePagination, paginatedResponse } = require("../lib/pagination");
 const AssetLibraryFolder = require("../models/AssetLibraryFolder");
@@ -114,7 +114,7 @@ router.get("/stats", requireAuth, async (_req, res, next) => {
   }
 });
 
-router.post("/folders", requireAuth, requireRole(["super-admin", "admin"]), async (req, res, next) => {
+router.post("/folders", requireAuth, requireAdmin, async (req, res, next) => {
   try {
     const parsed = folderCreateSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: { message: "Invalid payload" } });
@@ -144,7 +144,7 @@ router.post("/folders", requireAuth, requireRole(["super-admin", "admin"]), asyn
   }
 });
 
-router.patch("/folders/:id", requireAuth, requireRole(["super-admin", "admin"]), async (req, res, next) => {
+router.patch("/folders/:id", requireAuth, requireAdmin, async (req, res, next) => {
   try {
     const folderId = toObjectIdOrNull(req.params.id);
     if (!folderId) return res.status(400).json({ error: { message: "Invalid folder id" } });
@@ -176,7 +176,7 @@ router.patch("/folders/:id", requireAuth, requireRole(["super-admin", "admin"]),
   }
 });
 
-router.delete("/folders/:id", requireAuth, requireRole(["super-admin", "admin"]), async (req, res, next) => {
+router.delete("/folders/:id", requireAuth, requireAdmin, async (req, res, next) => {
   try {
     const folderId = toObjectIdOrNull(req.params.id);
     if (!folderId) return res.status(400).json({ error: { message: "Invalid folder id" } });
@@ -250,7 +250,7 @@ router.get("/assets", requireAuth, async (req, res, next) => {
   }
 });
 
-router.patch("/assets/:id", requireAuth, requireRole(["super-admin", "admin"]), async (req, res, next) => {
+router.patch("/assets/:id", requireAuth, requireAdmin, async (req, res, next) => {
   try {
     const assetId = toObjectIdOrNull(req.params.id);
     if (!assetId) return res.status(400).json({ error: { message: "Invalid asset id" } });
@@ -285,7 +285,7 @@ router.patch("/assets/:id", requireAuth, requireRole(["super-admin", "admin"]), 
   }
 });
 
-router.delete("/assets/:id", requireAuth, requireRole(["super-admin", "admin"]), async (req, res, next) => {
+router.delete("/assets/:id", requireAuth, requireAdmin, async (req, res, next) => {
   try {
     const assetId = toObjectIdOrNull(req.params.id);
     if (!assetId) return res.status(400).json({ error: { message: "Invalid asset id" } });
@@ -307,7 +307,7 @@ router.delete("/assets/:id", requireAuth, requireRole(["super-admin", "admin"]),
 router.post(
   "/assets/upload",
   requireAuth,
-  requireRole(["super-admin", "admin"]),
+  requireAdmin,
   upload.array("files", 20),
   async (req, res, next) => {
     try {

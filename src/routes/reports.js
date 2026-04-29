@@ -2,7 +2,7 @@ const express = require("express");
 
 const Task = require("../models/Task");
 const TimeEntry = require("../models/TimeEntry");
-const { requireAuth } = require("../middleware/auth");
+const { requireAuth, requireSuperAdmin, requireAdmin, requireManager } = require("../middleware/auth");
 
 const router = express.Router();
 

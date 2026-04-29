@@ -1,6 +1,6 @@
 const express = require("express");
 const ActivityLog = require("../models/ActivityLog");
-const { requireAuth, requireRole } = require("../middleware/auth");
+const { requireAuth, requireRole, requireSuperAdmin, requireAdmin, requireManager } = require("../middleware/auth");
 const { parsePagination, paginatedResponse } = require("../lib/pagination");
 const { cacheWrap } = require("../lib/cache");
 
@@ -21,7 +21,7 @@ const LOG_LIST_PROJECTION = {
 };
 
 // GET /api/activity-logs - Get all activity logs
-router.get("/", requireAuth, requireRole(["super-admin", "admin"]), async (req, res, next) => {
+router.get("/", requireAuth, requireAdmin, async (req, res, next) => {
   try {
     const {
       userId,
@@ -96,7 +96,7 @@ router.get("/", requireAuth, requireRole(["super-admin", "admin"]), async (req, 
 });
 
 // GET /api/activity-logs/actions - Get all unique actions (for filtering)
-router.get("/actions", requireAuth, requireRole(["super-admin", "admin"]), async (_req, res, next) => {
+router.get("/actions", requireAuth, requireAdmin, async (_req, res, next) => {
   try {
     const actions = await cacheWrap('activity-logs:actions', () => ActivityLog.distinct("action"), 300);
     res.json({ actions });
@@ -106,7 +106,7 @@ router.get("/actions", requireAuth, requireRole(["super-admin", "admin"]), async
 });
 
 // GET /api/activity-logs/resource-types - Get all unique resource types (for filtering)
-router.get("/resource-types", requireAuth, requireRole(["super-admin", "admin"]), async (_req, res, next) => {
+router.get("/resource-types", requireAuth, requireAdmin, async (_req, res, next) => {
   try {
     const resourceTypes = await cacheWrap('activity-logs:resource-types', () => ActivityLog.distinct("resourceType"), 300);
     res.json({ resourceTypes });
@@ -116,7 +116,7 @@ router.get("/resource-types", requireAuth, requireRole(["super-admin", "admin"])
 });
 
 // GET /api/activity-logs/summary - Get activity summary/stats
-router.get("/summary", requireAuth, requireRole(["super-admin", "admin"]), async (req, res, next) => {
+router.get("/summary", requireAuth, requireAdmin, async (req, res, next) => {
   try {
     const { from, to } = req.query;
     const cacheKey = `activity-logs:summary:${from || 'f'}:${to || 't'}`;

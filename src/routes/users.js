@@ -6,7 +6,7 @@ const User = require("../models/User");
 const Employee = require("../models/Employee");
 const Settings = require("../models/Settings");
 const { createNotification } = require("../utils/notifications");
-const { requireAuth, requireRole } = require("../middleware/auth"); 
+const { requireAuth, requireRole, requireSuperAdmin, requireAdmin, requireManager } = require("../middleware/auth"); 
 
 const router = express.Router();
 
@@ -113,7 +113,7 @@ router.get("/all", requireAuth, async (_req, res, next) => {
   }
 });
 
-router.get("/", requireAuth, requireRole(["super-admin", "admin", "manager"]), async (_req, res, next) => {
+router.get("/", requireAuth, requireManager, async (_req, res, next) => {
   try {
     const items = await User.find().sort({ createdAt: -1 }).lean();
     
@@ -135,7 +135,7 @@ router.get("/", requireAuth, requireRole(["super-admin", "admin", "manager"]), a
   }
 });
 
-router.post("/", requireAuth, requireRole(["super-admin", "admin"]), async (req, res, next) => {
+router.post("/", requireAuth, requireAdmin, async (req, res, next) => {
   try {
     const parsed = createSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -178,7 +178,7 @@ router.post("/", requireAuth, requireRole(["super-admin", "admin"]), async (req,
   }
 });
 
-router.put("/:id", requireAuth, requireRole(["super-admin", "admin"]), async (req, res, next) => {
+router.put("/:id", requireAuth, requireAdmin, async (req, res, next) => {
   try {
     const parsed = updateSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -222,7 +222,7 @@ router.put("/:id", requireAuth, requireRole(["super-admin", "admin"]), async (re
   }
 });
 
-router.delete("/:id", requireAuth, requireRole(["super-admin", "admin"]), async (req, res, next) => {
+router.delete("/:id", requireAuth, requireAdmin, async (req, res, next) => {
   try {
     const deleted = await User.findByIdAndDelete(req.params.id).lean();
     if (!deleted) {
@@ -246,7 +246,7 @@ router.delete("/:id", requireAuth, requireRole(["super-admin", "admin"]), async 
 });
 
 //Archive user instead of deleting permanently, only accessible by super-admin and admin
-router.post("/:id/archive", requireAuth, requireRole(["super-admin", "admin"]), async (req, res, next) => {
+router.post("/:id/archive", requireAuth, requireAdmin, async (req, res, next) => {
   try {
    const user = await User.findById(req.params.id)
   .select("+passwordHash") 
@@ -330,7 +330,7 @@ router.post("/:id/archive", requireAuth, requireRole(["super-admin", "admin"]), 
 });
 
 // Super-admin only: Reset any user's password
-router.post("/:id/reset-password", requireAuth, requireRole(["super-admin"]), async (req, res, next) => {
+router.post("/:id/reset-password", requireAuth, requireSuperAdmin, async (req, res, next) => {
   try {
     const parsed = resetPasswordSchema.safeParse(req.body);
     if (!parsed.success) {

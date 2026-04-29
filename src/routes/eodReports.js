@@ -4,7 +4,7 @@ const EODReport = require("../models/EODReport");
 const TimeEntry = require("../models/TimeEntry");
 const Employee = require("../models/Employee");
 const User = require("../models/User");
-const { requireAuth, requireRole } = require("../middleware/auth");
+const { requireAuth, requireRole, requireSuperAdmin, requireAdmin, requireManager } = require("../middleware/auth");
 const { cacheWrap, cacheDel } = require("../lib/cache");
 
 const router = express.Router();
@@ -26,7 +26,7 @@ function getDayRange(date) {
 // ==================== MANAGER ENDPOINTS ====================
 
 // GET /api/manager/eod-status - Get EOD status for all employees
-router.get("/eod-status", requireAuth, requireRole(["manager", "admin", "super-admin"]), async (req, res, next) => {
+router.get("/eod-status", requireAuth, requireManager, async (req, res, next) => {
   try {
     const { date } = req.query;
     const targetDate = date ? new Date(date) : new Date();
@@ -136,7 +136,7 @@ router.get("/eod-status", requireAuth, requireRole(["manager", "admin", "super-a
 });
 
 // GET /api/manager/eod-reports - Get EOD reports with filters
-router.get("/eod-reports", requireAuth, requireRole(["manager", "admin", "super-admin"]), async (req, res, next) => {
+router.get("/eod-reports", requireAuth, requireManager, async (req, res, next) => {
   try {
     const { date, employeeId, status, page = 1, limit = 50 } = req.query;
     const skip = (Number(page) - 1) * Number(limit);

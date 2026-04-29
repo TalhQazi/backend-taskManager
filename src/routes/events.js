@@ -3,7 +3,7 @@ const { z } = require("zod");
 
 const Event = require("../models/Event");
 const { createNotification } = require("../utils/notifications");
-const { requireAuth } = require("../middleware/auth");
+const { requireAuth, requireSuperAdmin, requireAdmin, requireManager } = require("../middleware/auth");
 const { checkAndFlagOffTheClock } = require("../lib/offTheClockWork");
 const { cacheWrap, cacheDel } = require("../lib/cache");
 

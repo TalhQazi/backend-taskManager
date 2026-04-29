@@ -7,7 +7,7 @@ const TimeEditAuditLog = require("../models/TimeEditAuditLog");
 const ViolationNotification = require("../models/ViolationNotification");
 const OvertimeTracker = require("../models/OvertimeTracker");
 const { createNotification } = require("../utils/notifications");
-const { requireAuth, requireRole } = require("../middleware/auth");
+const { requireAuth, requireRole, requireSuperAdmin, requireAdmin, requireManager } = require("../middleware/auth");
 
 const router = express.Router();
 
@@ -16,7 +16,7 @@ function withId(doc) {
   return { ...doc, id: String(doc._id) };
 }
 
-router.get("/flags", requireAuth, requireRole(["super-admin", "admin", "manager"]), async (req, res, next) => {
+router.get("/flags", requireAuth, requireManager, async (req, res, next) => {
   try {
     const status = String(req.query.status || "open");
     const employee = String(req.query.employee || "").trim();
@@ -32,7 +32,7 @@ router.get("/flags", requireAuth, requireRole(["super-admin", "admin", "manager"
   }
 });
 
-router.post("/flags/:id/resolve", requireAuth, requireRole(["super-admin", "admin", "manager"]), async (req, res, next) => {
+router.post("/flags/:id/resolve", requireAuth, requireManager, async (req, res, next) => {
   try {
     const id = String(req.params.id || "");
     const updated = await ComplianceFlag.findByIdAndUpdate(
@@ -63,7 +63,7 @@ router.post("/flags/:id/resolve", requireAuth, requireRole(["super-admin", "admi
   }
 });
 
-router.get("/overtime", requireAuth, requireRole(["super-admin", "admin", "manager"]), async (req, res, next) => {
+router.get("/overtime", requireAuth, requireManager, async (req, res, next) => {
   try {
     const employee = String(req.query.employee || "").trim();
     const q = employee ? { employee } : {};
@@ -74,7 +74,7 @@ router.get("/overtime", requireAuth, requireRole(["super-admin", "admin", "manag
   }
 });
 
-router.get("/audit-logs", requireAuth, requireRole(["super-admin", "admin", "manager"]), async (req, res, next) => {
+router.get("/audit-logs", requireAuth, requireManager, async (req, res, next) => {
   try {
     const timeEntryId = String(req.query.timeEntryId || "").trim();
     const q = timeEntryId ? { timeEntryId } : {};
@@ -85,7 +85,7 @@ router.get("/audit-logs", requireAuth, requireRole(["super-admin", "admin", "man
   }
 });
 
-router.get("/notifications", requireAuth, requireRole(["super-admin", "admin", "manager"]), async (req, res, next) => {
+router.get("/notifications", requireAuth, requireManager, async (req, res, next) => {
   try {
     const employee = String(req.query.employee || "").trim();
     const q = employee ? { employee } : {};
@@ -96,7 +96,7 @@ router.get("/notifications", requireAuth, requireRole(["super-admin", "admin", "
   }
 });
 
-router.get("/state-rules", requireAuth, requireRole(["super-admin", "admin", "manager"]), async (_req, res, next) => {
+router.get("/state-rules", requireAuth, requireManager, async (_req, res, next) => {
   try {
     const items = await StateLaborRule.find().sort({ stateCode: 1 }).lean();
     res.json({ items: items.map(withId) });
@@ -105,7 +105,7 @@ router.get("/state-rules", requireAuth, requireRole(["super-admin", "admin", "ma
   }
 });
 
-router.put("/state-rules/:stateCode", requireAuth, requireRole(["super-admin", "admin"]), async (req, res, next) => {
+router.put("/state-rules/:stateCode", requireAuth, requireAdmin, async (req, res, next) => {
   try {
     const stateCode = String(req.params.stateCode || "").trim().toUpperCase();
     const schema = z.object({
@@ -130,7 +130,7 @@ router.put("/state-rules/:stateCode", requireAuth, requireRole(["super-admin", "
   }
 });
 
-router.get("/export.csv", requireAuth, requireRole(["super-admin", "admin"]), async (_req, res, next) => {
+router.get("/export.csv", requireAuth, requireAdmin, async (_req, res, next) => {
   try {
     const openFlags = await ComplianceFlag.find({ status: "open" }).sort({ detectedAt: -1 }).lean();
 
@@ -159,7 +159,7 @@ router.get("/export.csv", requireAuth, requireRole(["super-admin", "admin"]), as
   }
 });
 
-router.post("/payroll/export", requireAuth, requireRole(["super-admin", "admin"]), async (_req, res, next) => {
+router.post("/payroll/export", requireAuth, requireAdmin, async (_req, res, next) => {
   try {
     const openCount = await ComplianceFlag.countDocuments({ status: "open", severity: "violation" });
     if (openCount > 0) {

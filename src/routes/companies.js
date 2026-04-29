@@ -3,7 +3,7 @@ const { z } = require("zod");
 
 const Company = require("../models/Company");
 const { createNotification } = require("../utils/notifications");
-const { requireAuth, requireRole } = require("../middleware/auth");
+const { requireAuth, requireRole, requireSuperAdmin, requireAdmin, requireManager } = require("../middleware/auth");
 
 const router = express.Router();
 
@@ -108,7 +108,7 @@ router.get("/:id", requireAuth, async (req, res, next) => {
 });
 
 // Create company (super-admin or admin)
-router.post("/", requireAuth, requireRole(["super-admin", "admin"]), async (req, res, next) => {
+router.post("/", requireAuth, requireAdmin, async (req, res, next) => {
   try {
     const parsed = createSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -151,7 +151,7 @@ router.post("/", requireAuth, requireRole(["super-admin", "admin"]), async (req,
 });
 
 // Update company (super-admin or admin)
-router.put("/:id", requireAuth, requireRole(["super-admin", "admin"]), async (req, res, next) => {
+router.put("/:id", requireAuth, requireAdmin, async (req, res, next) => {
   try {
     const parsed = updateSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -197,7 +197,7 @@ router.put("/:id", requireAuth, requireRole(["super-admin", "admin"]), async (re
 });
 
 // Delete company (super-admin or admin)
-router.delete("/:id", requireAuth, requireRole(["super-admin", "admin"]), async (req, res, next) => {
+router.delete("/:id", requireAuth, requireAdmin, async (req, res, next) => {
   try {
     const deleted = await Company.findByIdAndDelete(req.params.id).lean();
     if (!deleted) {

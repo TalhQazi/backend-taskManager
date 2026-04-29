@@ -5,7 +5,7 @@ const axios = require("axios");
 const Location = require("../models/Location");
 const ActivityLog = require("../models/ActivityLog");
 const { createNotification } = require("../utils/notifications");
-const { requireAuth, requireRole } = require("../middleware/auth");
+const { requireAuth, requireRole, requireSuperAdmin, requireAdmin, requireManager } = require("../middleware/auth");
 const { cacheWrap, cacheDel } = require("../lib/cache");
 
 const router = express.Router();
@@ -85,7 +85,7 @@ router.get("/", requireAuth, requireRole(["super-admin", "admin", "manager", "em
   }
 });
 
-router.post("/", requireAuth, requireRole(["super-admin", "admin"]), async (req, res, next) => {
+router.post("/", requireAuth, requireAdmin, async (req, res, next) => {
   try {
     const adminParsed = adminUiSchema.safeParse(req.body);
     if (adminParsed.success) {
@@ -220,7 +220,7 @@ router.get("/:id/render-photo", async (req, res) => {
   }
 });
 
-router.put("/:id", requireAuth, requireRole(["super-admin", "admin"]), async (req, res, next) => {
+router.put("/:id", requireAuth, requireAdmin, async (req, res, next) => {
   try {
     const adminParsed = adminUiSchema.partial().safeParse(req.body);
     if (adminParsed.success) {
@@ -308,7 +308,7 @@ router.put("/:id", requireAuth, requireRole(["super-admin", "admin"]), async (re
   }
 });
 
-router.delete("/:id", requireAuth, requireRole(["super-admin", "admin"]), async (req, res, next) => {
+router.delete("/:id", requireAuth, requireAdmin, async (req, res, next) => {
   try {
     const deleted = await Location.findByIdAndDelete(req.params.id).lean();
     if (!deleted) return res.status(404).json({ error: { message: "Location not found" } });

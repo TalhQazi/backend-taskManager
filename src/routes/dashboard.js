@@ -7,7 +7,7 @@ const Vehicle = require("../models/Vehicle");
 const Patent = require("../models/Patent");
 const Website = require("../models/Website");
 const Project = require("../models/Project");
-const { requireAuth } = require("../middleware/auth");
+const { requireAuth, requireSuperAdmin, requireAdmin, requireManager } = require("../middleware/auth");
 
 const router = express.Router();
 

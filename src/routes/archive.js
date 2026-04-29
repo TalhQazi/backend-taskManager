@@ -1,6 +1,6 @@
 const express = require("express");
 const Archive = require("../models/Archive");
-const { requireAuth } = require("../middleware/auth");
+const { requireAuth, requireSuperAdmin, requireAdmin, requireManager } = require("../middleware/auth");
 const { parsePagination, paginatedResponse } = require("../lib/pagination");
 
 const router = express.Router();

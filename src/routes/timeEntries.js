@@ -6,7 +6,7 @@ const Employee = require("../models/Employee");
 const User = require("../models/User");
 const TimeEditAuditLog = require("../models/TimeEditAuditLog");
 const { createNotification } = require("../utils/notifications");
-const { requireAuth, requireRole } = require("../middleware/auth");
+const { requireAuth, requireRole, requireSuperAdmin, requireAdmin, requireManager } = require("../middleware/auth");
 const {
   evaluateMealBreakCompliance,
   evaluateOvertimeCompliance,
@@ -635,7 +635,7 @@ router.delete("/:id", requireAuth, async (req, res, next) => {
 // Admin endpoints for scrum records
 
 // GET /api/time-entries/scrum-records - Get all scrum records for all employees (admin only)
-router.get("/scrum-records", requireAuth, requireRole(["super-admin", "admin"]), async (req, res, next) => {
+router.get("/scrum-records", requireAuth, requireAdmin, async (req, res, next) => {
   try {
     const { from, to, employee, page = 1, limit = 50 } = req.query;
 
@@ -714,7 +714,7 @@ router.get("/scrum-records", requireAuth, requireRole(["super-admin", "admin"]),
 });
 
 // GET /api/time-entries/scrum-records/:employeeName - Get scrum records for a specific employee (admin only)
-router.get("/scrum-records/:employeeName", requireAuth, requireRole(["super-admin", "admin"]), async (req, res, next) => {
+router.get("/scrum-records/:employeeName", requireAuth, requireAdmin, async (req, res, next) => {
   try {
     const { employeeName } = req.params;
     const { from, to, page = 1, limit = 50 } = req.query;

@@ -1,7 +1,7 @@
 const express = require("express");
 const router = express.Router();
 const mongoose = require("mongoose");
-const { requireAuth, requireRole } = require("../middleware/auth");
+const { requireAuth, requireRole, requireSuperAdmin, requireAdmin, requireManager } = require("../middleware/auth");
 const Contributor = require("../models/Contributor");
 const Contribution = require("../models/Contribution");
 const Task = require("../models/Task");
@@ -10,7 +10,7 @@ const User = require("../models/User");
 const contributionTracker = require("../utils/contributionTracker");
 
 // Get all contributors (Admin/Manager only)
-router.get("/", requireAuth, requireRole(["admin", "super-admin", "manager"]), async (req, res) => {
+router.get("/", requireAuth, requireManager, async (req, res) => {
   try {
     const { search, role, projectId, limit = 20, page = 1 } = req.query;
 
@@ -344,7 +344,7 @@ router.get("/search/:term", requireAuth, async (req, res) => {
 });
 
 // Get contribution dashboard stats (Admin only)
-router.get("/stats/dashboard", requireAuth, requireRole(["admin", "super-admin"]), async (req, res) => {
+router.get("/stats/dashboard", requireAuth, requireAdmin, async (req, res) => {
   try {
     const { from, to } = req.query;
 

@@ -3,7 +3,7 @@ const { z } = require("zod");
 
 const DoNotHire = require("../models/DoNotHire");
 const { createNotification } = require("../utils/notifications");
-const { requireAuth } = require("../middleware/auth");
+const { requireAuth, requireSuperAdmin, requireAdmin, requireManager } = require("../middleware/auth");
 const { cacheWrap, cacheDel } = require("../lib/cache");
 
 const router = express.Router();

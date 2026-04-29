@@ -46,13 +46,21 @@ const ActivityLogSchema = new mongoose.Schema(
         "EVENT_DELETE",
         "ONBOARDING_CREATE",
         "ONBOARDING_UPDATE",
+        "PROJECT_CREATE",
+        "PROJECT_UPDATE",
+        "PROJECT_DELETE",
+        "PROJECT_ARCHIVE",
+        "PROJECT_REASSIGN",
+        "COMPANY_CREATE",
+        "COMPANY_UPDATE",
+        "COMPANY_DELETE",
         "OTHER"
       ]
     },
     resourceType: { 
       type: String, 
       required: true,
-      enum: ["user", "task", "employee", "time-entry", "notification", "message", "settings", "system", "auth", "appliance", "vehicle", "location", "vendor", "event", "onboarding"]
+      enum: ["user", "task", "employee", "time-entry", "notification", "message", "settings", "system", "auth", "appliance", "vehicle", "location", "vendor", "event", "onboarding", "project", "company"]
     },
     resourceId: { type: String, default: "" },
     resourceName: { type: String, default: "" },

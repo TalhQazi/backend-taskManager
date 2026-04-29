@@ -1,6 +1,6 @@
 const express = require("express");
 const HeaderSettings = require("../models/HeaderSettings");
-const { requireAuth } = require("../middleware/auth");
+const { requireAuth, requireSuperAdmin, requireAdmin, requireManager } = require("../middleware/auth");
 
 const router = express.Router();
 

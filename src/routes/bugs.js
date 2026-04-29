@@ -2,7 +2,7 @@ const express = require("express");
 
 const BugReport = require("../models/BugReport");
 const Task = require("../models/Task");
-const { requireAuth } = require("../middleware/auth");
+const { requireAuth, requireSuperAdmin, requireAdmin, requireManager } = require("../middleware/auth");
 const { createNotification } = require("../utils/notifications");
 
 const router = express.Router();

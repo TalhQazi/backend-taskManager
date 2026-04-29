@@ -1,7 +1,7 @@
 const express = require("express");
 const { z } = require("zod");
 
-const { requireAuth, requireRole } = require("../middleware/auth");
+const { requireAuth, requireRole, requireSuperAdmin, requireAdmin, requireManager } = require("../middleware/auth");
 const { importAsanaData } = require("../lib/asanaImportService");
 const { createAsanaClient } = require("../lib/asanaClient");
 const AsanaWorkspace = require("../models/AsanaWorkspace");
@@ -36,7 +36,7 @@ const testSchema = z.object({
   clientSecret: z.string().optional(),
 });
 
-router.post("/start", requireAuth, requireRole(["admin", "super-admin"]), async (req, res, next) => {
+router.post("/start", requireAuth, requireAdmin, async (req, res, next) => {
   try {
     const parsed = startSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -141,7 +141,7 @@ router.post("/start", requireAuth, requireRole(["admin", "super-admin"]), async 
   }
 });
 
-router.get("/status/:jobId", requireAuth, requireRole(["admin", "super-admin"]), async (req, res) => {
+router.get("/status/:jobId", requireAuth, requireAdmin, async (req, res) => {
   const jobId = String(req.params.jobId || "").trim();
 
   // Look up the job from MongoDB instead of in-memory Map
@@ -164,7 +164,7 @@ router.get("/status/:jobId", requireAuth, requireRole(["admin", "super-admin"]),
   });
 });
 
-router.post("/test", requireAuth, requireRole(["admin", "super-admin"]), async (req, res) => {
+router.post("/test", requireAuth, requireAdmin, async (req, res) => {
   const parsed = testSchema.safeParse(req.body);
   if (!parsed.success) {
     return res.status(400).json({ error: { message: "Invalid payload" } });
@@ -200,7 +200,7 @@ router.post("/test", requireAuth, requireRole(["admin", "super-admin"]), async (
   }
 });
 
-router.get("/workspaces", requireAuth, requireRole(["admin", "super-admin"]), async (_req, res, next) => {
+router.get("/workspaces", requireAuth, requireAdmin, async (_req, res, next) => {
   try {
     const items = await AsanaWorkspace.find({}).sort({ name: 1 }).lean();
     return res.json({ ok: true, items });
@@ -209,7 +209,7 @@ router.get("/workspaces", requireAuth, requireRole(["admin", "super-admin"]), as
   }
 });
 
-router.get("/projects", requireAuth, requireRole(["admin", "super-admin"]), async (req, res, next) => {
+router.get("/projects", requireAuth, requireAdmin, async (req, res, next) => {
   try {
     const workspaceAsanaId = String(req.query.workspaceAsanaId || "").trim();
     if (!workspaceAsanaId) {
@@ -233,7 +233,7 @@ router.get("/projects", requireAuth, requireRole(["admin", "super-admin"]), asyn
   }
 });
 
-router.get("/tasks", requireAuth, requireRole(["admin", "super-admin"]), async (req, res, next) => {
+router.get("/tasks", requireAuth, requireAdmin, async (req, res, next) => {
   try {
     const projectAsanaId = String(req.query.projectAsanaId || "").trim();
     if (!projectAsanaId) {
@@ -249,7 +249,7 @@ router.get("/tasks", requireAuth, requireRole(["admin", "super-admin"]), async (
   }
 });
 
-router.get("/task/:asanaId", requireAuth, requireRole(["admin", "super-admin"]), async (req, res, next) => {
+router.get("/task/:asanaId", requireAuth, requireAdmin, async (req, res, next) => {
   try {
     const asanaId = String(req.params.asanaId || "").trim();
     const task = await AsanaTask.findOne({ asanaId }).lean();
@@ -263,7 +263,7 @@ router.get("/task/:asanaId", requireAuth, requireRole(["admin", "super-admin"]),
   }
 });
 
-router.get("/task/:asanaId/comments", requireAuth, requireRole(["admin", "super-admin"]), async (req, res, next) => {
+router.get("/task/:asanaId/comments", requireAuth, requireAdmin, async (req, res, next) => {
   try {
     const asanaId = String(req.params.asanaId || "").trim();
     const items = await AsanaComment.find({ taskAsanaId: asanaId }).sort({ createdAtAsana: 1 }).lean();
@@ -287,7 +287,7 @@ router.get("/task/:asanaId/comments", requireAuth, requireRole(["admin", "super-
   }
 });
 
-router.get("/task/:asanaId/attachments", requireAuth, requireRole(["admin", "super-admin"]), async (req, res, next) => {
+router.get("/task/:asanaId/attachments", requireAuth, requireAdmin, async (req, res, next) => {
   try {
     const asanaId = String(req.params.asanaId || "").trim();
     const items = await AsanaAttachment.find({ taskAsanaId: asanaId }).sort({ fileName: 1 }).lean();
@@ -298,7 +298,7 @@ router.get("/task/:asanaId/attachments", requireAuth, requireRole(["admin", "sup
 });
 
 // Get all imported Asana users
-router.get("/users", requireAuth, requireRole(["admin", "super-admin"]), async (_req, res, next) => {
+router.get("/users", requireAuth, requireAdmin, async (_req, res, next) => {
   try {
     const items = await AsanaUser.find({}).sort({ name: 1 }).lean();
     return res.json({ ok: true, items });
@@ -308,7 +308,7 @@ router.get("/users", requireAuth, requireRole(["admin", "super-admin"]), async (
 });
 
 // Transfer Asana Project to Internal Task Manager
-router.post("/transfer-project", requireAuth, requireRole(["admin", "super-admin"]), async (req, res, next) => {
+router.post("/transfer-project", requireAuth, requireAdmin, async (req, res, next) => {
   try {
     const { projectAsanaId } = req.body;
     if (!projectAsanaId) {
@@ -464,7 +464,7 @@ router.post("/transfer-project", requireAuth, requireRole(["admin", "super-admin
 });
 
 // Clear all imported Asana data so user can do a fresh re-import
-router.delete("/clear", requireAuth, requireRole(["admin", "super-admin"]), async (_req, res, next) => {
+router.delete("/clear", requireAuth, requireAdmin, async (_req, res, next) => {
   try {
     const fs = require("fs");
     const path = require("path");

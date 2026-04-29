@@ -4,7 +4,7 @@ const multer = require("multer");
 
 const Message = require("../models/Message");
 const Employee = require("../models/Employee");
-const { requireAuth } = require("../middleware/auth");
+const { requireAuth, requireSuperAdmin, requireAdmin, requireManager } = require("../middleware/auth");
 const { encryptString, decryptString } = require("../lib/encryption");
 const { checkAndFlagOffTheClock } = require("../lib/offTheClockWork");
 const { parsePagination, paginatedResponse } = require("../lib/pagination");

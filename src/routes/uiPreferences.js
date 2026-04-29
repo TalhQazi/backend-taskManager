@@ -1,7 +1,7 @@
 const express = require("express");
 const router = express.Router();
 const UserPreference = require("../models/UserPreference");
-const { requireAuth } = require("../middleware/auth");
+const { requireAuth, requireSuperAdmin, requireAdmin, requireManager } = require("../middleware/auth");
 
 // Helper function to get user ID from request
 const getUserId = (req) => {

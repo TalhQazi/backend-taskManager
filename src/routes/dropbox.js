@@ -6,7 +6,7 @@ const crypto = require("crypto");
 
 const DropboxToken = require("../models/DropboxToken");
 const { encrypt, decrypt, safeDecrypt } = require("../lib/encryption");
-const { requireAuth, requireRole } = require("../middleware/auth");
+const { requireAuth, requireRole, requireSuperAdmin, requireAdmin, requireManager } = require("../middleware/auth");
 
 const router = express.Router();
 

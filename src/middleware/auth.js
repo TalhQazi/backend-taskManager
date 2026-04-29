@@ -1,4 +1,5 @@
 const jwt = require("jsonwebtoken");
+const { ROLE_GROUPS } = require("../constants/roles");
 
 function requireAuth(req, res, next) {
   let token = req.cookies?.accessToken;
@@ -42,4 +43,14 @@ function requireRole(roles) {
   };
 }
 
-module.exports = { requireAuth, requireRole };
+const requireSuperAdmin = requireRole(ROLE_GROUPS.SUPER_ADMIN_ONLY);
+const requireAdmin = requireRole(ROLE_GROUPS.ADMIN_ONLY);
+const requireManager = requireRole(ROLE_GROUPS.ALL_MANAGEMENT);
+
+module.exports = { 
+  requireAuth, 
+  requireRole,
+  requireSuperAdmin,
+  requireAdmin,
+  requireManager
+};

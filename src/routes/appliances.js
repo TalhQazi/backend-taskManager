@@ -9,7 +9,7 @@ const AssetSequence = require("../models/AssetSequence");
 const Vehicle = require("../models/Vehicle");
 const ActivityLog = require("../models/ActivityLog");
 const { createNotification } = require("../utils/notifications");
-const { requireAuth, requireRole } = require("../middleware/auth");
+const { requireAuth, requireRole, requireSuperAdmin, requireAdmin, requireManager } = require("../middleware/auth");
 const { cacheWrap, cacheDel } = require("../lib/cache");
 
 const router = express.Router();
@@ -145,7 +145,7 @@ router.get("/", requireAuth, async (_req, res, next) => {
 });
 
 // Backfill missing frontendId (admin-only)
-router.post("/backfill-frontend-ids", requireAuth, requireRole(["super-admin", "admin"]), async (req, res, next) => {
+router.post("/backfill-frontend-ids", requireAuth, requireAdmin, async (req, res, next) => {
   try {
     const dryRun = String(req.query?.dryRun || "").toLowerCase() === "true";
 

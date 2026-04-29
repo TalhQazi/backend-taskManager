@@ -3,7 +3,7 @@ const { z } = require("zod");
 const multer = require("multer");
 
 const Settings = require("../models/Settings");
-const { requireAuth } = require("../middleware/auth");
+const { requireAuth, requireSuperAdmin, requireAdmin, requireManager } = require("../middleware/auth");
 const { uploadToS3, base64ToBuffer } = require("../lib/s3");
 
 const router = express.Router();
