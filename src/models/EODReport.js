@@ -25,6 +25,10 @@ const eodReportSchema = new mongoose.Schema(
       type: String,
       required: true,
     },
+    transcription: {
+      type: String,
+      default: "",
+    },
     inputType: {
       type: String,
       enum: ["text", "voice"],
@@ -44,9 +48,14 @@ const eodReportSchema = new mongoose.Schema(
       min: 0,
       max: 10,
     },
-    flags: [{
-      type: String,
+    taggedTasks: [{
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Task",
     }],
+    flags: {
+      missing: { type: Boolean, default: false },
+      lowOutput: { type: Boolean, default: false },
+    },
     // Reference to time entry
     timeEntryId: {
       type: mongoose.Schema.Types.ObjectId,

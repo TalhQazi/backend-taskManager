@@ -11,6 +11,7 @@ const Message = require("../models/Message");
 const ActivityLog = require("../models/ActivityLog");
 const Settings = require("../models/Settings");
 const EODReport = require("../models/EODReport");
+const WorkSchedule = require("../models/WorkSchedule");
 const { createNotification } = require("../utils/notifications");
 const { requireAuth, requireRole } = require("../middleware/auth");
 const { parsePagination, paginatedResponse } = require("../lib/pagination");
@@ -57,6 +58,24 @@ function getDayRange(d = new Date()) {
   const end = new Date(d);
   end.setHours(23, 59, 59, 999);
   return { start, end };
+}
+
+function getNowMinutesInTimeZone(timeZone) {
+  try {
+    const fmt = new Intl.DateTimeFormat("en-US", {
+      timeZone,
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    });
+    const parts = fmt.formatToParts(new Date());
+    const hour = Number(parts.find((p) => p.type === "hour")?.value);
+    const minute = Number(parts.find((p) => p.type === "minute")?.value);
+    if (!Number.isFinite(hour) || !Number.isFinite(minute)) return null;
+    return hour * 60 + minute;
+  } catch {
+    return null;
+  }
 }
 
 async function requireEmployeeSelf(req, res) {
@@ -261,6 +280,37 @@ router.post("/me/clock-in", requireAuth, async (req, res, next) => {
       return res.status(400).json({ error: { message: "Already clocked in for today" } });
     }
 
+    // Anti-circumvention: block next-day clock-in if yesterday EOD is missing
+    try {
+      const y = new Date();
+      y.setDate(y.getDate() - 1);
+      const { start: yStart, end: yEnd } = getDayRange(y);
+      const missingYesterday = await EODReport.findOne({
+        userId: String(user._id),
+        date: { $gte: yStart, $lte: yEnd },
+        status: { $in: ["missing"] },
+      })
+        .select("_id")
+        .lean();
+      if (missingYesterday) {
+        return res.status(403).json({ error: { message: "EOD report missing for yesterday. Please contact your manager." } });
+      }
+    } catch {
+      // ignore enforcement errors
+    }
+
+    // No schedule = block access (per EOD spec section 11)
+    const WorkSchedule = require("../models/WorkSchedule");
+    const schedule = await WorkSchedule.findOne({ userId: String(user._id), isActive: true }).lean();
+    if (!schedule) {
+      return res.status(403).json({
+        error: {
+          message: "No active work schedule found. Please contact your manager to set up your schedule.",
+          code: "NO_SCHEDULE",
+        },
+      });
+    }
+
     const now = new Date();
     const hhmm = now.toTimeString().slice(0, 5);
 
@@ -304,6 +354,14 @@ router.post("/me/clock-out", requireAuth, async (req, res, next) => {
 
     if ((entry.clockOutAt || entry.clockOut) && String(entry.clockOut || "").trim()) {
       return res.status(400).json({ error: { message: "Already clocked out for today" } });
+    }
+
+    // Anti-circumvention: require EOD report before clock-out
+    const report = await EODReport.findOne({ userId: String(req.user?.sub || ""), date: { $gte: start, $lte: end }, status: "submitted" })
+      .select("_id")
+      .lean();
+    if (!report) {
+      return res.status(400).json({ error: { message: "Submit your End-of-Day report before clock-out" } });
     }
 
     const now = new Date();
@@ -829,6 +887,14 @@ router.post("/me/clock-out-with-scrum", requireAuth, async (req, res, next) => {
       return res.status(400).json({ success: false, message: "Already clocked out" });
     }
 
+    // Anti-circumvention: require EOD report before clock-out
+    const existingEod = await EODReport.findOne({ userId: String(user._id), date: { $gte: start, $lte: end }, status: "submitted" })
+      .select("_id")
+      .lean();
+    if (!existingEod) {
+      return res.status(400).json({ success: false, message: "Submit your End-of-Day report before clock-out" });
+    }
+
     const now = new Date();
     const clockOutTime = now.toLocaleTimeString("en-US", {
       hour12: false,
@@ -916,9 +982,11 @@ router.get("/me/scrum-records", requireAuth, async (req, res, next) => {
 router.post("/me/eod-report", requireAuth, async (req, res, next) => {
   try {
     const schema = z.object({
+      inputType: z.enum(["text", "voice"]).optional().default("text"),
       tasksCompleted: z.string().min(10, "Tasks completed must be at least 10 characters"),
-      issuesBlockers: z.string().optional(),
-      notes: z.string().optional(),
+      issuesBlockers: z.string().optional().default(""),
+      notes: z.string().optional().default(""),
+      transcription: z.string().optional().default(""),
     });
 
     const parsed = schema.safeParse(req.body);
@@ -936,6 +1004,27 @@ router.post("/me/eod-report", requireAuth, async (req, res, next) => {
 
     const { start, end } = getDayRange(new Date());
 
+    // Enforce schedule submission window if a WorkSchedule exists
+    const schedule = await WorkSchedule.findOne({ userId: String(user._id), isActive: true }).lean();
+    if (schedule) {
+      const shiftEnd = String(schedule.shiftEnd || "");
+      const offset = Number(schedule.eodOffsetMinutes || -10);
+      const tz = String(schedule.timezone || "America/New_York");
+      const m = shiftEnd.match(/^(\d{1,2}):(\d{2})$/);
+      const nowMinutes = getNowMinutesInTimeZone(tz);
+      if (m && nowMinutes !== null) {
+        const endMinutes = Number(m[1]) * 60 + Number(m[2]);
+        const openMinutes = endMinutes + offset;
+        const closeMinutes = endMinutes + 30;
+        if (nowMinutes < openMinutes) {
+          return res.status(400).json({ error: { message: "EOD submission window has not opened yet" } });
+        }
+        if (nowMinutes > closeMinutes) {
+          return res.status(400).json({ error: { message: "EOD submission window has closed" } });
+        }
+      }
+    }
+
     // Check if EOD report already exists for today
     const existingReport = await EODReport.findOne({
       userId: String(user._id),
@@ -944,9 +1033,34 @@ router.post("/me/eod-report", requireAuth, async (req, res, next) => {
 
     if (existingReport) {
       // Update existing report
-      existingReport.rawInput = JSON.stringify(parsed.data);
+      const eodData = {
+        tasksCompleted: parsed.data.tasksCompleted,
+        issuesBlockers: parsed.data.issuesBlockers,
+        notes: parsed.data.notes,
+      };
+
+      const textForAi = [eodData.tasksCompleted, eodData.issuesBlockers, eodData.notes].filter(Boolean).join("\n");
+      const productivityScore = Math.max(0, Math.min(10, Math.round((textForAi.trim().length / 120) * 10)));
+      const lowOutput = eodData.tasksCompleted.trim().length < 40;
+      const aiSummary = textForAi.trim().slice(0, 240);
+
+      existingReport.rawInput = JSON.stringify(eodData);
       existingReport.status = "submitted";
+      existingReport.inputType = parsed.data.inputType;
+      existingReport.transcription = parsed.data.inputType === "voice" ? String(parsed.data.transcription || "") : "";
+      existingReport.aiSummary = aiSummary;
+      existingReport.productivityScore = productivityScore;
+      existingReport.flags = { missing: false, lowOutput };
       await existingReport.save();
+      
+      // AI Task Linking - async, don't block response
+      const { processAndLinkTasks } = require("../services/aiTaskLinker");
+      processAndLinkTasks(
+        String(existingReport._id),
+        String(user._id),
+        textForAi,
+        dateObj
+      ).catch((err) => console.error("[EOD] AI task linking error:", err));
       
       cacheDel("eod-reports:*").catch(() => {});
       
@@ -961,17 +1075,39 @@ router.post("/me/eod-report", requireAuth, async (req, res, next) => {
 
     // Create new EOD report
     const dateObj = new Date();
-    const eodData = parsed.data;
+    const eodData = {
+      tasksCompleted: parsed.data.tasksCompleted,
+      issuesBlockers: parsed.data.issuesBlockers,
+      notes: parsed.data.notes,
+    };
+
+    const textForAi = [eodData.tasksCompleted, eodData.issuesBlockers, eodData.notes].filter(Boolean).join("\n");
+    const productivityScore = Math.max(0, Math.min(10, Math.round((textForAi.trim().length / 120) * 10)));
+    const lowOutput = eodData.tasksCompleted.trim().length < 40;
+    const aiSummary = textForAi.trim().slice(0, 240);
     const report = await EODReport.create({
       userId: String(user._id),
       employeeId: String(employee._id),
       employeeName: employee.name,
       date: dateObj,
       rawInput: JSON.stringify(eodData),
-      inputType: "text",
+      inputType: parsed.data.inputType,
+      transcription: parsed.data.inputType === "voice" ? String(parsed.data.transcription || "") : "",
       status: "submitted",
+      aiSummary,
+      productivityScore,
+      flags: { missing: false, lowOutput },
       timeEntryId: timeEntry?._id || null,
     });
+
+    // AI Task Linking - async, don't block response
+    const { processAndLinkTasks } = require("../services/aiTaskLinker");
+    processAndLinkTasks(
+      String(report._id),
+      String(user._id),
+      textForAi,
+      dateObj
+    ).catch((err) => console.error("[EOD] AI task linking error:", err));
 
     // Create notification for admin
     await createNotification({

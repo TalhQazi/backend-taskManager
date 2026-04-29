@@ -4,6 +4,7 @@ const EODReport = require("../models/EODReport");
 const TimeEntry = require("../models/TimeEntry");
 const Employee = require("../models/Employee");
 const User = require("../models/User");
+const WorkSchedule = require("../models/WorkSchedule");
 const { requireAuth, requireRole } = require("../middleware/auth");
 const { cacheWrap, cacheDel } = require("../lib/cache");
 
@@ -21,6 +22,33 @@ function getDayRange(date) {
   const end = new Date(date);
   end.setHours(23, 59, 59, 999);
   return { start, end };
+}
+
+function parseHHMM(hhmm) {
+  const m = String(hhmm || "").trim().match(/^(\d{1,2}):(\d{2})$/);
+  if (!m) return null;
+  const h = Number(m[1]);
+  const min = Number(m[2]);
+  if (!Number.isFinite(h) || !Number.isFinite(min) || h < 0 || h > 23 || min < 0 || min > 59) return null;
+  return h * 60 + min;
+}
+
+function getNowMinutesInTimeZone(timeZone) {
+  try {
+    const fmt = new Intl.DateTimeFormat("en-US", {
+      timeZone,
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    });
+    const parts = fmt.formatToParts(new Date());
+    const hour = Number(parts.find((p) => p.type === "hour")?.value);
+    const minute = Number(parts.find((p) => p.type === "minute")?.value);
+    if (!Number.isFinite(hour) || !Number.isFinite(minute)) return null;
+    return hour * 60 + minute;
+  } catch {
+    return null;
+  }
 }
 
 // ==================== MANAGER ENDPOINTS ====================
@@ -64,6 +92,7 @@ router.get("/eod-status", requireAuth, requireRole(["manager", "admin", "super-a
       employees.map(async (emp) => {
         const timeEntry = timeEntryByEmployee.get(emp.name);
         const userId = await getUserIdByEmployeeEmail(emp.email);
+        const schedule = userId ? await WorkSchedule.findOne({ userId, isActive: true }).lean() : null;
         
         if (!timeEntry) {
           return {
@@ -79,7 +108,36 @@ router.get("/eod-status", requireAuth, requireRole(["manager", "admin", "super-a
         const eodReport = userId ? eodReportByUserId.get(userId) : null;
         
         if (!eodReport) {
-          // Employee clocked in/out but no EOD report
+          // No report: use schedule window when possible (spec), else fallback to clock-out based missing
+          if (schedule) {
+            const shiftEndMins = parseHHMM(schedule.shiftEnd);
+            const tz = String(schedule.timezone || "America/New_York");
+            const nowMinutes = getNowMinutesInTimeZone(tz);
+            if (shiftEndMins !== null && nowMinutes !== null) {
+              const closeAt = shiftEndMins + 30;
+              if (nowMinutes > closeAt) {
+                return {
+                  employeeId: String(emp._id),
+                  employeeName: emp.name,
+                  status: "missing",
+                  clockIn: timeEntry.clockIn || formatTime(timeEntry.clockInAt),
+                  clockOut: timeEntry.clockOut || formatTime(timeEntry.clockOutAt),
+                  reportSubmittedAt: undefined,
+                };
+              }
+              if (nowMinutes >= shiftEndMins) {
+                return {
+                  employeeId: String(emp._id),
+                  employeeName: emp.name,
+                  status: "late",
+                  clockIn: timeEntry.clockIn || formatTime(timeEntry.clockInAt),
+                  clockOut: timeEntry.clockOut || formatTime(timeEntry.clockOutAt),
+                  reportSubmittedAt: undefined,
+                };
+              }
+            }
+          }
+
           const clockOutTime = timeEntry.clockOutAt || timeEntry.clockOut;
           if (clockOutTime) {
             return {
@@ -91,7 +149,7 @@ router.get("/eod-status", requireAuth, requireRole(["manager", "admin", "super-a
               reportSubmittedAt: undefined,
             };
           }
-          // Still clocked in
+
           return {
             employeeId: String(emp._id),
             employeeName: emp.name,
