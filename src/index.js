@@ -49,6 +49,7 @@ const eodReportsRoutes = require("./routes/eodReports");
 const uiPreferencesRoutes = require("./routes/uiPreferences");
 const vendorCategoriesRoutes = require("./routes/vendorCategories");
 const trademarksRoutes = require("./routes/trademarks");
+const dropboxRoutes = require("./routes/dropbox");
 
 //going to express now
 const app = express();
@@ -284,6 +285,7 @@ app.use("/api/contributors", contributorsRoutes);
 app.use("/api/ui-preferences", uiPreferencesRoutes);
 app.use("/api/vendor-categories", vendorCategoriesRoutes);
 app.use("/api/trademarks", trademarksRoutes);
+app.use("/api/dropbox", dropboxRoutes);
 
 app.use(notFoundHandler);
 app.use(errorHandler);
