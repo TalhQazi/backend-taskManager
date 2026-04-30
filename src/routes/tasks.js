@@ -854,6 +854,24 @@ router.post("/:id/comments", requireAuth, async (req, res, next) => {
       }
     }
 
+    // Notify task assignees and creator about the new comment
+    const commentRecipients = new Set([
+      ...(Array.isArray(task.assignees) ? task.assignees : []),
+      task.createdBy?.name || ""
+    ].filter(Boolean));
+    if (commentRecipients.size > 0) {
+      await createNotification({
+        actor: String(req.user?.username || "Someone"),
+        actorRole: String(req.user?.role || ""),
+        action: "commented on",
+        resourceType: "task",
+        resourceName: task.title,
+        assignees: Array.from(commentRecipients),
+        details: `"${message.length > 50 ? message.substring(0, 50) + "..." : message}"`,
+        resourceId: String(task._id),
+      });
+    }
+
     const Settings = require("../models/Settings");
     const authorUserId = String(req.user?.sub || req.user?.id || "");
     const userSettings = await Settings.findOne({ userId: authorUserId }).lean();

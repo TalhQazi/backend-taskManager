@@ -5,7 +5,7 @@ const multer = require("multer");
 const Message = require("../models/Message");
 const Employee = require("../models/Employee");
 const { requireAuth } = require("../middleware/auth");
-const { encryptString, decryptString } = require("../lib/encryption");
+const { encrypt, decrypt } = require("../lib/encryption");
 const { checkAndFlagOffTheClock } = require("../lib/offTheClockWork");
 const { parsePagination, paginatedResponse } = require("../lib/pagination");
 const { cacheWrap, cacheDel } = require("../lib/cache");
@@ -21,8 +21,12 @@ function withId(doc) {
 function decryptOut(doc) {
   if (!doc) return doc;
   const next = { ...doc };
-  if (typeof next.title === "string") next.title = decryptString(next.title);
-  if (typeof next.content === "string") next.content = decryptString(next.content);
+  try {
+    if (typeof next.title === "string") next.title = decrypt(next.title);
+  } catch (e) { /* keep original on decrypt failure */ }
+  try {
+    if (typeof next.content === "string") next.content = decrypt(next.content);
+  } catch (e) { /* keep original on decrypt failure */ }
   return next;
 }
 
@@ -120,7 +124,19 @@ router.get("/", requireAuth, async (req, res, next) => {
           // super-admin sees all broadcast notifications
         } else {
           const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-          const candidates = [role, username, userId].filter(Boolean);
+          
+          // Build candidates: include own role + related roles if admin/manager
+          let candidates = [role, username, userId].filter(Boolean);
+          
+          // Admin and manager can see each other's notifications
+          if (role === "admin" || role === "manager") {
+            candidates.push("admin");
+            candidates.push("manager");
+          }
+          
+          // Remove duplicates
+          candidates = [...new Set(candidates)];
+          
           query.$or = candidates.map((c) => ({
             recipient: { $regex: new RegExp(`(^|,)${escapeRegex(c)}(,|$)`, "i") }
           }));
@@ -301,13 +317,13 @@ router.post("/", requireAuth, async (req, res, next) => {
     if (notificationParsed.success) {
       const now = new Date();
       const created = await Message.create({
-        title: encryptString(notificationParsed.data.title),
+        title: encrypt(notificationParsed.data.title),
         audience: notificationParsed.data.audience,
         createdAt: notificationParsed.data.createdAt || now.toISOString().split("T")[0],
         sender: "system",
         senderAvatar: "",
         recipient: notificationParsed.data.audience,
-        content: encryptString(notificationParsed.data.message),
+        content: encrypt(notificationParsed.data.message),
         timestamp: now.toISOString(),
         type: "broadcast",
         status: "sent",
@@ -345,8 +361,8 @@ router.post("/", requireAuth, async (req, res, next) => {
 
     const created = await Message.create({
       ...parsed.data,
-      title: typeof parsed.data.title === "string" ? encryptString(parsed.data.title) : "",
-      content: encryptString(content),
+      title: typeof parsed.data.title === "string" ? encrypt(parsed.data.title) : "",
+      content: encrypt(content),
       attachment: parsed.data.attachment || undefined,
     });
 
@@ -402,7 +418,19 @@ router.post("/mark-all-read", requireAuth, async (req, res, next) => {
     let query = { type: "broadcast" };
     if (role !== "super-admin") {
       const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-      const candidates = [role, currentUser].filter(Boolean);
+      
+      // Build candidates: include own role + related roles if admin/manager
+      let candidates = [role, currentUser].filter(Boolean);
+      
+      // Admin and manager can see each other's notifications
+      if (role === "admin" || role === "manager") {
+        candidates.push("admin");
+        candidates.push("manager");
+      }
+      
+      // Remove duplicates
+      candidates = [...new Set(candidates)];
+      
       query.$or = candidates.map((c) => ({
         recipient: { $regex: new RegExp(`(^|,)${escapeRegex(c)}(,|$)`, "i") }
       }));
@@ -431,13 +459,13 @@ router.put("/:id", requireAuth, async (req, res, next) => {
         userId: String(req.user?.sub || ""),
         timestamp: parsed.data.timestamp || new Date(),
         activityType: "message_update",
-        metadata: { messageId: String(req.params.id) },
+        metadata: { messageId: req.params.id },
       });
     }
 
     const patch = { ...parsed.data };
-    if (typeof patch.title === "string") patch.title = encryptString(patch.title);
-    if (typeof patch.content === "string") patch.content = encryptString(patch.content);
+    if (typeof patch.title === "string") patch.title = encrypt(patch.title);
+    if (typeof patch.content === "string") patch.content = encrypt(patch.content);
 
     const updated = await Message.findByIdAndUpdate(req.params.id, patch, { new: true }).lean();
     if (!updated) return res.status(404).json({ error: { message: "Message not found" } });

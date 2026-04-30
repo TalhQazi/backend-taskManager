@@ -39,8 +39,8 @@ async function createNotification({
     if (assignees.length > 0) content += ` — assigned to: ${assignees.join(", ")}`;
     if (details) content += ` (${details})`;
 
-    // Targeted recipients: super-admin role + actor + assignees (deduped)
-    const targetSet = new Set(["super-admin"]);
+    // Targeted recipients: all roles + actor + assignees (deduped)
+    const targetSet = new Set(["super-admin", "admin", "manager"]);
     if (actor) targetSet.add(String(actor).trim());
     (Array.isArray(assignees) ? assignees : []).forEach((a) => {
       if (a) targetSet.add(String(a).trim());
