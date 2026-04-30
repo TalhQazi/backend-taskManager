@@ -7,6 +7,7 @@ const crypto = require("crypto");
 const DropboxToken = require("../models/DropboxToken");
 const { encrypt, decrypt, safeDecrypt } = require("../lib/encryption");
 const { requireAuth, requireRole } = require("../middleware/auth");
+const { ROLE_GROUPS } = require("../constants/roles");
 
 const router = express.Router();
 
@@ -25,7 +26,7 @@ const DROPBOX_CONFIG = Object.freeze({
 });
 
 /** Roles allowed to use Dropbox integration */
-const DROPBOX_ALLOWED_ROLES = ["super-admin"];
+const DROPBOX_ALLOWED_ROLES = ROLE_GROUPS.DROPBOX_ALLOWED;
 
 // ── Helpers ──────────────────────────────────────────────────
 
