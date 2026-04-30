@@ -53,6 +53,11 @@ const vendorCategoriesRoutes = require("./routes/vendorCategories");
 const trademarksRoutes = require("./routes/trademarks");
 
 
+const expenseItemsRoutes = require("./routes/expenseItems");
+const expenseSheetsRoutes = require("./routes/expenseSheets");
+const expenseAttachmentRoutes = require("./routes/expenseAttachments");
+
+
 //going to express now
 const app = express();
 const httpServer = createServer(app);
@@ -155,7 +160,7 @@ const configuredOrigins = (process.env.CORS_ORIGIN || "")
 configuredOrigins.push(
   "https://bug-panel.vercel.app", 
   "http://localhost:3001",
-  "https://task.se7eninc.com"
+  "https://task.se7eninc.com",
 );
 
 const isDev = String(process.env.NODE_ENV || "").toLowerCase() !== "production";
@@ -296,6 +301,10 @@ app.use("/api/ui-preferences", uiPreferencesRoutes);
 app.use("/api/vendor-categories", vendorCategoriesRoutes);
 app.use("/api/trademarks", trademarksRoutes);
 
+
+app.use("/api/expense-items", expenseItemsRoutes);
+app.use("/api/expense-sheets", expenseSheetsRoutes);
+app.use("/api/expense-attachments", expenseAttachmentRoutes);
 
 app.use(notFoundHandler);
 app.use(errorHandler);
