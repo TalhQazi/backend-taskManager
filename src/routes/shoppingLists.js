@@ -200,6 +200,7 @@ router.post("/:id/items", requireAuth, async (req, res, next) => {
     const data = {
       ...parsed.data,
       shoppingListId: req.params.id,
+      vendorId: parsed.data.vendorId || null,
     };
 
     const item = await ShoppingListItem.create(data);
@@ -218,6 +219,8 @@ router.put("/items/:itemId", requireAuth, async (req, res, next) => {
     }
 
     const updateData = { ...parsed.data };
+    if (updateData.vendorId === "") updateData.vendorId = null;
+    
     if (updateData.isPurchased === true) {
       updateData.purchasedAt = new Date();
     } else if (updateData.isPurchased === false) {
