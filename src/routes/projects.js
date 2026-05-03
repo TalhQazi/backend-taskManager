@@ -307,11 +307,28 @@ router.get("/", requireAuth, async (req, res, next) => {
               in: {
                 $let: {
                   vars: {
-                    taskAttachments: {
-                      $concatArrays: [
-                        { $cond: [{ $and: [{ $gt: ["$$this.attachment.url", null] }, { $ne: ["$$this.attachment.url", ""] }] }, ["$$this.attachment"], []] },
-                        { $ifNull: ["$$this.attachments", []] }
-                      ]
+                    // Merge attachment and attachments, ensuring uniqueness by URL
+                    taskAtts: {
+                      $reduce: {
+                        input: { $ifNull: ["$$this.attachments", []] },
+                        initialValue: { 
+                          $cond: [
+                            { $and: [
+                              { $gt: [{ $ifNull: ["$$this.attachment.url", null] }, null] }, 
+                              { $ne: ["$$this.attachment.url", ""] }
+                            ] }, 
+                            ["$$this.attachment"], 
+                            []
+                          ] 
+                        },
+                        in: {
+                          $cond: [
+                            { $in: ["$$this.url", { $map: { input: "$$value", as: "v", in: "$$v.url" } }] },
+                            "$$value",
+                            { $concatArrays: ["$$value", ["$$this"]] }
+                          ]
+                        }
+                      }
                     }
                   },
                   in: {
@@ -321,7 +338,7 @@ router.get("/", requireAuth, async (req, res, next) => {
                         {
                           $size: {
                             $filter: {
-                              input: "$$taskAttachments",
+                              input: "$$taskAtts",
                               as: "att",
                               cond: {
                                 $or: [
@@ -340,15 +357,18 @@ router.get("/", requireAuth, async (req, res, next) => {
                         {
                           $size: {
                             $filter: {
-                              input: "$$taskAttachments",
+                              input: "$$taskAtts",
                               as: "att",
                               cond: {
-                                $not: {
-                                  $or: [
-                                    { $regexMatch: { input: { $ifNull: ["$$att.mimeType", ""] }, regex: "^image/", options: "i" } },
-                                    { $regexMatch: { input: { $ifNull: ["$$att.fileName", ""] }, regex: "\\.(jpg|jpeg|png|gif|webp|svg|bmp|ico)$", options: "i" } }
-                                  ]
-                                }
+                                $and: [
+                                  { $ne: [{ $ifNull: ["$$att.url", ""] }, ""] },
+                                  { $not: {
+                                    $or: [
+                                      { $regexMatch: { input: { $ifNull: ["$$att.mimeType", ""] }, regex: "^image/", options: "i" } },
+                                      { $regexMatch: { input: { $ifNull: ["$$att.fileName", ""] }, regex: "\\.(jpg|jpeg|png|gif|webp|svg|bmp|ico)$", options: "i" } }
+                                    ]
+                                  }}
+                                ]
                               }
                             }
                           }
@@ -399,6 +419,7 @@ router.get("/", requireAuth, async (req, res, next) => {
               as: "att",
               in: {
                 fileName: "$$att.fileName",
+                url: { $ifNull: ["$$att.url", ""] },
                 mimeType: "$$att.mimeType",
                 size: "$$att.size",
                 uploadedAt: "$$att.uploadedAt",
