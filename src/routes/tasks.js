@@ -378,11 +378,6 @@ router.get("/", requireAuth, async (req, res, next) => {
 
       const items = await Task.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit).lean();
 
-      const [items, total] = await Promise.all([
-        Task.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit).lean(),
-        Task.countDocuments(filter),
-      ]);
-
       // Append Dropbox attachment count to task objects
       if (items.length > 0) {
         try {
