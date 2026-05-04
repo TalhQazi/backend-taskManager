@@ -2,16 +2,52 @@ const express = require("express");
 const router = express.Router();
 
 const ExpenseItem = require("../models/ExpenseItem");
+const ExpenseSheet = require("../models/ExpenseSheet");
 const { updateSheetTotal } = require("../utils/expenseUtils");
+const { requireAuth } = require("../middleware/auth");
 
+// ==============================
+// 🔐 PERMISSION HELPERS
+// ==============================
+function canEditSheet(user, sheet) {
+  // ✅ Admin & Manager → full access
+  if (user.role === "admin" || user.role === "manager") return true;
 
-router.post("/", async (req, res) => {
+  // ✅ Employee + Developer → only own draft
+  if (user.role === "employee" || user.role === "developer") {
+    return (
+      String(sheet.createdBy) === String(user.sub) &&
+      sheet.status === "draft"
+    );
+  }
+
+  // ✅ Optional: Team Lead (if needed)
+  if (user.role === "team-lead") {
+    return sheet.status !== "approved";
+  }
+
+  return false;
+}
+
+// ==============================
+// ➕ CREATE ITEM
+// ==============================
+router.post("/", requireAuth, async (req, res) => {
   try {
+    const sheet = await ExpenseSheet.findById(req.body.sheetId);
+
+    if (!sheet) {
+      return res.status(404).json({ error: "Sheet not found" });
+    }
+
+    if (!canEditSheet(req.user, sheet)) {
+      return res.status(403).json({ error: "Cannot add items" });
+    }
+
     const item = await ExpenseItem.create(req.body);
 
     await updateSheetTotal(item.sheetId);
 
-    // 🔥 real-time update
     global.io.emit("expense:update", { sheetId: item.sheetId });
 
     res.json(item);
@@ -20,10 +56,21 @@ router.post("/", async (req, res) => {
   }
 });
 
-
-router.put("/:id", async (req, res) => {
+// ==============================
+// ✏️ UPDATE ITEM
+// ==============================
+router.put("/:id", requireAuth, async (req, res) => {
   try {
-    const item = await ExpenseItem.findByIdAndUpdate(
+    const item = await ExpenseItem.findById(req.params.id);
+    if (!item) return res.status(404).json({ error: "Item not found" });
+
+    const sheet = await ExpenseSheet.findById(item.sheetId);
+
+    if (!canEditSheet(req.user, sheet)) {
+      return res.status(403).json({ error: "Not allowed" });
+    }
+
+    const updated = await ExpenseItem.findByIdAndUpdate(
       req.params.id,
       req.body,
       { new: true }
@@ -33,16 +80,27 @@ router.put("/:id", async (req, res) => {
 
     global.io.emit("expense:update", { sheetId: item.sheetId });
 
-    res.json(item);
+    res.json(updated);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-
-router.delete("/:id", async (req, res) => {
+// ==============================
+// ❌ DELETE ITEM
+// ==============================
+router.delete("/:id", requireAuth, async (req, res) => {
   try {
-    const item = await ExpenseItem.findByIdAndDelete(req.params.id);
+    const item = await ExpenseItem.findById(req.params.id);
+    if (!item) return res.status(404).json({ error: "Item not found" });
+
+    const sheet = await ExpenseSheet.findById(item.sheetId);
+
+    if (!canEditSheet(req.user, sheet)) {
+      return res.status(403).json({ error: "Not allowed" });
+    }
+
+    await ExpenseItem.findByIdAndDelete(req.params.id);
 
     await updateSheetTotal(item.sheetId);
 
@@ -54,16 +112,17 @@ router.delete("/:id", async (req, res) => {
   }
 });
 
-
-router.get("/:sheetId", async (req, res) => {
+// ==============================
+// 📄 GET ITEMS BY SHEET
+// ==============================
+router.get("/:sheetId", requireAuth, async (req, res) => {
   try {
     const items = await ExpenseItem.find({
       sheetId: req.params.sheetId,
-    });
+    }).populate("vendorId"); // 🔥 IMPORTANT
 
     res.json(items);
   } catch (err) {
-    console.error(err);
     res.status(500).json({ error: "Failed to fetch items" });
   }
 });

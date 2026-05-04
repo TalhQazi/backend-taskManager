@@ -59,6 +59,7 @@ const emailAccountsRoutes = require("./routes/emailAccounts");
 const expenseItemsRoutes = require("./routes/expenseItems");
 const expenseSheetsRoutes = require("./routes/expenseSheets");
 const expenseAttachmentRoutes = require("./routes/expenseAttachments");
+const expenseSummaryRoutes = require("./routes/expenseSummaryRoutes");
 
 
 //going to express now
@@ -311,6 +312,7 @@ app.use("/api/email-accounts", emailAccountsRoutes);
 app.use("/api/expense-items", expenseItemsRoutes);
 app.use("/api/expense-sheets", expenseSheetsRoutes);
 app.use("/api/expense-attachments", expenseAttachmentRoutes);
+app.use("/api/expenses", expenseSummaryRoutes);
 
 app.use(notFoundHandler);
 app.use(errorHandler);
