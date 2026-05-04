@@ -9,8 +9,12 @@ const Task = require("../models/Task");
 const TaskComment = require("../models/TaskComment");
 const ActivityLog = require("../models/ActivityLog");
 const User = require("../models/User");
+
 const TeamLeadMapping = require("../models/TeamLeadMapping");
 const TaskPermission = require("../models/TaskPermission");
+
+const Attachment = require("../models/Attachment");
+
 const { requireAuth } = require("../middleware/auth");
 const { checkAndFlagOffTheClock } = require("../lib/offTheClockWork");
 const { createNotification } = require("../utils/notifications");
@@ -70,6 +74,15 @@ const createSchema = z.object({
     mimeType: z.string().optional().default(""),
     size: z.number().optional().default(0),
     uploadedAt: z.union([z.date(), z.string()]).optional(),
+  })).optional().default([]),
+  // Dropbox attachment references (source == "DROPBOX")
+  dropboxAttachments: z.array(z.object({
+    file_name: z.string(),
+    file_type: z.string().optional().default(""),
+    file_size: z.number().optional().default(0),
+    dropbox_file_id: z.string(),
+    dropbox_path: z.string(),
+    temporary_link: z.string().optional().default(""),
   })).optional().default([]),
 });
 
@@ -338,6 +351,7 @@ router.get("/", requireAuth, async (req, res, next) => {
 
     const cacheKey = `tasks:list:${role}:${req.user?.sub || ''}:p${page}:l${limit}:s${searchQ}:st${statusQ}:pr${priorityQ}:so${sortQ}:pid${projectIdQ}`;
     const result = await cacheWrap(cacheKey, async () => {
+
       const total = await Task.countDocuments(filter);
 
       // When sorting by execution priority, we want NULLs last.
@@ -363,6 +377,32 @@ router.get("/", requireAuth, async (req, res, next) => {
       }
 
       const items = await Task.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit).lean();
+
+      const [items, total] = await Promise.all([
+        Task.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit).lean(),
+        Task.countDocuments(filter),
+      ]);
+
+      // Append Dropbox attachment count to task objects
+      if (items.length > 0) {
+        try {
+          const taskObjectIds = items.map(i => i._id);
+          const counts = await Attachment.aggregate([
+            { $match: { task_id: { $in: taskObjectIds }, source: "DROPBOX" } },
+            { $group: { _id: "$task_id", count: { $sum: 1 } } }
+          ]);
+          const countMap = Object.create(null);
+          for (const c of counts) {
+            countMap[String(c._id)] = c.count;
+          }
+          for (const item of items) {
+            item.dropboxAttachmentCount = countMap[String(item._id)] || 0;
+          }
+        } catch (aggErr) {
+          console.error("[Tasks] Dropbox aggregation failed:", aggErr.message);
+        }
+      }
+
       return paginatedResponse(items.map(withId), total, page, limit);
     }, 15);
 
@@ -423,6 +463,44 @@ router.get("/:id/attachments/:index", requireAuth, async (req, res, next) => {
     const attachment = attachments[idx];
     if (!attachment) return res.status(404).json({ error: { message: "Attachment not found" } });
     res.json({ url: attachment.url || "" });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ── Get all Dropbox (external) attachments for a task ─────────
+// Returns records from the dedicated Attachment collection where source == "DROPBOX".
+router.get("/:id/dropbox-attachments", requireAuth, async (req, res, next) => {
+  try {
+    const task = await Task.findById(req.params.id).lean();
+    if (!task) return res.status(404).json({ error: { message: "Task not found" } });
+
+    const allowed = await canAccessTaskAsync(req.user, task);
+    if (!allowed) {
+      return res.status(403).json({ error: { message: "Forbidden" } });
+    }
+
+    const attachments = await Attachment.find({
+      task_id: task._id,
+      source: "DROPBOX",
+    })
+      .sort({ created_at: -1 })
+      .lean();
+
+    return res.json({
+      items: attachments.map((a) => ({
+        id: String(a._id),
+        task_id: String(a.task_id),
+        file_name: a.file_name,
+        file_type: a.file_type,
+        file_size: a.file_size,
+        source: a.source,
+        dropbox_file_id: a.dropbox_file_id,
+        dropbox_path: a.dropbox_path,
+        temporary_link: a.temporary_link,
+        created_at: a.created_at,
+      })),
+    });
   } catch (err) {
     next(err);
   }
@@ -497,6 +575,36 @@ router.post("/", requireAuth, async (req, res, next) => {
     });
 
     const obj = created.toObject();
+
+    // Save Dropbox attachments (metadata only)
+    const dropboxAtts = Array.isArray(data.dropboxAttachments) ? data.dropboxAttachments : [];
+    let savedDropboxAttachments = [];
+    if (dropboxAtts.length > 0) {
+      try {
+        const uploaderUserId = String(req.user?.sub || req.user?.id || "");
+        savedDropboxAttachments = await Attachment.insertMany(
+          dropboxAtts.map((da) => ({
+            task_id: created._id,
+            file_name: String(da.file_name || "").slice(0, 500),
+            file_type: String(da.file_type || "").slice(0, 200),
+            file_size: Math.max(0, Number(da.file_size) || 0),
+            source: "DROPBOX",
+            dropbox_file_id: String(da.dropbox_file_id || "").slice(0, 500),
+            dropbox_path: String(da.dropbox_path || "").slice(0, 2000),
+            temporary_link: String(da.temporary_link || "").slice(0, 5000),
+            uploaded_by: uploaderUserId,
+          }))
+        );
+      } catch (dbxInsertErr) {
+        // Log but don't fail task creation — the task is already saved
+        console.error("[Tasks] Failed to save Dropbox attachments:", dbxInsertErr.message);
+      }
+    }
+
+    // Append to response for immediate frontend display
+    if (savedDropboxAttachments.length > 0) {
+      obj.dropboxAttachments = savedDropboxAttachments;
+    }
 
     // Fire-and-forget side effects (don't block response)
     Promise.allSettled([

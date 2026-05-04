@@ -28,6 +28,10 @@ const socialMediaAccountSchema = new mongoose.Schema(
       type: String,
       default: "",
     },
+    password: {
+      type: String,
+      default: "",
+    },
     username: {
       type: String,
       default: "",
