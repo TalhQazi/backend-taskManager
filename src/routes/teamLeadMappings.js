@@ -2,6 +2,7 @@ const express = require("express");
 const { z } = require("zod");
 
 const TeamLeadMapping = require("../models/TeamLeadMapping");
+const User = require("../models/User");
 const { requireAuth, requireRole } = require("../middleware/auth");
 
 const router = express.Router();
@@ -77,15 +78,31 @@ router.delete("/", requireAuth, requireRole(["super-admin", "admin"]), async (re
 router.get("/me", requireAuth, async (req, res, next) => {
   try {
     const role = String(req.user?.role || "").trim().toLowerCase();
-    if (!role || (role !== "team-lead" && role !== "admin" && role !== "super-admin")) {
+    if (!role || (role !== "team-lead" && role !== "admin" && role !== "super-admin" && role !== "employee")) {
       return res.status(403).json({ error: { message: "Forbidden" } });
     }
 
-    const teamLead = String(req.user?.username || req.user?.name || "").trim();
-    if (!teamLead) return res.status(400).json({ error: { message: "Cannot identify user" } });
+    const userId = String(req.user?.sub || "").trim();
+    if (!userId) return res.status(400).json({ error: { message: "Cannot identify user" } });
 
+    const user = await User.findById(userId).lean();
+    if (!user) return res.status(404).json({ error: { message: "User not found" } });
+
+    const identifiers = [user.email, user.username, user.name].map((v) => String(v || "").trim()).filter(Boolean);
+    if (identifiers.length === 0) return res.status(400).json({ error: { message: "Cannot identify user" } });
+
+    // Employee view: find their team lead, then return full team (lead + teammates)
+    if (role === "employee") {
+      const myMapping = await TeamLeadMapping.findOne({ user: { $in: identifiers } }).lean();
+      if (!myMapping) return res.json({ items: [] });
+      const items = await TeamLeadMapping.find({ teamLead: myMapping.teamLead }).sort({ createdAt: -1 }).lean();
+      return res.json({ items: items.map(withId) });
+    }
+
+    // Team lead/admin view: return mappings for that team lead identifier (prefer email)
+    const teamLead = identifiers[0];
     const items = await TeamLeadMapping.find({ teamLead }).sort({ createdAt: -1 }).lean();
-    res.json({ items: items.map(withId) });
+    return res.json({ items: items.map(withId) });
   } catch (err) {
     next(err);
   }
