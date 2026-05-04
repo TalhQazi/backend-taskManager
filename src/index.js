@@ -51,6 +51,9 @@ const eodReportsRoutes = require("./routes/eodReports");
 const uiPreferencesRoutes = require("./routes/uiPreferences");
 const vendorCategoriesRoutes = require("./routes/vendorCategories");
 const trademarksRoutes = require("./routes/trademarks");
+const dropboxRoutes = require("./routes/dropbox");
+const shoppingListsRoutes = require("./routes/shoppingLists");
+const emailAccountsRoutes = require("./routes/emailAccounts");
 
 
 const expenseItemsRoutes = require("./routes/expenseItems");
@@ -300,6 +303,9 @@ app.use("/api/contributors", contributorsRoutes);
 app.use("/api/ui-preferences", uiPreferencesRoutes);
 app.use("/api/vendor-categories", vendorCategoriesRoutes);
 app.use("/api/trademarks", trademarksRoutes);
+app.use("/api/dropbox", dropboxRoutes);
+app.use("/api/shopping-lists", shoppingListsRoutes);
+app.use("/api/email-accounts", emailAccountsRoutes);
 
 
 app.use("/api/expense-items", expenseItemsRoutes);

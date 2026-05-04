@@ -105,7 +105,7 @@ const projectCreateSchema = z.object({
     size: z.number().optional().default(0),
     uploadedAt: z.date().optional(),
   })).optional().default([]),
-  tasks: z.array(taskCreateSchema).min(1, "At least one task is required"),
+  tasks: z.array(taskCreateSchema).optional().default([]),
 });
 
 router.post("/", requireAuth, async (req, res, next) => {
@@ -214,7 +214,7 @@ router.post("/", requireAuth, async (req, res, next) => {
       };
     }));
 
-    const createdTasks = await Task.insertMany(taskDocs, { ordered: true });
+    const createdTasks = taskDocs.length > 0 ? await Task.insertMany(taskDocs, { ordered: true }) : [];
 
     await logActivity(
       req,
@@ -293,13 +293,93 @@ router.get("/", requireAuth, async (req, res, next) => {
           localField: "_id",
           foreignField: "projectId",
           as: "tasks",
-          pipeline: [{ $project: { status: 1, _id: 0 } }],
+          pipeline: [{ $project: { status: 1, attachment: 1, attachments: 1, _id: 0 } }],
         },
       },
       {
         $addFields: {
           id: { $toString: "$_id" },
           taskCount: { $size: "$tasks" },
+          taskAttachmentStats: {
+            $reduce: {
+              input: "$tasks",
+              initialValue: { images: 0, files: 0 },
+              in: {
+                $let: {
+                  vars: {
+                    // Merge attachment and attachments, ensuring uniqueness by URL
+                    taskAtts: {
+                      $reduce: {
+                        input: { $ifNull: ["$$this.attachments", []] },
+                        initialValue: { 
+                          $cond: [
+                            { $and: [
+                              { $gt: [{ $ifNull: ["$$this.attachment.url", null] }, null] }, 
+                              { $ne: ["$$this.attachment.url", ""] }
+                            ] }, 
+                            ["$$this.attachment"], 
+                            []
+                          ] 
+                        },
+                        in: {
+                          $cond: [
+                            { $in: ["$$this.url", { $map: { input: "$$value", as: "v", in: "$$v.url" } }] },
+                            "$$value",
+                            { $concatArrays: ["$$value", ["$$this"]] }
+                          ]
+                        }
+                      }
+                    }
+                  },
+                  in: {
+                    images: {
+                      $add: [
+                        "$$value.images",
+                        {
+                          $size: {
+                            $filter: {
+                              input: "$$taskAtts",
+                              as: "att",
+                              cond: {
+                                $or: [
+                                  { $regexMatch: { input: { $ifNull: ["$$att.mimeType", ""] }, regex: "^image/", options: "i" } },
+                                  { $regexMatch: { input: { $ifNull: ["$$att.fileName", ""] }, regex: "\\.(jpg|jpeg|png|gif|webp|svg|bmp|ico)$", options: "i" } }
+                                ]
+                              }
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    files: {
+                      $add: [
+                        "$$value.files",
+                        {
+                          $size: {
+                            $filter: {
+                              input: "$$taskAtts",
+                              as: "att",
+                              cond: {
+                                $and: [
+                                  { $ne: [{ $ifNull: ["$$att.url", ""] }, ""] },
+                                  { $not: {
+                                    $or: [
+                                      { $regexMatch: { input: { $ifNull: ["$$att.mimeType", ""] }, regex: "^image/", options: "i" } },
+                                      { $regexMatch: { input: { $ifNull: ["$$att.fileName", ""] }, regex: "\\.(jpg|jpeg|png|gif|webp|svg|bmp|ico)$", options: "i" } }
+                                    ]
+                                  }}
+                                ]
+                              }
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
           status: {
             $switch: {
               branches: [
@@ -339,6 +419,7 @@ router.get("/", requireAuth, async (req, res, next) => {
               as: "att",
               in: {
                 fileName: "$$att.fileName",
+                url: { $ifNull: ["$$att.url", ""] },
                 mimeType: "$$att.mimeType",
                 size: "$$att.size",
                 uploadedAt: "$$att.uploadedAt",
@@ -346,6 +427,7 @@ router.get("/", requireAuth, async (req, res, next) => {
             },
           },
           taskCount: 1,
+          taskAttachmentStats: 1,
           status: 1,
           createdAt: 1,
           createdByUserId: 1,

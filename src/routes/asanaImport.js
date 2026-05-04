@@ -315,6 +315,10 @@ router.post("/transfer-project", requireAuth, requireRole(["admin", "super-admin
       return res.status(400).json({ error: { message: "projectAsanaId is required" } });
     }
 
+    const { uploadToS3 } = require("../lib/s3");
+    const fs = require("fs");
+    const path = require("path");
+
     // 1. Fetch Asana Project
     const asanaProject = await AsanaProject.findOne({ asanaId: projectAsanaId }).lean();
     if (!asanaProject) {
@@ -347,10 +351,48 @@ router.post("/transfer-project", requireAuth, requireRole(["admin", "super-admin
 
     let tasksCreated = 0;
     let commentsCreated = 0;
+    let attachmentsUploaded = 0;
 
-    // 5. Create Tasks and Subtasks
-    // To handle subtasks, we might need a mapping of Asana ID to Internal ID
     const asanaIdToInternalTaskId = new Map();
+    const baseUploads = path.resolve(__dirname, "..", "uploads");
+
+    // Helper: ensure attachment URL is an S3 URL (re-upload local files)
+    async function ensureS3Url(att) {
+      const filePath = att.filePath || "";
+      const fileName = att.fileName || "file";
+      const mimeType = att.mimeType || "application/octet-stream";
+
+      // Already an S3 URL — pass through
+      if (filePath.includes("amazonaws.com")) {
+        return { fileName, url: filePath, mimeType, size: att.size || 0 };
+      }
+
+      // Local disk path (e.g. /uploads/images/123_file.png)
+      if (filePath.startsWith("/uploads/")) {
+        const relativePath = filePath.replace(/^\/uploads\//, "");
+        const absPath = path.join(baseUploads, relativePath);
+        try {
+          if (fs.existsSync(absPath)) {
+            const buffer = fs.readFileSync(absPath);
+            const s3Url = await uploadToS3(buffer, fileName, mimeType, "asana-imports");
+            console.log(`[TRANSFER] Re-uploaded to S3: ${fileName} -> ${s3Url}`);
+            
+            // Update the AsanaAttachment record too so future transfers don't re-upload
+            if (att.asanaId) {
+              await AsanaAttachment.updateOne({ asanaId: att.asanaId }, { $set: { filePath: s3Url } }).catch(() => {});
+            }
+            
+            attachmentsUploaded++;
+            return { fileName, url: s3Url, mimeType, size: att.size || buffer.length };
+          }
+        } catch (err) {
+          console.error(`[TRANSFER] Failed to re-upload ${fileName} to S3:`, err.message);
+        }
+      }
+
+      // Fallback: use whatever URL we have
+      return { fileName, url: filePath, mimeType, size: att.size || 0 };
+    }
 
     // Process top-level tasks first
     for (const at of asanaTasks.filter(t => !t.parentAsanaId)) {
@@ -385,29 +427,30 @@ router.post("/transfer-project", requireAuth, requireRole(["admin", "super-admin
         commentsCreated++;
       }
 
-      // Transfer Attachments
+      // Transfer Attachments — upload to S3
       const asanaAtts = await AsanaAttachment.find({ taskAsanaId: at.asanaId }).lean();
       if (asanaAtts.length > 0) {
-        internalTask.attachments = asanaAtts.map(a => ({
-          fileName: a.fileName,
-          url: a.filePath,
-          mimeType: a.mimeType,
-          size: a.size,
-          uploadedAt: new Date()
-        }));
-        await internalTask.save();
+        const processed = [];
+        for (const a of asanaAtts) {
+          const result = await ensureS3Url(a);
+          if (result.url) {
+            processed.push({ ...result, uploadedAt: new Date() });
+          }
+        }
+        if (processed.length > 0) {
+          internalTask.attachments = processed;
+          await internalTask.save();
+        }
       }
     }
 
-    // Process subtasks (at most one level deep supported for simplicity in this carbon-copy)
+    // Process subtasks
     for (const st of asanaTasks.filter(t => t.parentAsanaId)) {
       const parentId = asanaIdToInternalTaskId.get(st.parentAsanaId);
       const internalSubtask = await Task.create({
         title: `[Subtask] ${st.title}`,
         description: st.description,
         projectId: newProject._id,
-        // Optional: link to parent if your Task model supports it, 
-        // but often we just list them under the same project.
         status: st.completed ? "completed" : "pending",
         dueDate: st.dueDate ? new Date(st.dueDate) : undefined,
         createdBy: {
@@ -434,17 +477,20 @@ router.post("/transfer-project", requireAuth, requireRole(["admin", "super-admin
         commentsCreated++;
       }
 
-      // Attachments for subtask
+      // Attachments for subtask — upload to S3
       const asanaAtts = await AsanaAttachment.find({ taskAsanaId: st.asanaId }).lean();
       if (asanaAtts.length > 0) {
-        internalSubtask.attachments = asanaAtts.map(a => ({
-          fileName: a.fileName,
-          url: a.filePath,
-          mimeType: a.mimeType,
-          size: a.size,
-          uploadedAt: new Date()
-        }));
-        await internalSubtask.save();
+        const processed = [];
+        for (const a of asanaAtts) {
+          const result = await ensureS3Url(a);
+          if (result.url) {
+            processed.push({ ...result, uploadedAt: new Date() });
+          }
+        }
+        if (processed.length > 0) {
+          internalSubtask.attachments = processed;
+          await internalSubtask.save();
+        }
       }
     }
 
@@ -454,7 +500,8 @@ router.post("/transfer-project", requireAuth, requireRole(["admin", "super-admin
       projectId: newProject._id,
       stats: {
         tasks: tasksCreated,
-        comments: commentsCreated
+        comments: commentsCreated,
+        attachmentsUploaded,
       }
     });
 
