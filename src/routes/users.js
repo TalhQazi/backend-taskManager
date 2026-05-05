@@ -7,6 +7,7 @@ const Employee = require("../models/Employee");
 const Settings = require("../models/Settings");
 const { createNotification } = require("../utils/notifications");
 const { requireAuth, requireRole } = require("../middleware/auth"); 
+const { sendSystemEmail } = require("../lib/email");
 
 const router = express.Router();
 
@@ -157,16 +158,16 @@ router.post("/", requireAuth, requireRole(["super-admin", "admin"]), async (req,
       passwordHash: await bcrypt.hash(parsed.data.password, 10),
     });
 
-    // Create notification
-    await createNotification({
-      actor: req.user?.username || req.user?.name || "Admin",
-      actorRole: req.user?.role || "admin",
-      action: "created",
-      resourceType: "user",
-      resourceName: created.name || created.username || created.email,
-      details: `Role: ${created.role}`,
-      resourceId: String(created._id),
-    });
+    // Send registration email
+    if (created.email) {
+      const templateKey = created.role === "manager" ? "managerRegistration" : "userRegistration";
+      // We don't await this to avoid blocking the response
+      sendSystemEmail({
+        to: created.email,
+        templateKey,
+        variables: { name: created.name || created.username },
+      }).catch(err => console.error("Failed to send registration email:", err));
+    }
 
     return res.status(201).json({ item: sanitizeUser(created.toObject()) });
   } catch (err) {

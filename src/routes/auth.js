@@ -7,6 +7,7 @@ const User = require("../models/User");
 const { requireAuth } = require("../middleware/auth");
 const { logLoginSuccess, logLoginFailure } = require("../middleware/auditLog");
 const ActivityLog = require("../models/ActivityLog");
+const { sendSystemEmail } = require("../lib/email");
 
 const router = express.Router();
 
@@ -236,4 +237,69 @@ router.post("/logout", requireAuth, async (req, res, next) => {
   }
 });
 
+// Request password reset code
+router.post("/forgot-password", async (req, res, next) => {
+  try {
+    const { email } = req.body;
+    if (!email) return res.status(400).json({ error: { message: "Email is required" } });
+
+    const user = await User.findOne({ email });
+    if (!user) {
+      // For security, don't reveal if user exists
+      return res.json({ ok: true, message: "If an account exists with this email, a reset code has been sent." });
+    }
+
+    // Generate 6-digit code
+    const code = Math.floor(100000 + Math.random() * 900000).toString();
+    const expires = new Date(Date.now() + 3600000); // 1 hour
+
+    await User.findByIdAndUpdate(user._id, {
+      resetPasswordCode: code,
+      resetPasswordExpires: expires,
+    });
+
+    await sendSystemEmail({
+      to: user.email,
+      templateKey: "forgotPassword",
+      variables: { name: user.name || user.username, code },
+    });
+
+    return res.json({ ok: true, message: "Reset code sent successfully" });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Reset password with code
+router.post("/reset-password", async (req, res, next) => {
+  try {
+    const { email, code, newPassword } = req.body;
+    if (!email || !code || !newPassword) {
+      return res.status(400).json({ error: { message: "Email, code and new password are required" } });
+    }
+
+    const user = await User.findOne({
+      email,
+      resetPasswordCode: code,
+      resetPasswordExpires: { $gt: new Date() },
+    });
+
+    if (!user) {
+      return res.status(400).json({ error: { message: "Invalid or expired reset code" } });
+    }
+
+    const passwordHash = await bcrypt.hash(newPassword, 10);
+    await User.findByIdAndUpdate(user._id, {
+      passwordHash,
+      resetPasswordCode: null,
+      resetPasswordExpires: null,
+    });
+
+    return res.json({ ok: true, message: "Password reset successfully" });
+  } catch (err) {
+    next(err);
+  }
+});
+
 module.exports = router;
+

@@ -21,6 +21,7 @@ const VehicleSchema = new mongoose.Schema(
     mileageText: { type: String, default: "" },
     lastInspection: { type: Date },
     nextInspection: { type: Date },
+    requiresInspection: { type: Boolean, default: true },
     tagPhotoFileName: { type: String, default: "" },
     tagPhotoDataUrl: { type: String, default: "" },
     tagPhotoAttachment: {

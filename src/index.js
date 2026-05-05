@@ -53,7 +53,9 @@ const vendorCategoriesRoutes = require("./routes/vendorCategories");
 const trademarksRoutes = require("./routes/trademarks");
 const dropboxRoutes = require("./routes/dropbox");
 const shoppingListsRoutes = require("./routes/shoppingLists");
-const emailAccountsRoutes = require("./routes/emailAccounts");
+const systemSettingsRoutes = require("./routes/systemSettings");
+const assetLibraryHeaderSettingsRoutes = require("./routes/assetLibraryHeaderSettings");
+
 
 //going to express now
 const app = express();
@@ -195,7 +197,7 @@ app.use((req, res, next) => {
     return next();
   }
   // For other requests, use JSON parser
-  express.json({ limit: "50mb" })(req, res, next);
+  express.json({ limit: "100mb" })(req, res, next);
 });
 
 // Gzip compression — reduces response sizes by 60-80%
@@ -294,6 +296,9 @@ app.use("/api/trademarks", trademarksRoutes);
 app.use("/api/dropbox", dropboxRoutes);
 app.use("/api/shopping-lists", shoppingListsRoutes);
 app.use("/api/email-accounts", emailAccountsRoutes);
+app.use("/api/system-settings", systemSettingsRoutes);
+app.use("/api/asset-library-header-settings", assetLibraryHeaderSettingsRoutes);
+
 
 app.use(notFoundHandler);
 app.use(errorHandler);
