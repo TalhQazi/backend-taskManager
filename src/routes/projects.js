@@ -507,13 +507,7 @@ router.get("/:id", requireAuth, async (req, res, next) => {
                   attachmentNote: 1,
                   attachment: {
                     fileName: { $ifNull: ["$attachment.fileName", ""] },
-                    url: { 
-                      $cond: {
-                        if: { $eq: [{ $substrCP: [{ $ifNull: ["$attachment.url", ""] }, 0, 5] }, "data:"] },
-                        then: "",
-                        else: { $ifNull: ["$attachment.url", ""] }
-                      }
-                    },
+                    url: { $ifNull: ["$attachment.url", ""] },
                     mimeType: { $ifNull: ["$attachment.mimeType", ""] },
                     size: { $ifNull: ["$attachment.size", 0] },
                   },
@@ -523,13 +517,7 @@ router.get("/:id", requireAuth, async (req, res, next) => {
                       as: "att",
                       in: {
                         fileName: "$$att.fileName",
-                        url: {
-                          $cond: {
-                            if: { $eq: [{ $substrCP: [{ $ifNull: ["$$att.url", ""] }, 0, 5] }, "data:"] },
-                            then: "",
-                            else: { $ifNull: ["$$att.url", ""] }
-                          }
-                        },
+                        url: { $ifNull: ["$$att.url", ""] },
                         mimeType: "$$att.mimeType",
                         size: "$$att.size",
                         uploadedAt: "$$att.uploadedAt",

@@ -51,6 +51,16 @@ function escapeRegExp(s) {
   return String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+function toESTHhmm(d = new Date()) {
+  // America/New_York handles EST/EDT daylight saving automatically
+  return d.toLocaleTimeString("en-US", {
+    timeZone: "America/New_York",
+    hour12: false,
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
 function getDayRange(d = new Date()) {
   const start = new Date(d);
   start.setHours(0, 0, 0, 0);
@@ -262,7 +272,7 @@ router.post("/me/clock-in", requireAuth, async (req, res, next) => {
     }
 
     const now = new Date();
-    const hhmm = now.toTimeString().slice(0, 5);
+    const hhmm = toESTHhmm(now);
 
     const created = await TimeEntry.create({
       userId: String(user._id),
@@ -308,7 +318,7 @@ router.post("/me/clock-out", requireAuth, async (req, res, next) => {
 
     const now = new Date();
     entry.clockOutAt = now;
-    entry.clockOut = now.toTimeString().slice(0, 5);
+    entry.clockOut = toESTHhmm(now);
     entry.status = "complete";
     await entry.save();
 
@@ -830,11 +840,7 @@ router.post("/me/clock-out-with-scrum", requireAuth, async (req, res, next) => {
     }
 
     const now = new Date();
-    const clockOutTime = now.toLocaleTimeString("en-US", {
-      hour12: false,
-      hour: "2-digit",
-      minute: "2-digit",
-    });
+    const clockOutTime = toESTHhmm(now);
 
     // Calculate total hours
     let totalHours = 0;
