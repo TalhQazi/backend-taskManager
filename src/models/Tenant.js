@@ -18,9 +18,6 @@ const tenantSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-tenantSchema.index({ name: 1 });
-tenantSchema.index({ status: 1 });
-
 tenantSchema.pre("save", function preSave(next) {
   if (typeof this.name === "string") this.name = this.name.trim();
   if (typeof this.email === "string") this.email = this.email.trim().toLowerCase();

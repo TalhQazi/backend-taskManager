@@ -189,6 +189,13 @@ router.get("/", requireAuth, async (req, res, next) => {
 
       const userById = new Map(users.map((u) => [String(u._id), u]));
 
+      // Fetch avatars from Settings for these users
+      const Settings = require("../models/Settings");
+      const settingsDocs = userIds.length
+        ? await Settings.find({ userId: { $in: userIds } }, { userId: 1, avatarUrl: 1, avatarDataUrl: 1 }).lean()
+        : [];
+      const avatarByUserId = new Map(settingsDocs.map((s) => [String(s.userId), s.avatarDataUrl || s.avatarUrl || ""]));
+
       const emails = Array.from(
         new Set(
           users
@@ -198,10 +205,34 @@ router.get("/", requireAuth, async (req, res, next) => {
       );
 
       const emps = emails.length
-        ? await Employee.find({ email: { $in: emails } }, { name: 1, email: 1 }).lean()
+        ? await Employee.find({ email: { $in: emails } }, { name: 1, email: 1, initials: 1 }).lean()
         : [];
 
       const employeeByEmail = new Map(emps.map((e) => [String(e.email || "").trim().toLowerCase(), e]));
+
+      // Also resolve avatars for entries where userId doesn't match a User (e.g. employee entries)
+      // by looking up the employee directly by name and finding their User by email.
+      const employeeNames = Array.from(
+        new Set(items.map((e) => String(e.employee || "").trim()).filter(Boolean))
+      );
+      const empsByName = employeeNames.length
+        ? await Employee.find({ name: { $in: employeeNames } }, { name: 1, email: 1, initials: 1 }).lean()
+        : [];
+      const employeeByName = new Map(empsByName.map((e) => [String(e.name || "").trim().toLowerCase(), e]));
+
+      const empEmailsForAvatar = Array.from(
+        new Set(empsByName.map((e) => String(e.email || "").trim().toLowerCase()).filter(Boolean))
+      );
+      const usersByEmpEmail = empEmailsForAvatar.length
+        ? await User.find({ email: { $in: empEmailsForAvatar } }, { _id: 1, email: 1 }).lean()
+        : [];
+      const emailToUserId = new Map(usersByEmpEmail.map((u) => [String(u.email || "").trim().toLowerCase(), String(u._id)]));
+
+      const empUserIds = Array.from(new Set(Array.from(emailToUserId.values())));
+      const empSettingsDocs = empUserIds.length
+        ? await Settings.find({ userId: { $in: empUserIds } }, { userId: 1, avatarUrl: 1, avatarDataUrl: 1 }).lean()
+        : [];
+      const avatarByEmpUserId = new Map(empSettingsDocs.map((s) => [String(s.userId), s.avatarDataUrl || s.avatarUrl || ""]));
 
       const enriched = items.map((e) => {
         const uid = String(e.userId || "").trim();
@@ -209,8 +240,27 @@ router.get("/", requireAuth, async (req, res, next) => {
         const email = String(user?.email || "").trim().toLowerCase();
         const emp = email ? employeeByEmail.get(email) : null;
         const resolved = employeeDisplayName(emp) || userDisplayName(user);
+
+        // Resolve avatar: direct user settings → entry avatar → employee initials
+        let resolvedAvatar = String(avatarByUserId.get(uid) || e.avatar || emp?.initials || "").trim();
+
+        // If still empty, try looking up employee by name and finding their user avatar
+        if (!resolvedAvatar) {
+          const empByName = employeeByName.get(String(e.employee || "").trim().toLowerCase());
+          if (empByName) {
+            const empEmail = String(empByName.email || "").trim().toLowerCase();
+            const empUserId = empEmail ? emailToUserId.get(empEmail) : null;
+            if (empUserId) {
+              resolvedAvatar = String(avatarByEmpUserId.get(empUserId) || "").trim();
+            }
+            if (!resolvedAvatar) {
+              resolvedAvatar = String(empByName.initials || "").trim();
+            }
+          }
+        }
+
         if (!resolved) return withId(e);
-        return withId({ ...e, employee: resolved });
+        return withId({ ...e, employee: resolved, avatar: resolvedAvatar });
       });
 
       // Compliance evaluation (partial - don't block list query if it fails)

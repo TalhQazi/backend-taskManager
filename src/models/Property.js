@@ -18,9 +18,6 @@ const propertySchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-propertySchema.index({ name: 1 });
-propertySchema.index({ status: 1 });
-
 propertySchema.pre("save", function preSave(next) {
   if (typeof this.name === "string") this.name = this.name.trim();
   if (typeof this.street === "string") this.street = this.street.trim();
