@@ -48,6 +48,7 @@ const notesRoutes = require("./routes/notes");
 const assetLibraryRoutes = require("./routes/assetLibrary");
 const contributorsRoutes = require("./routes/contributors");
 const eodReportsRoutes = require("./routes/eodReports");
+const emailAccountsRoutes = require("./routes/emailAccounts");
 const uiPreferencesRoutes = require("./routes/uiPreferences");
 const vendorCategoriesRoutes = require("./routes/vendorCategories");
 const trademarksRoutes = require("./routes/trademarks");
