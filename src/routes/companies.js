@@ -80,8 +80,8 @@ const updateSchema = createSchema.partial();
 function withId(doc) {
   if (!doc) return doc;
   const obj = doc.toObject ? doc.toObject() : doc;
-  const { _id, __v, ...rest } = obj;
-  return { ...rest, id: String(_id) };
+  const { __v, ...rest } = obj;
+  return { ...rest, _id: String(rest._id), id: String(rest._id) };
 }
 
 // Get all companies

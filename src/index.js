@@ -54,6 +54,11 @@ const trademarksRoutes = require("./routes/trademarks");
 const dropboxRoutes = require("./routes/dropbox");
 const shoppingListsRoutes = require("./routes/shoppingLists");
 const emailAccountsRoutes = require("./routes/emailAccounts");
+const tenantsRoutes = require("./routes/tenants");
+const propertiesRoutes = require("./routes/properties");
+const paymentPlansRoutes = require("./routes/paymentPlans");
+const paymentScheduleRoutes = require("./routes/paymentSchedule");
+const { startPaymentNotificationScheduler } = require("./lib/paymentNotifications");
 
 //going to express now
 const app = express();
@@ -294,6 +299,10 @@ app.use("/api/trademarks", trademarksRoutes);
 app.use("/api/dropbox", dropboxRoutes);
 app.use("/api/shopping-lists", shoppingListsRoutes);
 app.use("/api/email-accounts", emailAccountsRoutes);
+app.use("/api/tenants", tenantsRoutes);
+app.use("/api/properties", propertiesRoutes);
+app.use("/api/payment-plans", paymentPlansRoutes);
+app.use("/api/payment-schedule", paymentScheduleRoutes);
 
 app.use(notFoundHandler);
 app.use(errorHandler);
@@ -311,6 +320,7 @@ connectDb()
     httpServer.listen(port, () => {
       console.log(`Backend listening on http://localhost:${port}`);
       console.log(`WebSocket server ready`);
+      startPaymentNotificationScheduler();
     });
   })
   .catch((err) => {
