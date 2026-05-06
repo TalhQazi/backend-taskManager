@@ -4,6 +4,7 @@ const multer = require("multer");
 
 const Message = require("../models/Message");
 const Employee = require("../models/Employee");
+const User = require("../models/User");
 const { requireAuth } = require("../middleware/auth");
 const { encrypt, decrypt } = require("../lib/encryption");
 const { checkAndFlagOffTheClock } = require("../lib/offTheClockWork");
@@ -205,6 +206,14 @@ router.get("/conversations/:user", requireAuth, async (req, res, next) => {
     // Get all employees for reference
     const employees = await Employee.find().lean();
 
+    // Also include non-employee system users (admin/super-admin/manager) as chat contacts
+    const staffUsers = await User.find(
+      {
+        role: { $in: ["super-admin", "admin", "manager"] },
+      },
+      { name: 1, username: 1, email: 1, role: 1 }
+    ).lean();
+
     // Group by conversation partner
     const conversationMap = new Map();
 
@@ -224,6 +233,36 @@ router.get("/conversations/:user", requireAuth, async (req, res, next) => {
           unreadCount: 0
         });
       }
+    });
+
+    // Initialize with staff (super-admin/admin/manager)
+    staffUsers.forEach((u) => {
+      const displayName = String(u.username || u.name || u.email || "").trim();
+      if (!displayName) return;
+      if (displayName === user) return;
+      if (conversationMap.has(displayName)) return;
+
+      const email = String(u.email || "").trim();
+      const initials = displayName
+        .split(" ")
+        .filter(Boolean)
+        .map((n) => n[0])
+        .slice(0, 2)
+        .join("")
+        .toUpperCase();
+
+      conversationMap.set(displayName, {
+        employee: {
+          id: String(u._id),
+          name: displayName,
+          email,
+          department: String(u.role || "").trim(),
+          status: "active",
+          initials: initials || "U",
+        },
+        lastMessage: null,
+        unreadCount: 0,
+      });
     });
 
     // Process messages
