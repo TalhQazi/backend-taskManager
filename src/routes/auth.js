@@ -4,6 +4,7 @@ const jwt = require("jsonwebtoken");
 const { z } = require("zod");
 
 const User = require("../models/User");
+const ClearHireProfile = require("../models/ClearHireProfile");
 const { requireAuth } = require("../middleware/auth");
 const { logLoginSuccess, logLoginFailure } = require("../middleware/auditLog");
 const ActivityLog = require("../models/ActivityLog");
@@ -68,11 +69,17 @@ router.post("/login", async (req, res, next) => {
     // Log successful login
     await logLoginSuccess(user, req);
 
+    // Fetch ClearHire status for the frontend
+    const clearHireProfile = await ClearHireProfile.findOne({ userId: user._id })
+      .select("status riskScore")
+      .lean();
+
     return res.json({
       item: {
         token,
         role: user.role,
         username: user.username,
+        clearHireStatus: clearHireProfile?.status || null,
       },
     });
   } catch (err) {
@@ -132,12 +139,18 @@ router.post("/employee-login", async (req, res, next) => {
 
     await logLoginSuccess(user, req);
 
+    // Fetch ClearHire status for the frontend
+    const clearHireProfile = await ClearHireProfile.findOne({ userId: user._id })
+      .select("status riskScore")
+      .lean();
+
     return res.json({
       item: {
         token,
         role: user.role,
         username: user.username,
         name: user.name || user.username,
+        clearHireStatus: clearHireProfile?.status || null,
       },
     });
   } catch (err) {
