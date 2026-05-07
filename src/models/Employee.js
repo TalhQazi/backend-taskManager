@@ -16,6 +16,9 @@ const EmployeeSchema = new mongoose.Schema(
     shift: { type: String, default: "" },
     hireDate: { type: String, default: "" },
     joinDate: { type: Date },
+    department: { type: String, default: "" },
+    userRole: { type: String, default: "" },
+    userStatus: { type: String, default: "active" },
     passwordHash: { type: String, default: "" },
   },
   { timestamps: true }

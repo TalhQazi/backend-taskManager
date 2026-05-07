@@ -33,6 +33,9 @@ const createSchema = z.object({
   shift: z.string().optional().default(""),
   hireDate: z.string().optional().default(""),
   joinDate: z.union([z.string(), z.date()]).optional(),
+  department: z.string().optional().default(""),
+  userRole: z.string().optional().default(""),
+  userStatus: z.string().optional().default("active"),
   password: z.string().min(1),
 });
 
