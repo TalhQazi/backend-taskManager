@@ -4,6 +4,7 @@ const jwt = require("jsonwebtoken");
 const { z } = require("zod");
 
 const User = require("../models/User");
+const Employee = require("../models/Employee");
 const { requireAuth } = require("../middleware/auth");
 const { logLoginSuccess, logLoginFailure } = require("../middleware/auditLog");
 const ActivityLog = require("../models/ActivityLog");
@@ -34,27 +35,63 @@ router.post("/login", async (req, res, next) => {
       return res.status(400).json({ error: { message: "Invalid payload" } });
     }
 
-    const user = await User.findOne({
+    // 1. Try User Management collection first
+    let authRecord = null;
+    let authSource = "user"; // "user" | "employee"
+
+    const userRecord = await User.findOne({
       $or: [{ username: identifier }, { email: identifier }],
     }).lean();
-    if (!user) {
-      // Log failed login - user not found
+
+    if (userRecord) {
+      authRecord = {
+        _id: userRecord._id,
+        passwordHash: userRecord.passwordHash || "",
+        role: userRecord.role,
+        username: userRecord.username,
+        email: userRecord.email,
+        name: userRecord.name || userRecord.username,
+      };
+      authSource = "user";
+    } else {
+      // 2. Fall back to Employee Directory (match by email only)
+      const employeeRecord = await Employee.findOne({ email: identifier }).lean();
+      if (employeeRecord) {
+        const role = String(employeeRecord.userRole || "").trim();
+        authRecord = {
+          _id: employeeRecord._id,
+          passwordHash: employeeRecord.passwordHash || "",
+          role: role,
+          username: employeeRecord.email,
+          email: employeeRecord.email,
+          name: employeeRecord.name,
+        };
+        authSource = "employee";
+      }
+    }
+
+    if (!authRecord) {
       await logLoginFailure(identifier, req, "User not found");
       return res.status(401).json({ error: { message: "Invalid credentials" } });
     }
 
-    // First-login check: if no password has been set yet, prompt setup
-    if (!user.passwordHash || user.passwordHash.trim() === "") {
+    // Role not configured — instruct to contact admin
+    if (!authRecord.role) {
+      return res.json({ roleNotDefined: true });
+    }
+
+    // First-login: no password set yet — prompt one-time setup
+    if (!authRecord.passwordHash || authRecord.passwordHash.trim() === "") {
       return res.json({
         needsPasswordSetup: true,
-        identifier: user.email || user.username,
+        identifier: authRecord.email || authRecord.username,
+        source: authSource,
       });
     }
 
-    const ok = await bcrypt.compare(password, user.passwordHash);
+    const ok = await bcrypt.compare(password, authRecord.passwordHash);
     if (!ok) {
-      // Log failed login - wrong password
-      await logLoginFailure(user.username, req, "Invalid password");
+      await logLoginFailure(authRecord.username, req, "Invalid password");
       return res.status(401).json({ error: { message: "Invalid credentials" } });
     }
 
@@ -65,24 +102,24 @@ router.post("/login", async (req, res, next) => {
 
     const token = jwt.sign(
       {
-        sub: String(user._id),
-        role: user.role,
-        username: user.username,
-        name: user.name || user.username,
+        sub: String(authRecord._id),
+        role: authRecord.role,
+        username: authRecord.username,
+        name: authRecord.name,
+        source: authSource,
       },
       secret,
       { expiresIn: "7d" }
     );
 
-    // Log successful login
-    await logLoginSuccess(user, req);
+    await logLoginSuccess(authRecord, req);
 
     return res.json({
       item: {
         token,
-        role: user.role,
-        username: user.username,
-        name: user.name || user.username,
+        role: authRecord.role,
+        username: authRecord.username,
+        name: authRecord.name,
       },
     });
   } catch (err) {
@@ -98,22 +135,31 @@ router.post("/setup-password", async (req, res, next) => {
       return res.status(400).json({ error: { message: "Identifier and password (min 6 characters) are required" } });
     }
 
-    const user = await User.findOne({
+    // Try User collection first, then Employee collection
+    const userRecord = await User.findOne({
       $or: [{ email: identifier }, { username: identifier }],
     }).lean();
 
-    if (!user) {
-      return res.status(404).json({ error: { message: "User not found" } });
+    if (userRecord) {
+      if (userRecord.passwordHash && userRecord.passwordHash.trim() !== "") {
+        return res.status(403).json({ error: { message: "Password has already been set. Please use the login form." } });
+      }
+      const passwordHash = await bcrypt.hash(String(newPassword), 10);
+      await User.findByIdAndUpdate(userRecord._id, { passwordHash });
+      return res.json({ ok: true, message: "Password set successfully. You can now log in." });
     }
 
-    if (user.passwordHash && user.passwordHash.trim() !== "") {
-      return res.status(403).json({ error: { message: "Password has already been set. Please use the login form." } });
+    const employeeRecord = await Employee.findOne({ email: identifier }).lean();
+    if (employeeRecord) {
+      if (employeeRecord.passwordHash && employeeRecord.passwordHash.trim() !== "") {
+        return res.status(403).json({ error: { message: "Password has already been set. Please use the login form." } });
+      }
+      const passwordHash = await bcrypt.hash(String(newPassword), 10);
+      await Employee.findByIdAndUpdate(employeeRecord._id, { passwordHash });
+      return res.json({ ok: true, message: "Password set successfully. You can now log in." });
     }
 
-    const passwordHash = await bcrypt.hash(String(newPassword), 10);
-    await User.findByIdAndUpdate(user._id, { passwordHash });
-
-    return res.json({ ok: true, message: "Password set successfully. You can now log in." });
+    return res.status(404).json({ error: { message: "Account not found" } });
   } catch (err) {
     return next(err);
   }
