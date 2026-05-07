@@ -213,6 +213,16 @@ router.get("/:id", requireAuth, async (req, res, next) => {
   }
 });
 
+router.get("/:id/photo", requireAuth, async (req, res, next) => {
+  try {
+    const item = await Vehicle.findById(req.params.id).select("tagPhotoDataUrl tagPhotoFileName").lean();
+    if (!item) return res.status(404).json({ error: { message: "Not found" } });
+    return res.json({ photo: item.tagPhotoDataUrl || "", fileName: item.tagPhotoFileName || "" });
+  } catch (err) {
+    return next(err);
+  }
+});
+
 // Backfill missing frontendId (admin-only)
 router.post("/backfill-frontend-ids", requireAuth, requireRole(["super-admin", "admin"]), async (req, res, next) => {
   try {

@@ -146,22 +146,20 @@ router.get("/", requireAuth, async (req, res, next) => {
 
     const cacheKey = `messages:list:${user || 'all'}:${sender || 'any'}:${recipient || 'any'}:${type || 'any'}:p${page}:l${limit}:${req.user?.sub || ''}`;
     
-    const result = await cacheWrap(cacheKey, async () => {
-      const [items, total] = await Promise.all([
-        Message.find(query).sort({ timestamp: -1, createdAt: -1 }).skip(skip).limit(limit).lean(),
-        Message.countDocuments(query),
-      ]);
+    const [items, total] = await Promise.all([
+      Message.find(query).sort({ timestamp: -1, createdAt: -1 }).skip(skip).limit(limit).lean(),
+      Message.countDocuments(query),
+    ]);
 
-      const currentUser = String(req.user?.username || req.user?.name || "").trim();
-      const enriched = items.map((x) => {
-        const doc = withId(decryptOut(x));
-        const readByList = Array.isArray(x.readBy) ? x.readBy : [];
-        const isReadByMe = currentUser && readByList.includes(currentUser);
-        return { ...doc, status: isReadByMe ? "read" : "sent" };
-      });
+    const currentUser = String(req.user?.username || req.user?.name || "").trim();
+    const enriched = items.map((x) => {
+      const doc = withId(decryptOut(x));
+      const readByList = Array.isArray(x.readBy) ? x.readBy : [];
+      const isReadByMe = currentUser && readByList.includes(currentUser);
+      return { ...doc, status: isReadByMe ? "read" : "sent" };
+    });
 
-      return paginatedResponse(enriched, total, page, limit);
-    }, 15);
+    const result = paginatedResponse(enriched, total, page, limit);
 
     res.json(result);
   } catch (err) {
