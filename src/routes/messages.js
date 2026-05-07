@@ -302,7 +302,7 @@ router.post("/mark-read", requireAuth, async (req, res, next) => {
     );
 
     // Invalidate message caches
-    cacheDel("messages:list:*").catch(() => {});
+    await cacheDel("messages:list:*").catch(() => {});
 
     res.json({ success: true, message: "Messages marked as read" });
   } catch (err) {
@@ -403,7 +403,7 @@ router.post("/:id/mark-read", requireAuth, async (req, res, next) => {
     });
 
     // Invalidate message caches
-    cacheDel("messages:list:*").catch(() => {});
+    await cacheDel("messages:list:*").catch(() => {});
 
     return res.json({ success: true });
   } catch (err) {
@@ -445,7 +445,7 @@ router.post("/mark-all-read", requireAuth, async (req, res, next) => {
     );
 
     // Invalidate message caches
-    cacheDel("messages:list:*").catch(() => {});
+    await cacheDel("messages:list:*").catch(() => {});
 
     return res.json({ success: true });
   } catch (err) {
@@ -488,7 +488,7 @@ router.delete("/:id", requireAuth, async (req, res, next) => {
     const deleted = await Message.findByIdAndDelete(req.params.id).lean();
     if (!deleted) return res.status(404).json({ error: { message: "Message not found" } });
     
-    cacheDel("messages:list:*").catch(() => {});
+    await cacheDel("messages:list:*").catch(() => {});
     
     res.status(204).send();
   } catch (err) {
