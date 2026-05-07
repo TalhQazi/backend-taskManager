@@ -74,7 +74,6 @@ router.get("/", requireAuth, async (_req, res, next) => {
   try {
     const result = await cacheWrap("locations:list", async () => {
       const items = await Location.find()
-        .select("-photoDataUrl -photoFileName")
         .sort({ name: 1 })
         .lean();
       return { items: items.map(withId) };
