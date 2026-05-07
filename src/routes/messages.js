@@ -6,6 +6,8 @@ const Message = require("../models/Message");
 const Employee = require("../models/Employee");
 const { requireAuth } = require("../middleware/auth");
 const { encrypt, decrypt } = require("../lib/encryption");
+const { createNotification } = require("../utils/notifications");
+const User = require("../models/User");
 const { checkAndFlagOffTheClock } = require("../lib/offTheClockWork");
 const { parsePagination, paginatedResponse } = require("../lib/pagination");
 const { cacheWrap, cacheDel } = require("../lib/cache");
@@ -124,19 +126,19 @@ router.get("/", requireAuth, async (req, res, next) => {
           // super-admin sees all broadcast notifications
         } else {
           const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-          
-          // Build candidates: include own role + related roles if admin/manager
-          let candidates = [role, username, userId].filter(Boolean);
-          
-          // Admin and manager can see each other's notifications
-          if (role === "admin" || role === "manager") {
+
+          // Build candidates: specific username/userId only.
+          // Managers only see notifications explicitly targeted at them.
+          let candidates = [username, userId].filter(Boolean);
+
+          // Admins can also see notifications targeted at "admin" role
+          if (role === "admin") {
             candidates.push("admin");
-            candidates.push("manager");
           }
-          
+
           // Remove duplicates
           candidates = [...new Set(candidates)];
-          
+
           query.$or = candidates.map((c) => ({
             recipient: { $regex: new RegExp(`(^|,)${escapeRegex(c)}(,|$)`, "i") }
           }));
@@ -378,7 +380,24 @@ router.post("/", requireAuth, async (req, res, next) => {
         activityType: "message_create",
         metadata: { recipient: parsed.data.recipient, type: parsed.data.type },
       }),
-      cacheDel("messages:list:*")
+      cacheDel("messages:list:*"),
+      // Create a notification for the message recipient
+      (async () => {
+        const recipientUser = await User.findOne({ username: parsed.data.recipient }).lean();
+        const isManager = recipientUser && ["manager", "admin", "super-admin"].includes(recipientUser.role);
+        if (isManager) {
+          await createNotification({
+            actor: parsed.data.sender,
+            actorRole: String(req.user?.role || ""),
+            action: "sent you a",
+            resourceType: "message",
+            resourceName: "",
+            assignees: [parsed.data.recipient],
+            details: content.length > 60 ? content.substring(0, 60) + "..." : content,
+            resourceId: String(created._id),
+          });
+        }
+      })(),
     ]).catch(() => {});
 
     if (io) {
@@ -418,19 +437,19 @@ router.post("/mark-all-read", requireAuth, async (req, res, next) => {
     let query = { type: "broadcast" };
     if (role !== "super-admin") {
       const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-      
-      // Build candidates: include own role + related roles if admin/manager
-      let candidates = [role, currentUser].filter(Boolean);
-      
-      // Admin and manager can see each other's notifications
-      if (role === "admin" || role === "manager") {
+
+      // Build candidates: specific username only.
+      // Managers only mark their own targeted notifications as read.
+      let candidates = [currentUser].filter(Boolean);
+
+      // Admins can also mark notifications targeted at "admin" role
+      if (role === "admin") {
         candidates.push("admin");
-        candidates.push("manager");
       }
-      
+
       // Remove duplicates
       candidates = [...new Set(candidates)];
-      
+
       query.$or = candidates.map((c) => ({
         recipient: { $regex: new RegExp(`(^|,)${escapeRegex(c)}(,|$)`, "i") }
       }));

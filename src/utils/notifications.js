@@ -1,11 +1,45 @@
 const Message = require("../models/Message");
+const TeamLeadMapping = require("../models/TeamLeadMapping");
+const User = require("../models/User");
+
+async function resolveManagersFromAssignees(assignees) {
+  if (!Array.isArray(assignees) || assignees.length === 0) return [];
+
+  const names = assignees.map((a) => String(a).trim()).filter(Boolean);
+  if (names.length === 0) return [];
+
+  const managers = new Set();
+
+  // Find which assignees are already managers / admins
+  const users = await User.find({
+    username: { $in: names },
+    role: { $in: ["manager", "admin", "super-admin"] },
+  }).lean();
+  users.forEach((u) => managers.add(u.username));
+
+  // For remaining employees, resolve via TeamLeadMapping
+  const managerNames = users.map((u) => u.username);
+  const employeeNames = names.filter((n) => !managerNames.includes(n));
+
+  if (employeeNames.length > 0) {
+    const mappings = await TeamLeadMapping.find({
+      user: { $in: employeeNames },
+    }).lean();
+    mappings.forEach((m) => {
+      if (m.teamLead) managers.add(m.teamLead);
+    });
+  }
+
+  return Array.from(managers);
+}
 
 /**
  * Create a notification with targeted audience.
  *
  * Audience rules:
  *  - "super-admin" role always receives every notification.
- *  - For task/project create: also delivered to the actor (creator) and all assignees.
+ *  - For task/project create: also delivered to the actor (creator) and the
+ *    manager(s) who own the assignees (resolved via TeamLeadMapping).
  *  - No-one else sees it.
  *
  * @param {Object}   options
@@ -14,7 +48,7 @@ const Message = require("../models/Message");
  * @param {string}   options.action       - "created" | "updated" | "deleted" …
  * @param {string}   options.resourceType - "task" | "project" | …
  * @param {string}   options.resourceName
- * @param {string[]} [options.assignees]  - usernames being assigned
+ * @param {string[]} [options.assignees]  - usernames being assigned (employees or managers)
  * @param {string}   [options.details]
  * @param {string}   [options.resourceId]
  * @param {string}   [options.link]
@@ -39,12 +73,16 @@ async function createNotification({
     if (assignees.length > 0) content += ` — assigned to: ${assignees.join(", ")}`;
     if (details) content += ` (${details})`;
 
-    // Targeted recipients: all roles + actor + assignees (deduped)
-    const targetSet = new Set(["super-admin", "admin", "manager"]);
+    // Resolve assignees to their managing team leads
+    const managerRecipients = await resolveManagersFromAssignees(
+      Array.isArray(assignees) ? assignees : []
+    );
+
+    // Targeted recipients: super-admin + actor + resolved managers
+    const targetSet = new Set(["super-admin"]);
     if (actor) targetSet.add(String(actor).trim());
-    (Array.isArray(assignees) ? assignees : []).forEach((a) => {
-      if (a) targetSet.add(String(a).trim());
-    });
+    managerRecipients.forEach((m) => targetSet.add(m));
+
     const recipient = Array.from(targetSet).join(",");
 
     const notification = await Message.create({
