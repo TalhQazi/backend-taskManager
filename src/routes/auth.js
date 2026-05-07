@@ -43,6 +43,14 @@ router.post("/login", async (req, res, next) => {
       return res.status(401).json({ error: { message: "Invalid credentials" } });
     }
 
+    // First-login check: if no password has been set yet, prompt setup
+    if (!user.passwordHash || user.passwordHash.trim() === "") {
+      return res.json({
+        needsPasswordSetup: true,
+        identifier: user.email || user.username,
+      });
+    }
+
     const ok = await bcrypt.compare(password, user.passwordHash);
     if (!ok) {
       // Log failed login - wrong password
@@ -74,8 +82,38 @@ router.post("/login", async (req, res, next) => {
         token,
         role: user.role,
         username: user.username,
+        name: user.name || user.username,
       },
     });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// One-time password setup — only works when passwordHash is empty
+router.post("/setup-password", async (req, res, next) => {
+  try {
+    const { identifier, newPassword } = req.body;
+    if (!identifier || !newPassword || String(newPassword).length < 6) {
+      return res.status(400).json({ error: { message: "Identifier and password (min 6 characters) are required" } });
+    }
+
+    const user = await User.findOne({
+      $or: [{ email: identifier }, { username: identifier }],
+    }).lean();
+
+    if (!user) {
+      return res.status(404).json({ error: { message: "User not found" } });
+    }
+
+    if (user.passwordHash && user.passwordHash.trim() !== "") {
+      return res.status(403).json({ error: { message: "Password has already been set. Please use the login form." } });
+    }
+
+    const passwordHash = await bcrypt.hash(String(newPassword), 10);
+    await User.findByIdAndUpdate(user._id, { passwordHash });
+
+    return res.json({ ok: true, message: "Password set successfully. You can now log in." });
   } catch (err) {
     return next(err);
   }
