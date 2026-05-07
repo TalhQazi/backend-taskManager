@@ -148,7 +148,7 @@ router.get("/", requireAuth, async (req, res, next) => {
     
     const result = await cacheWrap(cacheKey, async () => {
       const [items, total] = await Promise.all([
-        Message.find(query).sort({ createdAt: -1 }).skip(skip).limit(limit).lean(),
+        Message.find(query).sort({ timestamp: -1, createdAt: -1 }).skip(skip).limit(limit).lean(),
         Message.countDocuments(query),
       ]);
 
