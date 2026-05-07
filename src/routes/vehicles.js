@@ -176,6 +176,7 @@ router.get("/", requireAuth, async (req, res, next) => {
     const result = await cacheWrap(cacheKey, async () => {
       const [items, total] = await Promise.all([
         Vehicle.find(query)
+          .select('-tagPhotoDataUrl')
           .sort({ name: 1 })
           .skip(skip)
           .limit(limit)
