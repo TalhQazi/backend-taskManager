@@ -402,6 +402,9 @@ router.post("/:id/mark-read", requireAuth, async (req, res, next) => {
       $addToSet: { readBy: currentUser },
     });
 
+    // Invalidate message caches
+    cacheDel("messages:list:*").catch(() => {});
+
     return res.json({ success: true });
   } catch (err) {
     next(err);
@@ -440,6 +443,9 @@ router.post("/mark-all-read", requireAuth, async (req, res, next) => {
       { ...query, readBy: { $ne: currentUser } },
       { $addToSet: { readBy: currentUser } }
     );
+
+    // Invalidate message caches
+    cacheDel("messages:list:*").catch(() => {});
 
     return res.json({ success: true });
   } catch (err) {
