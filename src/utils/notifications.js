@@ -2,32 +2,72 @@ const Message = require("../models/Message");
 const TeamLeadMapping = require("../models/TeamLeadMapping");
 const User = require("../models/User");
 
-async function resolveManagersFromAssignees(assignees) {
-  if (!Array.isArray(assignees) || assignees.length === 0) return [];
+async function resolveManagersFromAssignees(assignees, teamLead = "") {
+  if ((!Array.isArray(assignees) || assignees.length === 0) && !teamLead) return [];
 
-  const names = assignees.map((a) => String(a).trim()).filter(Boolean);
+  const names = (Array.isArray(assignees) ? assignees : [])
+    .map((a) => String(a).trim())
+    .filter(Boolean);
+  if (teamLead) names.push(String(teamLead).trim());
   if (names.length === 0) return [];
 
   const managers = new Set();
 
-  // Find which assignees are already managers / admins
-  const users = await User.find({
-    username: { $in: names },
+  // Step 1: Find managers/admins directly assigned (match by name OR username)
+  const directManagers = await User.find({
+    $or: [{ name: { $in: names } }, { username: { $in: names } }],
     role: { $in: ["manager", "admin", "super-admin"] },
   }).lean();
-  users.forEach((u) => managers.add(u.username));
+  directManagers.forEach((u) => managers.add(u.username));
 
-  // For remaining employees, resolve via TeamLeadMapping
-  const managerNames = users.map((u) => u.username);
-  const employeeNames = names.filter((n) => !managerNames.includes(n));
+  // Step 2: For remaining names, resolve via TeamLeadMapping
+  const matched = new Set(
+    directManagers.map((u) => u.name).concat(directManagers.map((u) => u.username))
+  );
+  const remaining = names.filter((n) => !matched.has(n));
 
-  if (employeeNames.length > 0) {
-    const mappings = await TeamLeadMapping.find({
-      user: { $in: employeeNames },
+  if (remaining.length > 0) {
+    // Gather all possible identifiers for remaining assignees
+    const identifierSet = new Set(remaining);
+
+    // Find corresponding Users for remaining names to get usernames/emails
+    const correspondingUsers = await User.find({
+      $or: [{ name: { $in: remaining } }, { username: { $in: remaining } }],
     }).lean();
-    mappings.forEach((m) => {
-      if (m.teamLead) managers.add(m.teamLead);
+    correspondingUsers.forEach((u) => {
+      identifierSet.add(u.name);
+      identifierSet.add(u.username);
+      if (u.email) identifierSet.add(u.email);
     });
+
+    // Find Employees for remaining names to get emails
+    const Employee = require("../models/Employee");
+    const employees = await Employee.find({ name: { $in: remaining } }).lean();
+    employees.forEach((emp) => {
+      identifierSet.add(emp.name);
+      if (emp.email) identifierSet.add(emp.email);
+    });
+
+    const identifiers = Array.from(identifierSet).filter(Boolean);
+    if (identifiers.length > 0) {
+      const mappings = await TeamLeadMapping.find({
+        user: { $in: identifiers },
+      }).lean();
+
+      // Resolve teamLead values back to usernames
+      const teamLeadValues = [...new Set(mappings.map((m) => m.teamLead).filter(Boolean))];
+      if (teamLeadValues.length > 0) {
+        const teamLeadUsers = await User.find({
+          $or: [
+            { username: { $in: teamLeadValues } },
+            { name: { $in: teamLeadValues } },
+            { email: { $in: teamLeadValues } },
+          ],
+          role: { $in: ["manager", "admin", "super-admin"] },
+        }).lean();
+        teamLeadUsers.forEach((u) => managers.add(u.username));
+      }
+    }
   }
 
   return Array.from(managers);
@@ -48,7 +88,8 @@ async function resolveManagersFromAssignees(assignees) {
  * @param {string}   options.action       - "created" | "updated" | "deleted" …
  * @param {string}   options.resourceType - "task" | "project" | …
  * @param {string}   options.resourceName
- * @param {string[]} [options.assignees]  - usernames being assigned (employees or managers)
+ * @param {string[]} [options.assignees]  - names/usernames being assigned (employees or managers)
+ * @param {string}   [options.teamLead]   - team lead name/username for the resource
  * @param {string}   [options.details]
  * @param {string}   [options.resourceId]
  * @param {string}   [options.link]
@@ -60,6 +101,7 @@ async function createNotification({
   resourceType,
   resourceName,
   assignees = [],
+  teamLead = "",
   details = "",
   resourceId = "",
   link = "",
@@ -75,7 +117,8 @@ async function createNotification({
 
     // Resolve assignees to their managing team leads
     const managerRecipients = await resolveManagersFromAssignees(
-      Array.isArray(assignees) ? assignees : []
+      Array.isArray(assignees) ? assignees : [],
+      teamLead
     );
 
     // Targeted recipients: super-admin + actor + resolved managers

@@ -234,6 +234,7 @@ router.post("/", requireAuth, async (req, res, next) => {
       resourceType: "project",
       resourceName: createdProject.name,
       assignees: Array.isArray(data.assignees) ? data.assignees : [],
+      teamLead: createdProject.teamLead || "",
       details: `Tasks: ${createdTasks.length}`,
       resourceId: String(createdProject._id),
     });
@@ -724,6 +725,8 @@ router.put("/:id", requireAuth, async (req, res, next) => {
       action: "updated",
       resourceType: "project",
       resourceName: updated.name,
+      assignees: Array.isArray(updated.assignees) ? updated.assignees : [],
+      teamLead: updated.teamLead || "",
       resourceId: String(updated._id),
     });
 
@@ -765,6 +768,8 @@ router.put("/:id/reassign", requireAuth, async (req, res, next) => {
       action: "reassigned",
       resourceType: "project",
       resourceName: project.name,
+      assignees: Array.isArray(project.assignees) ? project.assignees : [],
+      teamLead: project.teamLead || "",
       resourceId: String(req.params.id),
       details: `New assignees: ${assignees.join(", ")}`,
     });
@@ -862,6 +867,8 @@ router.delete("/:id", requireAuth, async (req, res, next) => {
       action: "archived",
       resourceType: "project",
       resourceName: project.name,
+      assignees: Array.isArray(project.assignees) ? project.assignees : [],
+      teamLead: project.teamLead || "",
       resourceId: String(project._id),
     });
 
