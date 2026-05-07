@@ -103,8 +103,9 @@ router.post("/employee-login", async (req, res, next) => {
       return res.status(401).json({ error: { message: "Invalid credentials" } });
     }
 
-    // Check if user is an employee
-    if (user.role !== "employee") {
+    // Check if user is an employee-type role (employee, coder, team-lead)
+    const employeeRoles = ["employee", "coder", "team-lead"];
+    if (!employeeRoles.includes(user.role)) {
       await logLoginFailure(user.username, req, "Not an employee account");
       return res.status(403).json({ error: { message: "This account is not authorized for employee portal. Please use admin/manager login." } });
     }
