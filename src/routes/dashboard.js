@@ -59,7 +59,8 @@ router.get("/summary", requireAuth, async (_req, res, next) => {
       entriesToday,
       vehicleTotal,
       patentTotal,
-      websiteTotal,
+      websiteActive,
+      websiteFuture,
       projectTotal,
       openBugReports
     ] = await Promise.all([
@@ -68,7 +69,8 @@ router.get("/summary", requireAuth, async (_req, res, next) => {
       TimeEntry.find({ date: { $gte: start, $lte: end } }).lean(),
       Vehicle.countDocuments(),
       Patent.countDocuments({ patentType: "filed" }),
-      Website.countDocuments(),
+      Website.countDocuments({ websiteType: "active" }),
+      Website.countDocuments({ websiteType: "future" }),
       Project.countDocuments(),
       require("../models/BugReport").countDocuments({ status: "open" })
     ]);
@@ -123,7 +125,8 @@ router.get("/summary", requireAuth, async (_req, res, next) => {
       avgHoursPerEmployee,
       vehicleTotal,
       patentTotal,
-      websiteTotal,
+      websiteActive,
+      websiteFuture,
       projectTotal,
       pendingBugs,
     });
