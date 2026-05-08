@@ -21,6 +21,17 @@ const ProjectSchema = new mongoose.Schema(
         uploadedAt: { type: Date, default: Date.now },
       },
     ],
+    dropboxAttachments: [
+      {
+        file_name: { type: String, required: true },
+        file_type: { type: String, default: "" },
+        file_size: { type: Number, default: 0 },
+        dropbox_file_id: { type: String, required: true },
+        dropbox_path: { type: String, required: true },
+        temporary_link: { type: String, default: "" },
+        created_at: { type: Date, default: Date.now },
+      },
+    ],
     createdByUserId: { type: String, default: "" },
     createdByUsername: { type: String, default: "" },
     createdByRole: { type: String, default: "" },
