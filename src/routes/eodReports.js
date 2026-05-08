@@ -194,6 +194,9 @@ router.get("/eod-reports", requireAuth, requireRole(["manager", "admin", "super-
           clockIn: timeEntry?.clockIn || formatTime(timeEntry?.clockInAt),
           clockOut: timeEntry?.clockOut || formatTime(timeEntry?.clockOutAt),
           totalHours: timeEntry?.totalHours,
+          aiSummary: report.aiSummary || "",
+          productivityScore: report.productivityScore,
+          flags: report.flags || [],
         };
       });
 
@@ -201,6 +204,101 @@ router.get("/eod-reports", requireAuth, requireRole(["manager", "admin", "super-
     }, 30);
 
     return res.json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /api/manager/eod-reports/:id - Get single EOD report by ID
+router.get("/eod-reports/:id", requireAuth, requireRole(["manager", "admin", "super-admin"]), async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const report = await EODReport.findById(id).lean();
+    if (!report) {
+      return res.status(404).json({ error: "EOD report not found" });
+    }
+
+    const timeEntry = report.timeEntryId
+      ? await TimeEntry.findById(report.timeEntryId).lean()
+      : null;
+
+    const item = {
+      id: String(report._id),
+      userId: report.userId,
+      employeeName: report.employeeName,
+      date: report.date,
+      rawInput: report.rawInput,
+      inputType: report.inputType,
+      status: report.status,
+      createdAt: report.createdAt,
+      clockIn: timeEntry?.clockIn || formatTime(timeEntry?.clockInAt),
+      clockOut: timeEntry?.clockOut || formatTime(timeEntry?.clockOutAt),
+      totalHours: timeEntry?.totalHours,
+      aiSummary: report.aiSummary || "",
+      productivityScore: report.productivityScore,
+      flags: report.flags || [],
+    };
+
+    res.json({ item });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /api/manager/time-entries - Get all employees' time entries for a date range
+router.get("/time-entries", requireAuth, requireRole(["manager", "admin", "super-admin"]), async (req, res, next) => {
+  try {
+    const { date, employeeId, page = 1, limit = 50 } = req.query;
+    const skip = (Number(page) - 1) * Number(limit);
+
+    let dateFilter = {};
+    if (date) {
+      const targetDate = new Date(date);
+      const start = new Date(targetDate);
+      start.setHours(0, 0, 0, 0);
+      const end = new Date(targetDate);
+      end.setHours(23, 59, 59, 999);
+      dateFilter = { date: { $gte: start, $lte: end } };
+    } else {
+      const today = new Date();
+      const start = new Date(today);
+      start.setHours(0, 0, 0, 0);
+      const end = new Date(today);
+      end.setHours(23, 59, 59, 999);
+      dateFilter = { date: { $gte: start, $lte: end } };
+    }
+
+    const filter = dateFilter;
+    if (employeeId) {
+      filter.employee = employeeId;
+    }
+
+    const [entries, total] = await Promise.all([
+      TimeEntry.find(filter)
+        .sort({ date: -1, clockInAt: -1 })
+        .skip(skip)
+        .limit(Number(limit))
+        .lean(),
+      TimeEntry.countDocuments(filter),
+    ]);
+
+    const items = entries.map((entry) => ({
+      id: String(entry._id),
+      userId: entry.userId,
+      employee: entry.employee,
+      avatar: entry.avatar,
+      date: entry.date,
+      clockIn: entry.clockIn,
+      clockOut: entry.clockOut,
+      clockInAt: entry.clockInAt,
+      clockOutAt: entry.clockOutAt,
+      breakTime: entry.breakTime,
+      totalHours: entry.totalHours,
+      status: entry.status,
+      location: entry.location,
+    }));
+
+    res.json({ items, total, page: Number(page), limit: Number(limit) });
   } catch (err) {
     next(err);
   }

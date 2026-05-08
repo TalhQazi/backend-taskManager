@@ -78,7 +78,7 @@ router.delete("/", requireAuth, requireRole(["super-admin", "admin"]), async (re
 router.get("/me", requireAuth, async (req, res, next) => {
   try {
     const role = String(req.user?.role || "").trim().toLowerCase();
-    if (!role || (role !== "team-lead" && role !== "admin" && role !== "super-admin" && role !== "employee")) {
+    if (!role || (role !== "team-lead" && role !== "admin" && role !== "super-admin" && role !== "employee" && role !== "manager")) {
       return res.status(403).json({ error: { message: "Forbidden" } });
     }
 
