@@ -4,6 +4,7 @@ const jwt = require("jsonwebtoken");
 const { z } = require("zod");
 
 const Employee = require("../models/Employee");
+const ClearHireProfile = require("../models/ClearHireProfile");
 const { requireAuth } = require("../middleware/auth");
 const { logLoginSuccess, logLoginFailure } = require("../middleware/auditLog");
 const ActivityLog = require("../models/ActivityLog");
@@ -91,12 +92,18 @@ router.post("/login", async (req, res, next) => {
 
     await logLoginSuccess({ _id: employee._id, username: employee.email, role, name: employee.name }, req);
 
+    // Fetch ClearHire status for the frontend
+    const clearHireProfile = await ClearHireProfile.findOne({ userId: employee._id })
+      .select("status riskScore")
+      .lean();
+
     return res.json({
       item: {
         token,
         role,
         username: employee.email,
         name: employee.name,
+        clearHireStatus: clearHireProfile?.status || null,
       },
     });
   } catch (err) {

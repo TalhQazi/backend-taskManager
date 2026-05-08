@@ -29,6 +29,7 @@ function determineAction(method, path, body) {
       'vendors': 'VENDOR_CREATE',
       'events': 'EVENT_CREATE',
       'onboarding': 'ONBOARDING_CREATE',
+      'clearhire': 'CLEARHIRE_SUBMIT',
     },
     PUT: {
       'users': 'USER_UPDATE',
@@ -42,6 +43,7 @@ function determineAction(method, path, body) {
       'vendors': 'VENDOR_UPDATE',
       'events': 'EVENT_UPDATE',
       'onboarding': 'ONBOARDING_UPDATE',
+      'clearhire': 'CLEARHIRE_RECHECK',
     },
     DELETE: {
       'users': 'USER_DELETE',
@@ -89,6 +91,7 @@ function determineResourceType(path) {
   if (normalizedPath.includes('/vendors')) return 'vendor';
   if (normalizedPath.includes('/events') || normalizedPath.includes('/schedules')) return 'event';
   if (normalizedPath.includes('/onboarding')) return 'onboarding';
+  if (normalizedPath.includes('/clearhire')) return 'clearhire';
   return 'system';
 }
 
