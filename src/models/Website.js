@@ -26,6 +26,14 @@ const websiteSchema = new mongoose.Schema(
       type: String,
       default: "",
     },
+    loginEmail: {
+      type: String,
+      default: "",
+    },
+    loginPassword: {
+      type: String,
+      default: "",
+    },
     status: {
       type: String,
       enum: ["Live", "Maintenance", "Development", "Offline"],

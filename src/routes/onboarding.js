@@ -1,7 +1,6 @@
 const express = require("express");
 const Onboarding = require("../models/Onboarding");
 const Employee = require("../models/Employee");
-const User = require("../models/User");
 const { requireAuth, requireRole } = require("../middleware/auth");
 const { createNotification } = require("../utils/notifications");
 
@@ -10,24 +9,12 @@ const router = express.Router();
 // Helper function to get employee context
 async function requireEmployeeSelf(req, res) {
   try {
-    const user = await User.findById(req.user.sub);
-    if (!user) {
-      res.status(404).json({ error: { message: "User not found" } });
-      return null;
-    }
-
-    // For managers, return user as employee (they don't have employee records)
-    if (user.role === "manager") {
-      return { user, employee: { ...user.toObject(), _id: user._id, name: user.name } };
-    }
-
-    const employee = await Employee.findOne({ email: user.email });
+    const employee = await Employee.findById(req.user.sub);
     if (!employee) {
       res.status(404).json({ error: { message: "Employee not found" } });
       return null;
     }
-
-    return { user, employee };
+    return { employee };
   } catch (err) {
     res.status(500).json({ error: { message: "Server error" } });
     return null;

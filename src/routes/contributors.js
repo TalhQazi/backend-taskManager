@@ -6,7 +6,7 @@ const Contributor = require("../models/Contributor");
 const Contribution = require("../models/Contribution");
 const Task = require("../models/Task");
 const Project = require("../models/Project");
-const User = require("../models/User");
+const Employee = require("../models/Employee");
 const contributionTracker = require("../utils/contributionTracker");
 
 // Get all contributors (Admin/Manager only)
@@ -42,15 +42,15 @@ router.get("/", requireAuth, requireRole(["admin", "super-admin", "manager"]), a
       .map(c => c.userId);
 
     if (userIdsWithoutNames.length > 0) {
-      const users = await User.find({ _id: { $in: userIdsWithoutNames } }).lean();
-      const userMap = new Map(users.map(u => [String(u._id), u]));
+      const emps = await Employee.find({ _id: { $in: userIdsWithoutNames } }).lean();
+      const empMap = new Map(emps.map(e => [String(e._id), e]));
 
       contributors = contributors.map(c => {
         if (!c.name || c.name === "Unknown") {
-          const user = userMap.get(c.userId);
-          if (user) {
-            c.name = user.name || user.username || user.email?.split('@')[0] || "Unknown";
-            c.email = c.email || user.email || "";
+          const emp = empMap.get(c.userId);
+          if (emp) {
+            c.name = emp.name || emp.email?.split('@')[0] || "Unknown";
+            c.email = c.email || emp.email || "";
           }
         }
         return c;
@@ -90,15 +90,15 @@ router.get("/top", requireAuth, async (req, res) => {
       .map(c => c.userId);
 
     if (userIdsWithoutNames.length > 0) {
-      const users = await User.find({ _id: { $in: userIdsWithoutNames } }).lean();
-      const userMap = new Map(users.map(u => [String(u._id), u]));
+      const emps = await Employee.find({ _id: { $in: userIdsWithoutNames } }).lean();
+      const empMap = new Map(emps.map(e => [String(e._id), e]));
 
       contributors = contributors.map(c => {
         if (!c.name || c.name === "Unknown") {
-          const user = userMap.get(c.userId);
-          if (user) {
-            c.name = user.name || user.username || user.email?.split('@')[0] || "Unknown";
-            c.email = c.email || user.email || "";
+          const emp = empMap.get(c.userId);
+          if (emp) {
+            c.name = emp.name || emp.email?.split('@')[0] || "Unknown";
+            c.email = c.email || emp.email || "";
           }
         }
         return c;

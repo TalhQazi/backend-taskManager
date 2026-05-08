@@ -6,6 +6,7 @@ const TaskSchema = new mongoose.Schema(
     description: { type: String, default: "" },
     projectId: { type: mongoose.Schema.Types.ObjectId, ref: "Project", required: false, index: true },
     assignees: { type: [String], default: [], index: true },
+    teamLead: { type: String, default: "", index: true },
     priority: { type: String, enum: ["high", "medium", "low"], default: "medium", index: true },
     status: { type: String, enum: ["pending", "in-progress", "completed", "overdue"], default: "pending", index: true },
     category: { type: String, enum: ["task", "bug", "feature", "maintenance"], default: "task", index: true },
@@ -60,6 +61,7 @@ const TaskSchema = new mongoose.Schema(
       },
     ],
     taskNumber: { type: Number, index: true },
+    executionPriority: { type: Number, default: null, index: true }, // Admin-only execution order priority
   },
   { timestamps: true }
 );

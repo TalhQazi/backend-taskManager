@@ -10,24 +10,34 @@ const AsanaComment = require("../models/AsanaComment");
 const AsanaAttachment = require("../models/AsanaAttachment");
 
 const { createAsanaClient, fetchAllPaginated, sleep } = require("./asanaClient");
-
-function ensureDir(p) {
-  fs.mkdirSync(p, { recursive: true });
-}
+const { uploadToS3 } = require("./s3");
 
 function safeFileName(name) {
   const v = String(name || "file");
   return v.replace(/[\\/:*?"<>|]/g, "_").slice(0, 180);
 }
 
-function pickUploadDir(originalName, mimeType) {
-  const n = String(originalName || "").toLowerCase();
-  const m = String(mimeType || "").toLowerCase();
-
-  if (m.startsWith("image/") || /\.(png|jpe?g|gif|webp|bmp)$/.test(n)) return "images";
-  if (m.startsWith("video/") || /\.(mp4|mov|avi|mkv|webm)$/.test(n)) return "videos";
-  if (m === "application/pdf" || /\.pdf$/.test(n)) return "pdfs";
-  return "files";
+function guessMimeType(fileName, headerMime) {
+  // If the header already has a reasonable value, use it
+  if (headerMime && !headerMime.includes("octet-stream") && !headerMime.includes("html")) {
+    return headerMime;
+  }
+  const ext = String(fileName || "").toLowerCase().split(".").pop();
+  const map = {
+    png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif",
+    webp: "image/webp", bmp: "image/bmp", svg: "image/svg+xml", ico: "image/x-icon",
+    pdf: "application/pdf", doc: "application/msword",
+    docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    xls: "application/vnd.ms-excel",
+    xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ppt: "application/vnd.ms-powerpoint",
+    pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    zip: "application/zip", rar: "application/x-rar-compressed",
+    mp4: "video/mp4", mov: "video/quicktime", avi: "video/x-msvideo",
+    mp3: "audio/mpeg", wav: "audio/wav",
+    txt: "text/plain", csv: "text/csv", json: "application/json",
+  };
+  return map[ext] || headerMime || "application/octet-stream";
 }
 
 async function importAsanaData({ token, workspaceId, onProgress }) {
@@ -130,7 +140,7 @@ async function importAsanaData({ token, workspaceId, onProgress }) {
       { delayMs: 600, pageSize: 100 }
     );
     tasks.push(...projectTasks.map((t) => ({ ...t, __projectGid: projectId })));
-    await sleep(600); // 600ms delay between each project
+    await sleep(600);
   }
   progress("tasks_fetch_done", { count: tasks.length });
   await sleep(200);
@@ -154,8 +164,6 @@ async function importAsanaData({ token, workspaceId, onProgress }) {
   progress("tasks_save_done");
   await sleep(200);
 
-  // subtasks are included via parent.gid, but Asana also has explicit endpoint.
-  // We'll fetch subtasks per task to satisfy the required sequence.
   progress("subtasks_fetch_start");
   const subtasks = [];
   for (const t of tasks) {
@@ -167,7 +175,7 @@ async function importAsanaData({ token, workspaceId, onProgress }) {
       { delayMs: 600, pageSize: 100 }
     );
     subtasks.push(...st.map((s) => ({ ...s, __parentGid: taskId })));
-    await sleep(600); // Sequential: one task at a time
+    await sleep(600);
   }
   progress("subtasks_fetch_done", { count: subtasks.length });
   await sleep(200);
@@ -205,7 +213,7 @@ async function importAsanaData({ token, workspaceId, onProgress }) {
       if (String(s.type) !== "comment") continue;
       comments.push({ ...s, __taskGid: taskId });
     }
-    await sleep(600); // Sequential: one task at a time
+    await sleep(600);
   }
   progress("comments_fetch_done", { count: comments.length });
   await sleep(200);
@@ -238,38 +246,25 @@ async function importAsanaData({ token, workspaceId, onProgress }) {
       { delayMs: 600, pageSize: 100 }
     );
     attachments.push(...atts.map((a) => ({ ...a, __taskGid: taskId })));
-    await sleep(600); // Sequential: one task at a time
+    await sleep(600);
   }
   progress("attachments_fetch_done", { count: attachments.length });
   await sleep(200);
 
-  const baseUploads = path.resolve(__dirname, "..", "..", "uploads");
+  // Check if S3 is configured
+  const hasS3 = !!(process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY && (process.env.AWS_S3_BUCKET_NAME || process.env.AWS_S3_BUCKET));
 
   progress("attachments_download_start");
   let downloaded = 0;
 
-  // Download attachments SEQUENTIALLY (one at a time) - no concurrency
   for (const a of attachments) {
     const asanaId = String(a.gid);
 
     const exists = await AsanaAttachment.findOne({ asanaId }).lean();
     if (exists?.filePath) {
-      // Check if the file on disk is valid (exists and not corrupted/tiny)
-      try {
-        const relativePath = exists.filePath.replace(/^\/uploads\//, "");
-        const absPath = path.join(baseUploads, relativePath);
-        const stat = fs.statSync(absPath);
-        // If file exists and is bigger than 5KB, it's likely valid — skip
-        if (stat.size > 5120) {
-          continue;
-        }
-        // File is suspiciously small (likely a saved error page) — re-download
-        console.log(`[ASANA-IMPORT] File ${exists.fileName} is only ${stat.size} bytes — re-downloading`);
-        // Delete the corrupted file
-        fs.unlinkSync(absPath);
-      } catch {
-        // File doesn't exist on disk — re-download
-        console.log(`[ASANA-IMPORT] File ${exists.fileName} missing from disk — re-downloading`);
+      // If already stored as S3 URL, skip
+      if (exists.filePath.includes("amazonaws.com")) {
+        continue;
       }
     }
 
@@ -295,26 +290,41 @@ async function importAsanaData({ token, workspaceId, onProgress }) {
     const fileName = safeFileName(a.name || `${asanaId}`);
 
     try {
-      // NOTE: Asana download_url is a full absolute URL (S3 etc).
-      // We must NOT use the Asana API client here because it prepends the API baseURL.
-      // Use raw axios instead so the full URL is used as-is.
+      // Download the file from Asana's download URL
       const response = await axios.get(downloadUrl, {
         responseType: "arraybuffer",
         timeout: 60000,
-        // Don't send Asana auth headers to S3 - it can cause 400 errors
       });
-      const mimeType = String(response.headers?.["content-type"] || "");
+      const headerMime = String(response.headers?.["content-type"] || "").split(";")[0].trim();
+      const mimeType = guessMimeType(fileName, headerMime);
       const size = Number(response.headers?.["content-length"] || 0) || Number(a.size || 0) || 0;
+      const buffer = Buffer.from(response.data);
 
-      const dirName = pickUploadDir(fileName, mimeType);
-      const dir = path.join(baseUploads, dirName);
-      ensureDir(dir);
+      let storedUrl = "";
 
-      const filePathAbs = path.join(dir, `${Date.now()}_${fileName}`);
-      fs.writeFileSync(filePathAbs, Buffer.from(response.data));
+      if (hasS3) {
+        // Upload to S3
+        try {
+          storedUrl = await uploadToS3(buffer, fileName, mimeType, "asana-imports");
+          console.log(`[ASANA-IMPORT] Uploaded to S3: ${fileName} -> ${storedUrl}`);
+        } catch (s3Err) {
+          console.error(`[ASANA-IMPORT] S3 upload failed for ${fileName}:`, s3Err.message);
+          storedUrl = "";
+        }
+      }
 
-      // store relative path so it can be served under /uploads
-      const relative = path.relative(baseUploads, filePathAbs).split(path.sep).join("/");
+      // Fallback: save to local disk if S3 upload failed or is not configured
+      if (!storedUrl) {
+        const baseUploads = path.resolve(__dirname, "..", "..", "uploads");
+        const dirName = mimeType.startsWith("image/") ? "images" : mimeType.startsWith("video/") ? "videos" : mimeType === "application/pdf" ? "pdfs" : "files";
+        const dir = path.join(baseUploads, dirName);
+        fs.mkdirSync(dir, { recursive: true });
+        const filePathAbs = path.join(dir, `${Date.now()}_${fileName}`);
+        fs.writeFileSync(filePathAbs, buffer);
+        const relative = path.relative(baseUploads, filePathAbs).split(path.sep).join("/");
+        storedUrl = `/uploads/${relative}`;
+        console.log(`[ASANA-IMPORT] Saved to disk (S3 unavailable): ${fileName} -> ${storedUrl}`);
+      }
 
       await AsanaAttachment.findOneAndUpdate(
         { asanaId },
@@ -323,7 +333,7 @@ async function importAsanaData({ token, workspaceId, onProgress }) {
             asanaId,
             taskAsanaId: String(a.__taskGid),
             fileName,
-            filePath: `/uploads/${relative}`,
+            filePath: storedUrl,
             mimeType,
             size,
           },
@@ -336,11 +346,9 @@ async function importAsanaData({ token, workspaceId, onProgress }) {
         progress("attachments_download_progress", { downloaded });
       }
     } catch (err) {
-      // Skip failed downloads, log but continue
       console.error(`Failed to download attachment ${asanaId}:`, err.message);
     }
 
-    // 600ms delay between each download - SEQUENTIAL
     await sleep(600);
   }
 

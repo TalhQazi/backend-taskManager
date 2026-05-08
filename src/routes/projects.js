@@ -6,7 +6,7 @@ const Project = require("../models/Project");
 const Task = require("../models/Task");
 const ProjectComment = require("../models/ProjectComment");
 const Settings = require("../models/Settings");
-const User = require("../models/User");
+const Employee = require("../models/Employee");
 const Archive = require("../models/Archive");
 const ActivityLog = require("../models/ActivityLog");
 const { requireAuth } = require("../middleware/auth");
@@ -97,6 +97,7 @@ const projectCreateSchema = z.object({
   name: z.string().min(1, "Project name is required"),
   description: z.string().optional().default(""),
   assignees: z.array(z.string()).optional().default([]),
+  teamLead: z.string().optional().default(""),
   logo: logoSchema,
   attachments: z.array(z.object({
     fileName: z.string().optional().default(""),
@@ -166,6 +167,7 @@ router.post("/", requireAuth, async (req, res, next) => {
       name: data.name,
       description: data.description || "",
       assignees: data.assignees || [],
+      teamLead: data.teamLead || "",
       logo: data.logo || { fileName: "", url: "", mimeType: "", size: 0 },
       attachments: data.attachments || [],
       dropboxAttachments: data.dropboxAttachments || [],
@@ -302,13 +304,93 @@ router.get("/", requireAuth, async (req, res, next) => {
           localField: "_id",
           foreignField: "projectId",
           as: "tasks",
-          pipeline: [{ $project: { status: 1, _id: 0 } }],
+          pipeline: [{ $project: { status: 1, attachment: 1, attachments: 1, _id: 0 } }],
         },
       },
       {
         $addFields: {
           id: { $toString: "$_id" },
           taskCount: { $size: "$tasks" },
+          taskAttachmentStats: {
+            $reduce: {
+              input: "$tasks",
+              initialValue: { images: 0, files: 0 },
+              in: {
+                $let: {
+                  vars: {
+                    // Merge attachment and attachments, ensuring uniqueness by URL
+                    taskAtts: {
+                      $reduce: {
+                        input: { $ifNull: ["$$this.attachments", []] },
+                        initialValue: { 
+                          $cond: [
+                            { $and: [
+                              { $gt: [{ $ifNull: ["$$this.attachment.url", null] }, null] }, 
+                              { $ne: ["$$this.attachment.url", ""] }
+                            ] }, 
+                            ["$$this.attachment"], 
+                            []
+                          ] 
+                        },
+                        in: {
+                          $cond: [
+                            { $in: ["$$this.url", { $map: { input: "$$value", as: "v", in: "$$v.url" } }] },
+                            "$$value",
+                            { $concatArrays: ["$$value", ["$$this"]] }
+                          ]
+                        }
+                      }
+                    }
+                  },
+                  in: {
+                    images: {
+                      $add: [
+                        "$$value.images",
+                        {
+                          $size: {
+                            $filter: {
+                              input: "$$taskAtts",
+                              as: "att",
+                              cond: {
+                                $or: [
+                                  { $regexMatch: { input: { $ifNull: ["$$att.mimeType", ""] }, regex: "^image/", options: "i" } },
+                                  { $regexMatch: { input: { $ifNull: ["$$att.fileName", ""] }, regex: "\\.(jpg|jpeg|png|gif|webp|svg|bmp|ico)$", options: "i" } }
+                                ]
+                              }
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    files: {
+                      $add: [
+                        "$$value.files",
+                        {
+                          $size: {
+                            $filter: {
+                              input: "$$taskAtts",
+                              as: "att",
+                              cond: {
+                                $and: [
+                                  { $ne: [{ $ifNull: ["$$att.url", ""] }, ""] },
+                                  { $not: {
+                                    $or: [
+                                      { $regexMatch: { input: { $ifNull: ["$$att.mimeType", ""] }, regex: "^image/", options: "i" } },
+                                      { $regexMatch: { input: { $ifNull: ["$$att.fileName", ""] }, regex: "\\.(jpg|jpeg|png|gif|webp|svg|bmp|ico)$", options: "i" } }
+                                    ]
+                                  }}
+                                ]
+                              }
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
           status: {
             $switch: {
               branches: [
@@ -330,6 +412,7 @@ router.get("/", requireAuth, async (req, res, next) => {
           name: 1,
           description: 1,
           assignees: 1,
+          teamLead: 1,
           logo: {
             fileName: { $ifNull: ["$logo.fileName", ""] },
             url: { 
@@ -348,6 +431,7 @@ router.get("/", requireAuth, async (req, res, next) => {
               as: "att",
               in: {
                 fileName: "$$att.fileName",
+                url: { $ifNull: ["$$att.url", ""] },
                 mimeType: "$$att.mimeType",
                 size: "$$att.size",
                 uploadedAt: "$$att.uploadedAt",
@@ -371,6 +455,7 @@ router.get("/", requireAuth, async (req, res, next) => {
             },
           },
           taskCount: 1,
+          taskAttachmentStats: 1,
           status: 1,
           createdAt: 1,
           createdByUserId: 1,
@@ -434,8 +519,11 @@ router.get("/:id", requireAuth, async (req, res, next) => {
                   title: 1,
                   description: 1,
                   assignees: { $ifNull: ["$assignees", { $cond: [{ $ifNull: ["$assignee", false] }, ["$assignee"], []] }] },
+                  teamLead: 1,
                   priority: 1,
                   status: 1,
+                  taskNumber: 1,
+                  executionPriority: 1,
                   dueDate: 1,
                   dueTime: 1,
                   location: 1,
@@ -503,6 +591,7 @@ router.get("/:id", requireAuth, async (req, res, next) => {
             name: 1,
             description: 1,
             assignees: 1,
+            teamLead: 1,
             logo: {
               fileName: { $ifNull: ["$logo.fileName", ""] },
               url: { $ifNull: ["$logo.url", ""] },
@@ -572,6 +661,7 @@ const projectUpdateSchema = z.object({
   name: z.string().min(1, "Project name is required").optional(),
   description: z.string().optional(),
   assignees: z.array(z.string()).optional(),
+  teamLead: z.string().optional(),
   logo: logoSchema,
   attachments: z.array(z.object({
     fileName: z.string().optional(),
@@ -904,21 +994,14 @@ router.post("/:id/comments", requireAuth, async (req, res, next) => {
 
     // Process Mentions
     if (message.includes("@")) {
-      const Employee = require("../models/Employee");
-      const activeEmployees = await Employee.find({ status: "active" }).select("name").lean();
+      const activeEmployees = await Employee.find({ status: "active" }).select("name email").lean();
       const mentionedUsers = [];
       const lowerMessage = message.toLowerCase();
-      
-      activeEmployees.forEach(emp => {
-        if (lowerMessage.includes("@" + emp.name.toLowerCase())) {
-          mentionedUsers.push(emp.name);
-        }
-      });
 
-      const activeUsers = await User.find({}).select("username").lean();
-      activeUsers.forEach(u => {
-        if (u.username && lowerMessage.includes("@" + u.username.toLowerCase()) && !mentionedUsers.includes(u.username)) {
-          mentionedUsers.push(u.username);
+      activeEmployees.forEach(emp => {
+        const handle = emp.name || emp.email || "";
+        if (handle && lowerMessage.includes("@" + handle.toLowerCase()) && !mentionedUsers.includes(handle)) {
+          mentionedUsers.push(handle);
         }
       });
 
@@ -963,6 +1046,61 @@ router.post("/:id/comments", requireAuth, async (req, res, next) => {
     }
 
     return res.status(201).json({ item: commentData });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// ============================================================================
+// Execution Priority System - Admin Only (Project Tasks)
+// ============================================================================
+
+// DELETE /api/projects/:id/priorities - Clear all execution priorities for a project's tasks
+router.delete("/:id/priorities", requireAuth, async (req, res, next) => {
+  try {
+    // Check admin role
+    if (req.user?.role !== "admin") {
+      return res.status(403).json({ error: { message: "Only admins can manage execution priorities" } });
+    }
+
+    const { id } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ error: { message: "Invalid project ID" } });
+    }
+
+    const project = await Project.findById(id);
+    if (!project) {
+      return res.status(404).json({ error: { message: "Project not found" } });
+    }
+
+    // Clear execution priorities for all tasks in this project
+    const result = await Task.updateMany(
+      { projectId: new mongoose.Types.ObjectId(id), executionPriority: { $ne: null } },
+      { executionPriority: null }
+    );
+
+    // Log activity
+    await ActivityLog.create({
+      actorUserId: String(req.user?.sub || req.user?.id || "unknown"),
+      actorUsername: String(req.user?.username || req.user?.name || "unknown"),
+      actorRole: String(req.user?.role || "unknown"),
+      action: "cleared_project_execution_priorities",
+      resourceType: "project",
+      resourceId: String(project._id),
+      resourceName: project.name,
+      description: `Cleared all execution priorities for ${result.modifiedCount} tasks in project "${project.name}"`,
+    });
+
+    // Clear cache
+    await cacheDel("tasks:*");
+    await cacheDel("projects:*");
+
+    return res.status(200).json({
+      success: true,
+      modifiedCount: result.modifiedCount,
+      message: `All execution priorities cleared for ${result.modifiedCount} tasks in project "${project.name}"`,
+    });
   } catch (err) {
     return next(err);
   }

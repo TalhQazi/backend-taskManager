@@ -3,7 +3,6 @@ const express = require("express");
 const EODReport = require("../models/EODReport");
 const TimeEntry = require("../models/TimeEntry");
 const Employee = require("../models/Employee");
-const User = require("../models/User");
 const { requireAuth, requireRole } = require("../middleware/auth");
 const { cacheWrap, cacheDel } = require("../lib/cache");
 
@@ -210,8 +209,11 @@ router.get("/eod-reports", requireAuth, requireRole(["manager", "admin", "super-
 // Helper functions
 async function getUserIdByEmployeeEmail(email) {
   try {
-    const user = await User.findOne({ email }, { _id: 1 }).lean();
-    return user ? String(user._id) : null;
+    const emp = await Employee.findOne(
+      { email: new RegExp(`^${email.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i") },
+      { _id: 1 }
+    ).lean();
+    return emp ? String(emp._id) : null;
   } catch {
     return null;
   }
