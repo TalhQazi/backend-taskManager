@@ -6,7 +6,7 @@ const Project = require("../models/Project");
 const Task = require("../models/Task");
 const ProjectComment = require("../models/ProjectComment");
 const Settings = require("../models/Settings");
-const User = require("../models/User");
+const Employee = require("../models/Employee");
 const Archive = require("../models/Archive");
 const ActivityLog = require("../models/ActivityLog");
 const { requireAuth } = require("../middleware/auth");
@@ -944,21 +944,14 @@ router.post("/:id/comments", requireAuth, async (req, res, next) => {
 
     // Process Mentions
     if (message.includes("@")) {
-      const Employee = require("../models/Employee");
-      const activeEmployees = await Employee.find({ status: "active" }).select("name").lean();
+      const activeEmployees = await Employee.find({ status: "active" }).select("name email").lean();
       const mentionedUsers = [];
       const lowerMessage = message.toLowerCase();
-      
-      activeEmployees.forEach(emp => {
-        if (lowerMessage.includes("@" + emp.name.toLowerCase())) {
-          mentionedUsers.push(emp.name);
-        }
-      });
 
-      const activeUsers = await User.find({}).select("username").lean();
-      activeUsers.forEach(u => {
-        if (u.username && lowerMessage.includes("@" + u.username.toLowerCase()) && !mentionedUsers.includes(u.username)) {
-          mentionedUsers.push(u.username);
+      activeEmployees.forEach(emp => {
+        const handle = emp.name || emp.email || "";
+        if (handle && lowerMessage.includes("@" + handle.toLowerCase()) && !mentionedUsers.includes(handle)) {
+          mentionedUsers.push(handle);
         }
       });
 

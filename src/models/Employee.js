@@ -20,6 +20,8 @@ const EmployeeSchema = new mongoose.Schema(
     userRole: { type: String, default: "" },
     userStatus: { type: String, default: "active" },
     passwordHash: { type: String, default: "" },
+    resetPasswordCode: { type: String, default: null },
+    resetPasswordExpires: { type: Date, default: null },
   },
   { timestamps: true }
 );

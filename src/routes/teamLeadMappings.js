@@ -2,7 +2,7 @@ const express = require("express");
 const { z } = require("zod");
 
 const TeamLeadMapping = require("../models/TeamLeadMapping");
-const User = require("../models/User");
+const Employee = require("../models/Employee");
 const { requireAuth, requireRole } = require("../middleware/auth");
 
 const router = express.Router();
@@ -85,10 +85,10 @@ router.get("/me", requireAuth, async (req, res, next) => {
     const userId = String(req.user?.sub || "").trim();
     if (!userId) return res.status(400).json({ error: { message: "Cannot identify user" } });
 
-    const user = await User.findById(userId).lean();
+    const user = await Employee.findById(userId).lean();
     if (!user) return res.status(404).json({ error: { message: "User not found" } });
 
-    const identifiers = [user.email, user.username, user.name].map((v) => String(v || "").trim()).filter(Boolean);
+    const identifiers = [user.email, user.name].map((v) => String(v || "").trim()).filter(Boolean);
     if (identifiers.length === 0) return res.status(400).json({ error: { message: "Cannot identify user" } });
 
     // Employee view: find their team lead, then return full team (lead + teammates)

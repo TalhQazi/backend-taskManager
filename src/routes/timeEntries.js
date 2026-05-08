@@ -3,7 +3,6 @@ const { z } = require("zod");
 
 const TimeEntry = require("../models/TimeEntry");
 const Employee = require("../models/Employee");
-const User = require("../models/User");
 const TimeEditAuditLog = require("../models/TimeEditAuditLog");
 const { createNotification } = require("../utils/notifications");
 const { requireAuth, requireRole } = require("../middleware/auth");
@@ -183,32 +182,16 @@ router.get("/", requireAuth, async (req, res, next) => {
         )
       );
 
-      const users = userIds.length
-        ? await User.find({ _id: { $in: userIds } }, { name: 1, username: 1, email: 1 }).lean()
+      const emps = userIds.length
+        ? await Employee.find({ _id: { $in: userIds } }, { name: 1, email: 1 }).lean()
         : [];
 
-      const userById = new Map(users.map((u) => [String(u._id), u]));
-
-      const emails = Array.from(
-        new Set(
-          users
-            .map((u) => String(u.email || "").trim().toLowerCase())
-            .filter(Boolean)
-        )
-      );
-
-      const emps = emails.length
-        ? await Employee.find({ email: { $in: emails } }, { name: 1, email: 1 }).lean()
-        : [];
-
-      const employeeByEmail = new Map(emps.map((e) => [String(e.email || "").trim().toLowerCase(), e]));
+      const empById = new Map(emps.map((e) => [String(e._id), e]));
 
       const enriched = items.map((e) => {
         const uid = String(e.userId || "").trim();
-        const user = uid ? userById.get(uid) : null;
-        const email = String(user?.email || "").trim().toLowerCase();
-        const emp = email ? employeeByEmail.get(email) : null;
-        const resolved = employeeDisplayName(emp) || userDisplayName(user);
+        const emp = uid ? empById.get(uid) : null;
+        const resolved = employeeDisplayName(emp) || String(e.employee || "").trim();
         if (!resolved) return withId(e);
         return withId({ ...e, employee: resolved });
       });
@@ -316,10 +299,8 @@ router.post("/clock-in", requireAuth, async (req, res, next) => {
     try {
       const userId = String(req.user?.sub || "").trim();
       if (userId) {
-        const user = await User.findById(userId, { name: 1, username: 1, email: 1 }).lean();
-        const email = String(user?.email || "").trim().toLowerCase();
-        const emp = email ? await Employee.findOne({ email }, { name: 1, email: 1 }).lean() : null;
-        const resolved = employeeDisplayName(emp) || userDisplayName(user);
+        const emp = await Employee.findById(userId, { name: 1, email: 1 }).lean();
+        const resolved = employeeDisplayName(emp);
         if (resolved) employeeName = resolved;
       }
     } catch {
