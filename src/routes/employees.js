@@ -3,7 +3,6 @@ const { z } = require("zod");
 const bcrypt = require("bcryptjs");
 
 const Employee = require("../models/Employee");
-const User = require("../models/User");
 const Task = require("../models/Task");
 const Event = require("../models/Event");
 const TimeEntry = require("../models/TimeEntry");
@@ -33,6 +32,9 @@ const createSchema = z.object({
   shift: z.string().optional().default(""),
   hireDate: z.string().optional().default(""),
   joinDate: z.union([z.string(), z.date()]).optional(),
+  department: z.string().optional().default(""),
+  userRole: z.string().optional().default(""),
+  userStatus: z.string().optional().default("active"),
   password: z.string().min(1),
 });
 
@@ -72,28 +74,13 @@ async function requireEmployeeSelf(req, res) {
     return null;
   }
 
-  const user = await User.findById(userId, { name: 1, username: 1, email: 1, role: 1 }).lean();
-  if (!user) {
-    res.status(401).json({ error: { message: "Unauthorized" } });
-    return null;
-  }
-
-  // For managers, return user as employee (they don't have employee records)
-  if (role === "manager") {
-    return { user, employee: { ...user, _id: user._id } };
-  }
-
-  const email = String(user.email || "").trim();
-  const employee = email
-    ? await Employee.findOne({ email }, { passwordHash: 0 }).lean()
-    : null;
-
+  const employee = await Employee.findById(userId, { passwordHash: 0 }).lean();
   if (!employee) {
-    res.status(404).json({ error: { message: "Employee profile not found" } });
+    res.status(401).json({ error: { message: "Employee profile not found" } });
     return null;
   }
 
-  return { user, employee };
+  return { employee };
 }
 
 // Employee self endpoints
@@ -421,41 +408,20 @@ router.get("/", requireAuth, async (_req, res, next) => {
     const result = await cacheWrap('employees:list', async () => {
       const items = await Employee.find().sort({ name: 1 }).lean();
 
-      // Resolve avatars from Settings. Settings are stored by User userId, not Employee _id.
-      const employeeEmails = items.map((e) => String(e.email || "").trim()).filter(Boolean);
-      const users = employeeEmails.length
-        ? await User.find(
-            { email: { $in: employeeEmails } },
-            { _id: 1, email: 1 }
-          ).lean()
-        : [];
-
-      const emailToUserId = new Map(
-        users
-          .map((u) => [String(u.email || "").trim(), String(u._id)])
-          .filter(([email, id]) => Boolean(email) && Boolean(id))
-      );
-
-      const userIds = Array.from(new Set(Array.from(emailToUserId.values())));
-      const settings = userIds.length
-        ? await Settings.find({ userId: { $in: userIds } })
+      // Resolve avatars from Settings keyed by Employee._id
+      const empIds = items.map((e) => String(e._id));
+      const settings = empIds.length
+        ? await Settings.find({ userId: { $in: empIds } })
             .select("userId avatarUrl avatarDataUrl")
             .lean()
         : [];
 
-      const userIdToAvatar = new Map(
-        settings
-          .map((s) => [
-            String(s.userId),
-            String(s.avatarUrl || s.avatarDataUrl || "").trim(),
-          ])
-          .filter(([, url]) => Boolean(url))
+      const idToAvatar = new Map(
+        settings.map((s) => [String(s.userId), String(s.avatarDataUrl || s.avatarUrl || "").trim()])
       );
 
       const itemsWithAvatars = items.map((e) => {
-        const email = String(e.email || "").trim();
-        const userId = emailToUserId.get(email);
-        const avatarUrl = userId ? userIdToAvatar.get(String(userId)) || "" : "";
+        const avatarUrl = idToAvatar.get(String(e._id)) || "";
         return { ...e, avatarUrl, avatarDataUrl: avatarUrl };
       });
 
@@ -497,24 +463,7 @@ router.post("/", requireAuth, async (req, res, next) => {
       passwordHash,
     });
 
-    // Create corresponding user account for login
-    try {
-      // Use email as username (or generate from name if no email)
-      const userUsername = parsed.data.email || parsed.data.name.toLowerCase().replace(/\s+/g, '.');
-      await User.create({
-        name: parsed.data.name,
-        email: parsed.data.email || "",
-        username: userUsername,
-        passwordHash: passwordHash,
-        role: "employee",
-        status: "active",
-      });
-    } catch (userErr) {
-      // Log but don't fail - employee was created successfully
-      console.error("Failed to create user account for employee:", userErr.message);
-    }
-
-    const obj = created.toObject();
+const obj = created.toObject();
     
     // Fire-and-forget side effects
     Promise.allSettled([
@@ -575,26 +524,6 @@ router.put("/:id", requireAuth, async (req, res, next) => {
     // Log activity
     await logActivity(req, "EMPLOYEE_UPDATE", "employee", req.params.id, updated.name, `Updated employee: ${updated.name}`);
 
-    // Sync user account if password was updated
-    if (patch.passwordHash) {
-      try {
-        const authUserId = String(req.user?.sub || "").trim();
-        const authRole = String(req.user?.role || "").trim();
-
-        if (authRole === "employee" && authUserId) {
-          await User.findByIdAndUpdate(authUserId, { passwordHash: patch.passwordHash });
-        } else {
-          const email = String(updated.email || "").trim();
-          await User.findOneAndUpdate(
-            { email: new RegExp(`^${escapeRegExp(email)}$`, "i") },
-            { passwordHash: patch.passwordHash }
-          );
-        }
-      } catch (userErr) {
-        console.error("Failed to update user password:", userErr.message);
-      }
-    }
-
     if (patch.status === "inactive") {
       const archived = await archiveEmployeeById(req.params.id, req.user);
       if (archived) {
@@ -609,26 +538,6 @@ router.put("/:id", requireAuth, async (req, res, next) => {
         });
         cacheDel("employees:list");
         return res.json({ item: withId(archived), archived: true });
-      }
-    }
-
-    // Sync user account name when employee name changes (Admin panel reads from User collection)
-    if (typeof patch.name === "string" && patch.name.trim()) {
-      try {
-        const authUserId = String(req.user?.sub || "").trim();
-        const authRole = String(req.user?.role || "").trim();
-
-        if (authRole === "employee" && authUserId) {
-          await User.findByIdAndUpdate(authUserId, { name: updated.name });
-        }
-
-        const email = String(updated.email || "").trim();
-        await User.findOneAndUpdate(
-          { email: new RegExp(`^${escapeRegExp(email)}$`, "i") },
-          { name: updated.name }
-        );
-      } catch (userErr) {
-        console.error("Failed to update user name:", userErr.message);
       }
     }
 
@@ -651,8 +560,6 @@ router.put("/:id", requireAuth, async (req, res, next) => {
 });
 
 async function archiveEmployeeById(employeeId, archivedBy) {
-  const Employee = require("../models/Employee");
-  const User = require("../models/User");
   const Archive = require("../models/Archive");
   
   const employee = await Employee.findById(employeeId).lean();
@@ -685,13 +592,7 @@ async function archiveEmployeeById(employeeId, archivedBy) {
       console.error('Failed to unassign employee', err);
     }
 
-    // Delete from Employee and corresponding User
   await Employee.findByIdAndDelete(employeeId);
-  try {
-    await User.deleteOne({ email: employee.email });
-  } catch (err) {
-    console.error("Failed to delete user account during archiving:", err);
-  }
   
   return employee;
 }
@@ -755,16 +656,6 @@ router.post("/:id/reset-password", requireAuth, requireRole(["super-admin"]), as
 
     if (!updated) {
       return res.status(404).json({ error: { message: "Employee not found" } });
-    }
-
-    // Also update user account password
-    try {
-      await User.findOneAndUpdate(
-        { email: updated.email },
-        { passwordHash: passwordHash }
-      );
-    } catch (userErr) {
-      console.error("Failed to update user password:", userErr.message);
     }
 
     return res.json({ success: true, message: "Password reset successfully" });

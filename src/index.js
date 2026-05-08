@@ -28,6 +28,7 @@ const reportsRoutes = require("./routes/reports");
 const usersRoutes = require("./routes/users");
 const dashboardRoutes = require("./routes/dashboard");
 const vendorsRoutes = require("./routes/vendors");
+const companyRegistryRoutes = require("./routes/companyRegistry");
 const complianceRoutes = require("./routes/compliance");
 const activityLogsRoutes = require("./routes/activityLogs");
 const companiesRoutes = require("./routes/companies");
@@ -41,18 +42,22 @@ const socialMediaRoutes = require("./routes/socialMedia");
 const patentsRoutes = require("./routes/patents");
 const credentialsRoutes = require("./routes/credentials");
 const archiveRoutes = require("./routes/archive");
+const teamLeadMappingsRoutes = require("./routes/teamLeadMappings");
+const taskPermissionsRoutes = require("./routes/taskPermissions");
 const { router: founderMessagesRoutes, initializeMessages } = require("./routes/founderMessages");
 const notesRoutes = require("./routes/notes");
 const assetLibraryRoutes = require("./routes/assetLibrary");
 const contributorsRoutes = require("./routes/contributors");
 const eodReportsRoutes = require("./routes/eodReports");
+const emailAccountsRoutes = require("./routes/emailAccounts");
 const uiPreferencesRoutes = require("./routes/uiPreferences");
 const vendorCategoriesRoutes = require("./routes/vendorCategories");
 const trademarksRoutes = require("./routes/trademarks");
 const dropboxRoutes = require("./routes/dropbox");
 const shoppingListsRoutes = require("./routes/shoppingLists");
-const emailAccountsRoutes = require("./routes/emailAccounts");
 const clearhireRoutes = require("./routes/clearhire");
+const systemSettingsRoutes = require("./routes/systemSettings");
+const assetLibraryHeaderSettingsRoutes = require("./routes/assetLibraryHeaderSettings");
 
 //going to express now
 const app = express();
@@ -194,7 +199,7 @@ app.use((req, res, next) => {
     return next();
   }
   // For other requests, use JSON parser
-  express.json({ limit: "50mb" })(req, res, next);
+  express.json({ limit: "100mb" })(req, res, next);
 });
 
 // Gzip compression — reduces response sizes by 60-80%
@@ -268,6 +273,7 @@ app.use("/api/reports", reportsRoutes);
 app.use("/api/users", usersRoutes);
 app.use("/api/dashboard", dashboardRoutes);
 app.use("/api/vendors", vendorsRoutes);
+app.use("/api/company-registry", companyRegistryRoutes);
 app.use("/api/compliance", complianceRoutes);
 app.use("/api/activity-logs", activityLogsRoutes);
 app.use("/api/companies", companiesRoutes);
@@ -281,6 +287,8 @@ app.use("/api/social-media", socialMediaRoutes);
 app.use("/api/patents", patentsRoutes);
 app.use("/api/credentials", credentialsRoutes);
 app.use("/api/archive", archiveRoutes);
+app.use("/api/team-lead-mappings", teamLeadMappingsRoutes);
+app.use("/api/task-permissions", taskPermissionsRoutes);
 app.use("/api/founder-messages", founderMessagesRoutes);
 app.use("/api/notes", notesRoutes);
 app.use("/api/asset-library", assetLibraryRoutes);
@@ -292,6 +300,8 @@ app.use("/api/dropbox", dropboxRoutes);
 app.use("/api/shopping-lists", shoppingListsRoutes);
 app.use("/api/email-accounts", emailAccountsRoutes);
 app.use("/api/clearhire", clearhireRoutes);
+app.use("/api/system-settings", systemSettingsRoutes);
+app.use("/api/asset-library-header-settings", assetLibraryHeaderSettingsRoutes);
 
 app.use(notFoundHandler);
 app.use(errorHandler);

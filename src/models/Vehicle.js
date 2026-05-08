@@ -21,6 +21,7 @@ const VehicleSchema = new mongoose.Schema(
     mileageText: { type: String, default: "" },
     lastInspection: { type: Date },
     nextInspection: { type: Date },
+    requiresInspection: { type: Boolean, default: true },
     tagPhotoFileName: { type: String, default: "" },
     tagPhotoDataUrl: { type: String, default: "" },
     tagPhotoAttachment: {
@@ -36,6 +37,8 @@ const VehicleSchema = new mongoose.Schema(
 // Indexes for common queries
 VehicleSchema.index({ status: 1 });
 VehicleSchema.index({ assignedTo: 1 });
+VehicleSchema.index({ name: 1 });
+VehicleSchema.index({ licensePlate: 1 });
 VehicleSchema.index({ createdAt: -1 });
 
 module.exports = mongoose.model("Vehicle", VehicleSchema);

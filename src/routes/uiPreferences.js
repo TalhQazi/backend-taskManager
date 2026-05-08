@@ -142,6 +142,14 @@ router.put("/", requireAuth, async (req, res, next) => {
       preferences.uiPreferences.panelColors = updates.panelColors;
     }
 
+    if (updates.rewardSettings) {
+      preferences.uiPreferences.rewardSettings = {
+        ...preferences.uiPreferences?.rewardSettings || {},
+        ...updates.rewardSettings
+      };
+    }
+
+
     await preferences.save();
 
     res.json({ item: preferences.uiPreferences });
@@ -221,13 +229,19 @@ router.post("/reset", requireAuth, async (req, res, next) => {
         cardStyle: "glass",
         layoutDensity: "comfortable",
         layoutConfig: new Map(),
-        animationSettings: {
-          enabled: true,
-          reduceMotion: false,
-          hoverEffects: true,
-          clickEffects: true
-        }
-      };
+          animationSettings: {
+            enabled: true,
+            reduceMotion: false,
+            hoverEffects: true,
+            clickEffects: true
+          },
+          rewardSettings: {
+            animationsEnabled: true,
+            hapticsEnabled: true,
+            soundEnabled: false
+          }
+        };
+
     }
 
     await preferences.save();

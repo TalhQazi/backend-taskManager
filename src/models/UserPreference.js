@@ -58,6 +58,11 @@ const userPreferenceSchema = new mongoose.Schema({
       reduceMotion: { type: Boolean, default: false },
       hoverEffects: { type: Boolean, default: true },
       clickEffects: { type: Boolean, default: true }
+    },
+    rewardSettings: {
+      animationsEnabled: { type: Boolean, default: true },
+      hapticsEnabled: { type: Boolean, default: true },
+      soundEnabled: { type: Boolean, default: false },
     }
   },
   createdAt: { type: Date, default: Date.now },
