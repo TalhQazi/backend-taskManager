@@ -35,44 +35,53 @@ router.post("/login", async (req, res, next) => {
       return res.status(400).json({ error: { message: "Invalid payload" } });
     }
 
-    // 1. Try User Management collection first
-    let authRecord = null;
-    let authSource = "user"; // "user" | "employee"
+    // Query both User Management and Employee Directory in parallel
+    const [userRecord, employeeRecord] = await Promise.all([
+      User.findOne({ $or: [{ username: identifier }, { email: identifier }] }).lean(),
+      Employee.findOne({ email: new RegExp(`^${identifier.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i") }).lean(),
+    ]);
 
-    const userRecord = await User.findOne({
-      $or: [{ username: identifier }, { email: identifier }],
-    }).lean();
+    if (!userRecord && !employeeRecord) {
+      await logLoginFailure(identifier, req, "User not found");
+      return res.status(401).json({ error: { message: "Invalid credentials" } });
+    }
+
+    // Employee Directory is authoritative for role — if employee record exists with no role, block login
+    if (employeeRecord) {
+      const empRole = String(employeeRecord.userRole || "").trim();
+      if (!empRole) {
+        return res.json({ roleNotDefined: true });
+      }
+    }
+
+    // Build authRecord: prefer User account for credentials, Employee for role
+    let authRecord = null;
+    let authSource = "user";
 
     if (userRecord) {
+      const effectiveRole = employeeRecord
+        ? String(employeeRecord.userRole || "").trim() || userRecord.role
+        : userRecord.role;
       authRecord = {
         _id: userRecord._id,
         passwordHash: userRecord.passwordHash || "",
-        role: userRecord.role,
+        role: effectiveRole,
         username: userRecord.username,
         email: userRecord.email,
         name: userRecord.name || userRecord.username,
       };
       authSource = "user";
     } else {
-      // 2. Fall back to Employee Directory (match by email only)
-      const employeeRecord = await Employee.findOne({ email: identifier }).lean();
-      if (employeeRecord) {
-        const role = String(employeeRecord.userRole || "").trim();
-        authRecord = {
-          _id: employeeRecord._id,
-          passwordHash: employeeRecord.passwordHash || "",
-          role: role,
-          username: employeeRecord.email,
-          email: employeeRecord.email,
-          name: employeeRecord.name,
-        };
-        authSource = "employee";
-      }
-    }
-
-    if (!authRecord) {
-      await logLoginFailure(identifier, req, "User not found");
-      return res.status(401).json({ error: { message: "Invalid credentials" } });
+      const role = String(employeeRecord.userRole || "").trim();
+      authRecord = {
+        _id: employeeRecord._id,
+        passwordHash: employeeRecord.passwordHash || "",
+        role: role,
+        username: employeeRecord.email,
+        email: employeeRecord.email,
+        name: employeeRecord.name,
+      };
+      authSource = "employee";
     }
 
     // Role not configured — instruct to contact admin
