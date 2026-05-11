@@ -11,6 +11,7 @@ const Archive = require("../models/Archive");
 const ActivityLog = require("../models/ActivityLog");
 const { requireAuth } = require("../middleware/auth");
 const { createNotification } = require("../utils/notifications");
+const { extractMentions } = require("../utils/mentions");
 const { parsePagination, paginatedResponse } = require("../lib/pagination");
 const { cacheWrap, cacheDel } = require("../lib/cache");
 const { uploadToS3, base64ToBuffer } = require("../lib/s3");
@@ -245,7 +246,24 @@ router.post("/", requireAuth, async (req, res, next) => {
       assignees: Array.isArray(data.assignees) ? data.assignees : [],
       details: `Tasks: ${createdTasks.length}`,
       resourceId: String(createdProject._id),
+      category: "PROJECT_ASSIGNED",
     });
+
+    // Extract mentions from description
+    const mentionedUsers = await extractMentions(data.description);
+    if (mentionedUsers.length > 0) {
+      await createNotification({
+        actor: String(req.user?.username || req.user?.name || "System"),
+        actorRole: String(req.user?.role || ""),
+        action: "mentioned you in project",
+        resourceType: "project",
+        resourceName: createdProject.name,
+        assignees: mentionedUsers,
+        details: `"${data.description.length > 50 ? data.description.substring(0, 50) + "..." : data.description}"`,
+        resourceId: String(createdProject._id),
+        category: "MENTIONED",
+      });
+    }
 
     return res.status(201).json({
       item: {
@@ -787,7 +805,25 @@ router.put("/:id", requireAuth, async (req, res, next) => {
       resourceType: "project",
       resourceName: updated.name,
       resourceId: String(updated._id),
+      category: "SYSTEM",
     });
+
+    if (patch.description) {
+      const mentionedUsers = await extractMentions(patch.description);
+      if (mentionedUsers.length > 0) {
+        await createNotification({
+          actor: String(req.user?.username || req.user?.name || "System"),
+          actorRole: String(req.user?.role || ""),
+          action: "mentioned you in project",
+          resourceType: "project",
+          resourceName: updated.name,
+          assignees: mentionedUsers,
+          details: `"${patch.description.length > 50 ? patch.description.substring(0, 50) + "..." : patch.description}"`,
+          resourceId: String(updated._id),
+          category: "MENTIONED",
+        });
+      }
+    }
 
     return res.json({ item: withId(updated) });
   } catch (err) {
@@ -1006,30 +1042,38 @@ router.post("/:id/comments", requireAuth, async (req, res, next) => {
     await logActivity(req, "PROJECT_COMMENT_CREATE", "project", project._id, project.name, `Comment added on project: ${project.name}`);
 
     // Process Mentions
-    if (message.includes("@")) {
-      const activeEmployees = await Employee.find({ status: "active" }).select("name email").lean();
-      const mentionedUsers = [];
-      const lowerMessage = message.toLowerCase();
-
-      activeEmployees.forEach(emp => {
-        const handle = emp.name || emp.email || "";
-        if (handle && lowerMessage.includes("@" + handle.toLowerCase()) && !mentionedUsers.includes(handle)) {
-          mentionedUsers.push(handle);
-        }
+    const mentionedUsers = await extractMentions(message);
+    if (mentionedUsers.length > 0) {
+      await createNotification({
+        actor: String(req.user?.username || req.user?.name || "Someone"),
+        actorRole: String(req.user?.role || ""),
+        action: "mentioned you in a",
+        resourceType: "project comment",
+        resourceName: project.name,
+        assignees: mentionedUsers,
+        details: `"${message.length > 50 ? message.substring(0, 50) + "..." : message}"`,
+        resourceId: String(project._id),
+        category: "MENTIONED",
       });
+    }
 
-      if (mentionedUsers.length > 0) {
-        await createNotification({
-          actor: String(req.user?.username || "Someone"),
-          actorRole: String(req.user?.role || ""),
-          action: "mentioned you in a",
-          resourceType: "project comment",
-          resourceName: project.name,
-          assignees: mentionedUsers,
-          details: `"${message.length > 50 ? message.substring(0, 50) + "..." : message}"`,
-          resourceId: String(project._id),
-        });
-      }
+    // Notify task assignees and creator about the new comment
+    const commentRecipients = new Set([
+      ...(Array.isArray(project.assignees) ? project.assignees : []),
+      project.createdByUsername || ""
+    ].filter(Boolean));
+    if (commentRecipients.size > 0) {
+      await createNotification({
+        actor: String(req.user?.username || req.user?.name || "Someone"),
+        actorRole: String(req.user?.role || ""),
+        action: "commented on",
+        resourceType: "project",
+        resourceName: project.name,
+        assignees: Array.from(commentRecipients),
+        details: `"${message.length > 50 ? message.substring(0, 50) + "..." : message}"`,
+        resourceId: String(project._id),
+        category: "COMMENT_ADDED",
+      });
     }
 
     const authorUserId = String(req.user?.sub || req.user?.id || "");

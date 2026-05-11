@@ -24,6 +24,7 @@ const MessageSchema = new mongoose.Schema(
       resourceType: { type: String, default: "" },
       resourceId: { type: String, default: "" },
       link: { type: String, default: "" },
+      category: { type: String, default: "" },
     },
   },
   { timestamps: true }

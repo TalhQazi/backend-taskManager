@@ -1,4 +1,5 @@
 const Message = require("../models/Message");
+const { encrypt } = require("../lib/encryption");
 
 /**
  * Create a notification with targeted audience.
@@ -18,6 +19,7 @@ const Message = require("../models/Message");
  * @param {string}   [options.details]
  * @param {string}   [options.resourceId]
  * @param {string}   [options.link]
+ * @param {string}   [options.category]   - "TASK_ASSIGNED" | "PROJECT_ASSIGNED" | "MENTIONED" | "COMMENT_ADDED" | "TASK_COMPLETED"
  */
 async function createNotification({
   actor,
@@ -29,6 +31,7 @@ async function createNotification({
   details = "",
   resourceId = "",
   link = "",
+  category = "",
 }) {
   try {
     const timestamp = new Date().toISOString();
@@ -47,14 +50,34 @@ async function createNotification({
     });
     const recipient = Array.from(targetSet).join(",");
 
+    let derivedLink = link;
+    if (!derivedLink && resourceId) {
+      if (resourceType === "task" || resourceType === "task comment") {
+        derivedLink = `/admin/tasks/${resourceId}`;
+      } else if (resourceType === "project" || resourceType === "project comment") {
+        derivedLink = `/admin/projects/${resourceId}`;
+      }
+    }
+
+    let derivedCategory = category;
+    if (!derivedCategory) {
+       if (action.includes("mention")) derivedCategory = "MENTIONED";
+       else if (action.includes("comment")) derivedCategory = "COMMENT_ADDED";
+       else if (resourceType === "task" && action.includes("assign")) derivedCategory = "TASK_ASSIGNED";
+       else if (resourceType === "project" && action.includes("assign")) derivedCategory = "PROJECT_ASSIGNED";
+       else derivedCategory = "SYSTEM";
+    }
+
+    const titlePlain = `${action.charAt(0).toUpperCase() + action.slice(1)} ${resourceType}`;
+
     const notification = await Message.create({
-      title: `${action.charAt(0).toUpperCase() + action.slice(1)} ${resourceType}`,
+      title: encrypt(titlePlain),
       sender: actor || "system",
       senderAvatar: "",
       recipient,           // comma-separated list of usernames/roles who should see it
       audience: "targeted",
       assignees: Array.isArray(assignees) ? assignees : [],
-      content,
+      content: encrypt(content),
       timestamp,
       type: "broadcast",
       status: "sent",
@@ -62,7 +85,8 @@ async function createNotification({
       meta: {
         resourceType: String(resourceType || ""),
         resourceId: String(resourceId || ""),
-        link: String(link || ""),
+        link: String(derivedLink || ""),
+        category: String(derivedCategory),
       },
     });
 
@@ -72,6 +96,9 @@ async function createNotification({
       io.emit("new-notification", {
         ...notification.toObject(),
         id: String(notification._id),
+        title: titlePlain,
+        content: content,
+        message: content // For backward compatibility with frontend expecting 'message'
       });
     }
 

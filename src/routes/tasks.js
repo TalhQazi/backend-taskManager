@@ -18,6 +18,7 @@ const Attachment = require("../models/Attachment");
 const { requireAuth } = require("../middleware/auth");
 const { checkAndFlagOffTheClock } = require("../lib/offTheClockWork");
 const { createNotification } = require("../utils/notifications");
+const { extractMentions } = require("../utils/mentions");
 const { parsePagination, paginatedResponse } = require("../lib/pagination");
 const { cacheWrap, cacheDel } = require("../lib/cache");
 const { uploadToS3, base64ToBuffer, getFromS3, extractS3Key } = require("../lib/s3");
@@ -630,6 +631,23 @@ router.post("/", requireAuth, async (req, res, next) => {
         resourceName: created.title,
         assignees: Array.isArray(created.assignees) ? created.assignees : [],
         resourceId: String(created._id),
+        category: "TASK_ASSIGNED",
+      }),
+      // Extract mentions from task description
+      extractMentions(created.description).then(mentionedUsers => {
+        if (mentionedUsers.length > 0) {
+          return createNotification({
+            actor: req.user?.username || req.user?.name || "System",
+            actorRole: req.user?.role || "",
+            action: "mentioned you in",
+            resourceType: "task",
+            resourceName: created.title,
+            assignees: mentionedUsers,
+            details: `"${created.description.length > 50 ? created.description.substring(0, 50) + "..." : created.description}"`,
+            resourceId: String(created._id),
+            category: "MENTIONED",
+          });
+        }
       }),
       cacheDel("tasks:list:*"),
       created.projectId ? cacheDel(`project:${created.projectId}`) : Promise.resolve(),
@@ -774,6 +792,7 @@ router.post("/upload", requireAuth, upload.array("files", 10), async (req, res, 
         resourceName: created.title,
         assignees: Array.isArray(created.assignees) ? created.assignees : [],
         resourceId: String(created._id),
+        category: "TASK_ASSIGNED",
       }),
       cacheDel("tasks:list:*"),
       created.projectId ? cacheDel(`project:${created.projectId}`) : Promise.resolve(),
@@ -873,38 +892,27 @@ router.post("/:id/comments", requireAuth, async (req, res, next) => {
 
     await logActivity(req, "TASK_COMMENT_CREATE", "task", task._id, task.title, `Comment added on task: ${task.title}`);
 
-    // Process Mentions
-    if (message.includes("@")) {
-      const activeEmployees = await Employee.find({ status: "active" }).select("name email").lean();
-      const mentionedUsers = [];
-      const lowerMessage = message.toLowerCase();
-
-      activeEmployees.forEach(emp => {
-        const handle = emp.name || emp.email || "";
-        if (handle && lowerMessage.includes("@" + handle.toLowerCase()) && !mentionedUsers.includes(handle)) {
-          mentionedUsers.push(handle);
-        }
+    // Process Mentions using shared utility
+    const mentionedUsers = await extractMentions(message);
+    if (mentionedUsers.length > 0) {
+      await createNotification({
+        actor: String(req.user?.username || req.user?.name || "Someone"),
+        actorRole: String(req.user?.role || ""),
+        action: "mentioned you in a",
+        resourceType: "task comment",
+        resourceName: task.title,
+        assignees: mentionedUsers,
+        details: `"${message.length > 50 ? message.substring(0, 50) + "..." : message}"`,
+        resourceId: String(task._id),
+        category: "MENTIONED",
       });
-
-      if (mentionedUsers.length > 0) {
-        await createNotification({
-          actor: String(req.user?.username || "Someone"),
-          actorRole: String(req.user?.role || ""),
-          action: "mentioned you in a",
-          resourceType: "task comment",
-          resourceName: task.title,
-          assignees: mentionedUsers,
-          details: `"${message.length > 50 ? message.substring(0, 50) + "..." : message}"`,
-          resourceId: String(task._id),
+      mentionedUsers.forEach(user => {
+        sendEmailNotification(user, "replyAdded", {
+          taskTitle: task.title,
+          authorName: req.user?.username || req.user?.name || "Someone",
+          replyText: message.length > 50 ? message.substring(0, 50) + "..." : message
         });
-        mentionedUsers.forEach(user => {
-          sendEmailNotification(user, "replyAdded", {
-            taskTitle: task.title,
-            authorName: req.user?.username || req.user?.name || "Someone",
-            replyText: message.length > 50 ? message.substring(0, 50) + "..." : message
-          });
-        });
-      }
+      });
     }
 
     // Notify task assignees and creator about the new comment
@@ -914,7 +922,7 @@ router.post("/:id/comments", requireAuth, async (req, res, next) => {
     ].filter(Boolean));
     if (commentRecipients.size > 0) {
       await createNotification({
-        actor: String(req.user?.username || "Someone"),
+        actor: String(req.user?.username || req.user?.name || "Someone"),
         actorRole: String(req.user?.role || ""),
         action: "commented on",
         resourceType: "task",
@@ -922,6 +930,7 @@ router.post("/:id/comments", requireAuth, async (req, res, next) => {
         assignees: Array.from(commentRecipients),
         details: `"${message.length > 50 ? message.substring(0, 50) + "..." : message}"`,
         resourceId: String(task._id),
+        category: "COMMENT_ADDED",
       });
       
       Array.from(commentRecipients).forEach(recipient => {
@@ -1360,11 +1369,13 @@ router.patch("/:id/status", requireAuth, async (req, res, next) => {
       createNotification({
         actor: req.user?.username || req.user?.name || "System",
         actorRole: req.user?.role || "",
-        action: "status changed",
+        action: status === "completed" ? "completed" : "status changed",
         resourceType: "task",
         resourceName: updated.title,
+        assignees: Array.isArray(updated.assignees) ? updated.assignees : [],
         details: `Status -> ${status}`,
         resourceId: String(req.params.id),
+        category: status === "completed" ? "TASK_COMPLETED" : "SYSTEM",
       }),
       cacheDel("tasks:list:*"),
       updated.projectId ? cacheDel(`project:${updated.projectId}`) : Promise.resolve(),
@@ -1484,7 +1495,9 @@ router.put("/:id", requireAuth, async (req, res, next) => {
         action: "updated",
         resourceType: "task",
         resourceName: updated.title,
+        assignees: Array.isArray(updated.assignees) ? updated.assignees : [],
         resourceId: String(req.params.id),
+        category: "SYSTEM",
       }),
       cacheDel("tasks:list:*"),
       updated.projectId ? cacheDel(`project:${updated.projectId}`) : Promise.resolve(),
@@ -1601,8 +1614,10 @@ router.put("/:id/reassign", requireAuth, async (req, res, next) => {
       action: "reassigned",
       resourceType: "task",
       resourceName: updated.title,
+      assignees: assignees,
       resourceId: String(req.params.id),
       details: `New assignees: ${assignees.join(", ")}`,
+      category: "TASK_ASSIGNED",
     });
 
     assignees.forEach(assignee => {
@@ -1675,6 +1690,7 @@ router.post("/:id/archive", requireAuth, async (req, res, next) => {
         resourceType: "task",
         resourceName: task.title,
         resourceId: String(req.params.id),
+        category: "SYSTEM",
       }),
       cacheDel("tasks:list:*"),
       task.projectId ? cacheDel(`project:${task.projectId}`) : Promise.resolve(),
@@ -1708,6 +1724,7 @@ router.delete("/:id", requireAuth, async (req, res, next) => {
         resourceType: "task",
         resourceName: task.title,
         resourceId: String(req.params.id),
+        category: "SYSTEM",
       }),
       cacheDel("tasks:list:*"),
       task.projectId ? cacheDel(`project:${task.projectId}`) : Promise.resolve(),
