@@ -46,6 +46,25 @@ const settingsSchema = z.object({
   timezone: z.string().optional(),
   avatarUrl: z.string().optional(),
   avatarDataUrl: z.string().optional(),
+  // Bank & Direct Deposit
+  bankAccountLast4: z.string().optional(),
+  bankRoutingLast4: z.string().optional(),
+  bankName: z.string().optional(),
+  directDepositEnabled: z.boolean().optional(),
+  bankAccountEncrypted: z.string().optional(),
+  bankRoutingEncrypted: z.string().optional(),
+  // Emergency Contact
+  emergencyContactName: z.string().optional(),
+  emergencyContactPhone: z.string().optional(),
+  emergencyContactRelation: z.string().optional(),
+  // Tax Withholding (W-4)
+  filingStatus: z.string().optional(),
+  allowances: z.number().optional(),
+  additionalWithholding: z.number().optional(),
+  // MFA
+  mfaEnabled: z.boolean().optional(),
+  mfaSecret: z.string().optional(),
+  mfaBackupCodes: z.string().optional(),
 });
 
 router.get("/", requireAuth, async (req, res, next) => {

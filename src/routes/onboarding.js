@@ -9,12 +9,18 @@ const router = express.Router();
 // Helper function to get employee context
 async function requireEmployeeSelf(req, res) {
   try {
-    const employee = await Employee.findById(req.user.sub);
+    const userId = String(req.user?.sub || "").trim();
+    if (!userId) {
+      res.status(401).json({ error: { message: "Unauthorized" } });
+      return null;
+    }
+    
+    const employee = await Employee.findById(userId);
     if (!employee) {
       res.status(404).json({ error: { message: "Employee not found" } });
       return null;
     }
-    return { employee };
+    return { user: { _id: userId, ...employee.toObject() }, employee };
   } catch (err) {
     res.status(500).json({ error: { message: "Server error" } });
     return null;
