@@ -280,8 +280,21 @@ router.get("/", requireAuth, async (req, res, next) => {
         return res.json(paginatedResponse([], 0, page, limit));
       }
 
-      const regexes = candidates.map((c) => new RegExp(`^${escapeRegExp(c)}$`, "i"));
-      matchStages.push({ $match: { assignees: { $elemMatch: { $in: regexes } } } });
+      // For managers and team-leads, filter by teamLead field
+      if (role === "manager" || role === "team-lead") {
+        const regexes = candidates.map((c) => new RegExp(`^${escapeRegExp(c)}$`, "i"));
+        matchStages.push({
+          $match: {
+            $or: [
+              { teamLead: { $in: regexes } },
+              { assignees: { $elemMatch: { $in: regexes } } }
+            ]
+          }
+        });
+      } else {
+        const regexes = candidates.map((c) => new RegExp(`^${escapeRegExp(c)}$`, "i"));
+        matchStages.push({ $match: { assignees: { $elemMatch: { $in: regexes } } } });
+      }
     }
 
     if (searchQ) {

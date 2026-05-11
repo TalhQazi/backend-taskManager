@@ -92,17 +92,39 @@ const upload = multer({
 });
 
 const createSchema = z.object({
+  inventoryType: z.enum(["asset", "consumable", "sellable"]).optional().default("asset"),
   name: z.string().min(1),
-  type: z.enum(["residential", "commercial"]).optional().default("commercial"),
-  category: z.string().optional().default("appliance"),
+  brand: z.string().optional().default(""),
+  model: z.string().optional().default(""),
+  location: z.string().optional().default(""),
+  photoFileName: z.string().optional().default(""),
+  photoDataUrl: z.string().optional().default(""),
+  supplier: z.string().optional().default(""),
+  status: z.string().optional().default("active"),
+
+  // Asset fields
   serialNumber: z.string().optional().default(""),
-  status: z.enum(["operational", "needs-repair", "out-of-service"]).optional().default("operational"),
-  location: z.string().min(1),
+  propertyType: z.enum(["commercial", "residential"]).optional().default("commercial"),
   purchaseDate: z.string().optional().default(""),
-  warrantyExpiry: z.string().optional().default(""),
   warrantyUntil: z.string().optional().default(""),
+  conditionStatus: z.enum(["excellent", "good", "fair", "damaged"]).optional().default("good"),
+  assignedTo: z.string().optional().default(""),
+
+  // Consumable fields
+  quantity: z.coerce.number().optional().default(0),
+  unitType: z.enum(["pieces", "boxes", "liters", "kg"]).optional().default("pieces"),
+  reorderPoint: z.coerce.number().optional().default(0),
+  dailyUsageRate: z.coerce.number().optional().default(0),
+
+  // Sellable fields
+  sku: z.string().optional().default(""),
+  costPrice: z.coerce.number().optional().default(0),
+  sellingPrice: z.coerce.number().optional().default(0),
+
+  // Legacy compatibility
+  category: z.string().optional().default("appliance"),
+  warrantyExpiry: z.string().optional().default(""),
   lastMaintenance: z.string().optional().default(""),
-  assignedTo: z.string().optional().nullable(),
   tagPhotoFileName: z.string().optional().default(""),
   tagPhotoDataUrl: z.string().optional().default(""),
 });
@@ -237,12 +259,12 @@ router.put("/:id", requireAuth, async (req, res, next) => {
   }
 });
 
-router.post("/upload", requireAuth, upload.single("tagPhotoFile"), async (req, res, next) => {
+router.post("/upload", requireAuth, upload.single("photoFile"), async (req, res, next) => {
   try {
     const body = req.body || {};
     const f = req.file;
 
-    const tagPhotoAttachment = f
+    const photoAttachment = f
       ? {
           fileName: f.originalname,
           url: `/uploads/appliances/${f.filename}`,
@@ -253,20 +275,36 @@ router.post("/upload", requireAuth, upload.single("tagPhotoFile"), async (req, r
 
     const created = await Appliance.create({
       frontendId: await getNextAssetId(),
+      inventoryType: body.inventoryType || "asset",
       name: body.name,
-      category: body.type || body.category || "appliance",
-      serialNumber: body.location || body.serialNumber || "N/A",
-      status: body.status || "operational",
+      brand: body.brand || "",
+      model: body.model || "",
       location: body.location || "",
-      warrantyExpiry: body.warrantyUntil || "",
-      lastMaintenance: body.purchaseDate || "",
-      assignedTo: null,
+      photoFileName: f?.originalname || body.photoFileName || "",
+      photoDataUrl: body.photoDataUrl || "",
+      photoAttachment,
+      supplier: body.supplier || "",
+      status: body.status || "active",
+      serialNumber: body.serialNumber || "",
+      propertyType: body.propertyType || "commercial",
+      purchaseDate: body.purchaseDate || "",
+      warrantyUntil: body.warrantyUntil || "",
+      conditionStatus: body.conditionStatus || "good",
+      assignedTo: body.assignedTo || "",
+      quantity: Number(body.quantity || 0),
+      unitType: body.unitType || "pieces",
+      reorderPoint: Number(body.reorderPoint || 0),
+      dailyUsageRate: Number(body.dailyUsageRate || 0),
+      sku: body.sku || "",
+      costPrice: Number(body.costPrice || 0),
+      sellingPrice: Number(body.sellingPrice || 0),
+      // Legacy
+      category: body.category || "appliance",
       tagPhotoFileName: f?.originalname || body.tagPhotoFileName || "",
-      tagPhotoAttachment,
     });
 
     // Log activity
-    await logActivity(req, "APPLIANCE_CREATE", "appliance", created._id, created.name, `Created appliance with photo: ${created.name}`);
+    await logActivity(req, "APPLIANCE_CREATE", "appliance", created._id, created.name, `Created ${created.inventoryType}: ${created.name}`);
 
     // Create notification
     await createNotification({
@@ -275,7 +313,7 @@ router.post("/upload", requireAuth, upload.single("tagPhotoFile"), async (req, r
       action: "created",
       resourceType: "appliance",
       resourceName: created.name,
-      details: created.category ? `Category: ${created.category}` : "",
+      details: `Type: ${created.inventoryType}`,
       resourceId: String(created._id),
     });
     cacheDel("appliances:list");

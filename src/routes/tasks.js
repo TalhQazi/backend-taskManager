@@ -289,28 +289,39 @@ router.get("/", requireAuth, async (req, res, next) => {
     const fullName = String(req.user?.fullName || "").trim();
     const candidates = [username, name, fullName].filter(Boolean);
 
-    // 1. Accessibility Filter for Employees
-    if (role !== "admin" && role !== "super-admin" && role !== "manager") {
+    // 1. Accessibility Filter for Employees and Managers
+    // Managers should only see tasks where they are the teamLead or assigned to them
+    if (role !== "admin" && role !== "super-admin") {
       if (candidates.length === 0) {
         return res.json(paginatedResponse([], 0, page, limit));
       }
 
-      // Find projects where the user is an assignee
-      const Project = require("../models/Project");
-      const assignedProjects = await Project.find({
-        assignees: { $elemMatch: { $regex: new RegExp(`^(${candidates.map(escapeRegExp).join("|")})$`, "i") } }
-      }).select("_id").lean();
-      const assignedProjectIds = assignedProjects.map(p => p._id);
-
-      conditions.push({
-        $or: [
-          ...candidates.flatMap((c) => [
+      // For managers and team-leads, filter by teamLead field
+      if (role === "manager" || role === "team-lead") {
+        conditions.push({
+          $or: candidates.flatMap((c) => [
+            { teamLead: { $regex: new RegExp(`^${escapeRegExp(c)}$`, "i") } },
             { assignees: { $elemMatch: { $regex: new RegExp(`^${escapeRegExp(c)}$`, "i") } } },
-            { assignee: { $regex: new RegExp(`^${escapeRegExp(c)}$`, "i") } }, // Legacy
-          ]),
-          { projectId: { $in: assignedProjectIds } }
-        ]
-      });
+          ])
+        });
+      } else {
+        // Find projects where the user is an assignee
+        const Project = require("../models/Project");
+        const assignedProjects = await Project.find({
+          assignees: { $elemMatch: { $regex: new RegExp(`^(${candidates.map(escapeRegExp).join("|")})$`, "i") } }
+        }).select("_id").lean();
+        const assignedProjectIds = assignedProjects.map(p => p._id);
+
+        conditions.push({
+          $or: [
+            ...candidates.flatMap((c) => [
+              { assignees: { $elemMatch: { $regex: new RegExp(`^${escapeRegExp(c)}$`, "i") } } },
+              { assignee: { $regex: new RegExp(`^${escapeRegExp(c)}$`, "i") } }, // Legacy
+            ]),
+            { projectId: { $in: assignedProjectIds } }
+          ]
+        });
+      }
     }
 
     // 2. Project Filter
