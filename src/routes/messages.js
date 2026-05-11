@@ -149,23 +149,24 @@ router.get("/", requireAuth, async (req, res, next) => {
         const userId = String(req.user?.sub || req.user?.id || "").trim();
 
         query.type = "broadcast";
+
         if (role === "super-admin") {
           // super-admin sees all broadcast notifications
         } else {
           const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-          
+
           // Build candidates: include own role + related roles if admin/manager
           let candidates = [role, username, userId].filter(Boolean);
-          
+
           // Admin and manager can see each other's notifications
           if (role === "admin" || role === "manager") {
             candidates.push("admin");
             candidates.push("manager");
           }
-          
+
           // Remove duplicates
           candidates = [...new Set(candidates)];
-          
+
           query.$or = candidates.map((c) => ({
             recipient: { $regex: new RegExp(`(^|,)${escapeRegex(c)}(,|$)`, "i") }
           }));
