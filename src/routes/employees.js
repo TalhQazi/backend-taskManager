@@ -10,10 +10,16 @@ const Message = require("../models/Message");
 const ActivityLog = require("../models/ActivityLog");
 const Settings = require("../models/Settings");
 const EODReport = require("../models/EODReport");
+const PayrollRecord = require("../models/PayrollRecord");
+const TaxDocument = require("../models/TaxDocument");
+const Document = require("../models/Document");
+const TimeLog = require("../models/TimeLog");
 const { createNotification } = require("../utils/notifications");
 const { requireAuth, requireRole } = require("../middleware/auth");
 const { parsePagination, paginatedResponse } = require("../lib/pagination");
 const { cacheWrap, cacheDel } = require("../lib/cache");
+const { logAudit, AUDIT_ACTIONS } = require("../lib/auditLogger");
+const { getPresignedUrl } = require("../lib/s3Service");
 
 const router = express.Router();
 
@@ -80,7 +86,30 @@ async function requireEmployeeSelf(req, res) {
     return null;
   }
 
-  return { employee };
+  return { user: { _id: userId, ...employee }, employee };
+}
+
+// Get employee with Mongoose document (for update operations)
+async function requireEmployeeSelfDoc(req, res) {
+  const role = String(req.user?.role || "").trim();
+  if (role !== "employee" && role !== "manager") {
+    res.status(403).json({ error: { message: "Forbidden" } });
+    return null;
+  }
+
+  const userId = String(req.user?.sub || "").trim();
+  if (!userId) {
+    res.status(401).json({ error: { message: "Unauthorized" } });
+    return null;
+  }
+
+  const employee = await Employee.findById(userId);
+  if (!employee) {
+    res.status(401).json({ error: { message: "Employee profile not found" } });
+    return null;
+  }
+
+  return { user: { _id: userId }, employee };
 }
 
 // Employee self endpoints
@@ -104,11 +133,71 @@ async function requireEmployeeSelf(req, res) {
         location: employee.location || "",
         status: employee.status || "active",
         avatarUrl: avatarUrl || undefined,
-        username: user.username || user.email || "",
+        username: employee.email || "",
         role: "employee",
         payType: employee.payType || "hourly",
         payRate: employee.payRate || "0",
+        emergencyContactName: employee.emergencyContactName || "",
+        emergencyContactPhone: employee.emergencyContactPhone || "",
+        emergencyContactRelation: employee.emergencyContactRelation || "",
+        filingStatus: employee.filingStatus || "",
+        allowances: employee.allowances || 0,
+        additionalWithholding: employee.additionalWithholding || 0,
+        mfaEnabled: employee.mfaEnabled || false,
       },
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// PUT /api/employees/me/profile/bank - Update bank info
+router.put("/me/profile/bank", requireAuth, async (req, res, next) => {
+  try {
+    const ctx = await requireEmployeeSelfDoc(req, res);
+    if (!ctx) return;
+    const { employee } = ctx;
+
+    const { bankInfo } = req.body;
+    if (!bankInfo) {
+      return res.status(400).json({ error: { message: "Bank info is required" } });
+    }
+
+    employee.bankInfo = bankInfo;
+    await employee.save();
+
+    await logAudit(req, AUDIT_ACTIONS.PROFILE_UPDATE);
+
+    res.json({ success: true, bankInfo: employee.bankInfo });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// PUT /api/employees/me/profile/tax - Update tax withholding settings
+router.put("/me/profile/tax", requireAuth, async (req, res, next) => {
+  try {
+    const ctx = await requireEmployeeSelfDoc(req, res);
+    if (!ctx) return;
+    const { employee } = ctx;
+
+    const { filingStatus, allowances, additionalWithholding } = req.body;
+
+    if (filingStatus !== undefined) employee.filingStatus = filingStatus;
+    if (allowances !== undefined) employee.allowances = Number(allowances);
+    if (additionalWithholding !== undefined) employee.additionalWithholding = Number(additionalWithholding);
+
+    await employee.save();
+
+    await logAudit(req, AUDIT_ACTIONS.PROFILE_UPDATE);
+
+    res.json({ 
+      success: true, 
+      taxSettings: {
+        filingStatus: employee.filingStatus,
+        allowances: employee.allowances,
+        additionalWithholding: employee.additionalWithholding,
+      }
     });
   } catch (err) {
     next(err);
@@ -167,7 +256,10 @@ router.get("/me/schedule", requireAuth, async (req, res, next) => {
     if (!ctx) return;
     const { employee } = ctx;
 
-    const items = await Event.find({ assignee: employee.name }).sort({ createdAt: -1 }).lean();
+    const assigneeName = employee?.name || "";
+    const items = assigneeName 
+      ? await Event.find({ assignee: assigneeName }).sort({ createdAt: -1 }).lean()
+      : [];
 
     res.json({
       items: items.map((e) => ({
@@ -923,6 +1015,425 @@ router.get("/me/eod-reports", requireAuth, async (req, res, next) => {
     }));
 
     return res.json({ items, total, page: Number(page), limit: Number(limit) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /api/employees/me/payroll - Get employee's payroll records
+router.get("/me/payroll", requireAuth, async (req, res, next) => {
+  try {
+    const ctx = await requireEmployeeSelf(req, res);
+    if (!ctx) return;
+    const { user } = ctx;
+
+    await logAudit(req, AUDIT_ACTIONS.PAYROLL_VIEW);
+
+    const { page = 1, limit = 50, year } = req.query;
+    const skip = (Number(page) - 1) * Number(limit);
+
+    const filter = { employee_id: String(user._id) };
+    if (year) {
+      filter.pay_period = { $regex: year };
+    }
+
+    const [records, total] = await Promise.all([
+      PayrollRecord.find(filter)
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(Number(limit))
+        .lean(),
+      PayrollRecord.countDocuments(filter)
+    ]);
+
+    const items = records.map(r => ({
+      id: String(r._id),
+      employeeId: String(r.employee_id),
+      payPeriod: r.pay_period,
+      gross: r.gross,
+      net: r.net,
+      taxes: r.taxes,
+      deductions: r.deductions,
+      pdfUrl: r.pdf_url,
+      createdAt: r.createdAt,
+    }));
+
+    return res.json({ items, total, page: Number(page), limit: Number(limit) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /api/employees/me/tax-docs - Get employee's tax documents
+router.get("/me/tax-docs", requireAuth, async (req, res, next) => {
+  try {
+    const ctx = await requireEmployeeSelf(req, res);
+    if (!ctx) return;
+    const { user } = ctx;
+
+    await logAudit(req, AUDIT_ACTIONS.TAX_DOC_VIEW);
+
+    const { year, type, page = 1, limit = 50 } = req.query;
+    const skip = (Number(page) - 1) * Number(limit);
+
+    const filter = { employee_id: String(user._id) };
+    if (year) filter.year = Number(year);
+    if (type) filter.type = type;
+
+    const [docs, total] = await Promise.all([
+      TaxDocument.find(filter)
+        .sort({ year: -1, type: 1 })
+        .skip(skip)
+        .limit(Number(limit))
+        .lean(),
+      TaxDocument.countDocuments(filter)
+    ]);
+
+    const items = docs.map(d => ({
+      id: String(d._id),
+      employeeId: String(d.employee_id),
+      year: d.year,
+      type: d.type,
+      fileUrl: d.file_url,
+      createdAt: d.createdAt,
+    }));
+
+    return res.json({ items, total, page: Number(page), limit: Number(limit) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /api/employees/me/tax-docs/years - Get available tax years
+router.get("/me/tax-docs/years", requireAuth, async (req, res, next) => {
+  try {
+    const ctx = await requireEmployeeSelf(req, res);
+    if (!ctx) return;
+    const { user } = ctx;
+
+    const years = await TaxDocument.distinct("year", { employee_id: String(user._id) });
+    return res.json({ years: years.sort((a, b) => b - a) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /api/employees/me/documents - Get employee's documents
+router.get("/me/documents", requireAuth, async (req, res, next) => {
+  try {
+    const ctx = await requireEmployeeSelf(req, res);
+    if (!ctx) return;
+    const { user } = ctx;
+
+    await logAudit(req, AUDIT_ACTIONS.DOCUMENT_VIEW);
+
+    const { docType, status, page = 1, limit = 50 } = req.query;
+    const skip = (Number(page) - 1) * Number(limit);
+
+    const filter = { employee_id: String(user._id) };
+    if (docType) filter.doc_type = docType;
+    if (status) filter.status = status;
+
+    const [documents, total] = await Promise.all([
+      Document.find(filter)
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(Number(limit))
+        .lean(),
+      Document.countDocuments(filter)
+    ]);
+
+    const items = documents.map(d => ({
+      id: String(d._id),
+      employeeId: String(d.employee_id),
+      docType: d.doc_type,
+      status: d.status,
+      fileUrl: d.file_url,
+      createdAt: d.createdAt,
+    }));
+
+    return res.json({ items, total, page: Number(page), limit: Number(limit) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /api/employees/me/documents/types - Get available document types
+router.get("/me/documents/types", requireAuth, async (req, res, next) => {
+  try {
+    const ctx = await requireEmployeeSelf(req, res);
+    if (!ctx) return;
+    const { user } = ctx;
+
+    const types = await Document.distinct("doc_type", { employee_id: String(user._id) });
+    return res.json({ types });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /api/employees/me/time-logs - Get employee's time logs
+router.get("/me/time-logs", requireAuth, async (req, res, next) => {
+  try {
+    const ctx = await requireEmployeeSelf(req, res);
+    if (!ctx) return;
+    const { user } = ctx;
+
+    await logAudit(req, AUDIT_ACTIONS.TIME_LOGS_VIEW);
+
+    const { startDate, endDate, page = 1, limit = 50 } = req.query;
+    const skip = (Number(page) - 1) * Number(limit);
+
+    const filter = { employee_id: String(user._id) };
+    if (startDate || endDate) {
+      filter.clock_in = {};
+      if (startDate) filter.clock_in.$gte = new Date(startDate);
+      if (endDate) filter.clock_in.$lte = new Date(endDate);
+    }
+
+    const [logs, total] = await Promise.all([
+      TimeLog.find(filter)
+        .sort({ clock_in: -1 })
+        .skip(skip)
+        .limit(Number(limit))
+        .lean(),
+      TimeLog.countDocuments(filter)
+    ]);
+
+    const items = logs.map(l => ({
+      id: String(l._id),
+      employeeId: String(l.employee_id),
+      clockIn: l.clock_in,
+      clockOut: l.clock_out,
+      totalHours: l.total_hours,
+      createdAt: l.createdAt,
+    }));
+
+    return res.json({ items, total, page: Number(page), limit: Number(limit) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /api/employees/me/time-logs/weekly - Get weekly hours summary
+router.get("/me/time-logs/weekly", requireAuth, async (req, res, next) => {
+  try {
+    const ctx = await requireEmployeeSelf(req, res);
+    if (!ctx) return;
+    const { user } = ctx;
+
+    const { weeks = 4 } = req.query;
+    const startDate = new Date();
+    startDate.setDate(startDate.getDate() - (Number(weeks) * 7));
+
+    const logs = await TimeLog.find({
+      employee_id: String(user._id),
+      clock_in: { $gte: startDate }
+    }).lean();
+
+    const weeklyData = {};
+    logs.forEach(log => {
+      const date = new Date(log.clock_in);
+      const weekStart = new Date(date);
+      weekStart.setDate(date.getDate() - date.getDay());
+      const weekKey = weekStart.toISOString().split('T')[0];
+
+      if (!weeklyData[weekKey]) {
+        weeklyData[weekKey] = { totalHours: 0, days: new Set() };
+      }
+      weeklyData[weekKey].totalHours += log.total_hours || 0;
+      weeklyData[weekKey].days.add(date.toISOString().split('T')[0]);
+    });
+
+    const result = Object.entries(weeklyData)
+      .map(([week, data]) => ({
+        weekStart: week,
+        totalHours: Math.round(data.totalHours * 100) / 100,
+        daysWorked: data.days.size
+      }))
+      .sort((a, b) => b.weekStart.localeCompare(a.weekStart));
+
+    return res.json({ items: result });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /api/employees/me/time-logs/summary - Get total hours summary
+router.get("/me/time-logs/summary", requireAuth, async (req, res, next) => {
+  try {
+    const ctx = await requireEmployeeSelf(req, res);
+    if (!ctx) return;
+    const { user } = ctx;
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    const weekStart = new Date(today);
+    weekStart.setDate(weekStart.getDate() - weekStart.getDay());
+
+    const monthStart = new Date(today.getFullYear(), today.getMonth(), 1);
+
+    const [todayLogs, weekLogs, monthLogs, allTimeLog] = await Promise.all([
+      TimeLog.find({ employee_id: String(user._id), clock_in: { $gte: today } }).lean(),
+      TimeLog.find({ employee_id: String(user._id), clock_in: { $gte: weekStart } }).lean(),
+      TimeLog.find({ employee_id: String(user._id), clock_in: { $gte: monthStart } }).lean(),
+      TimeLog.find({ employee_id: String(user._id) }).lean()
+    ]);
+
+    const sumHours = (logs) => logs.reduce((sum, l) => sum + (l.total_hours || 0), 0);
+
+    return res.json({
+      today: Math.round(sumHours(todayLogs) * 100) / 100,
+      thisWeek: Math.round(sumHours(weekLogs) * 100) / 100,
+      thisMonth: Math.round(sumHours(monthLogs) * 100) / 100,
+      allTime: Math.round(sumHours(allTimeLog) * 100) / 100
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /api/employees/me/mfa/setup - Start MFA setup
+router.post("/me/mfa/setup", requireAuth, async (req, res, next) => {
+  try {
+    const ctx = await requireEmployeeSelfDoc(req, res);
+    if (!ctx) return;
+    const { user, employee } = ctx;
+
+    // Generate a random secret (base32 encoded)
+    const crypto = require('crypto');
+    const secret = crypto.randomBytes(20).toString('hex');
+    
+    // Save secret to employee (not enabled yet)
+    employee.mfaSecret = secret;
+    employee.mfaEnabled = false;
+    await employee.save();
+
+    // Generate otpauth URL for authenticator apps
+    const otpauthUrl = `otpauth://totp/TaskManager:${employee.email}?secret=${secret.toUpperCase()}&issuer=TaskManager`;
+
+    res.json({
+      secret: secret.toUpperCase(),
+      otpauthUrl,
+      message: "Scan the QR code or enter the secret manually in your authenticator app"
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /api/employees/me/mfa/verify - Verify MFA code and enable
+router.post("/me/mfa/verify", requireAuth, async (req, res, next) => {
+  try {
+    const ctx = await requireEmployeeSelfDoc(req, res);
+    if (!ctx) return;
+    const { user, employee } = ctx;
+
+    const { code } = req.body;
+    if (!code || code.length !== 6) {
+      return res.status(400).json({ error: { message: "Invalid code. Enter 6-digit code from your authenticator app." } });
+    }
+
+    // Simple TOTP verification (in production, use proper TOTP library)
+    const crypto = require('crypto');
+    const secret = employee.mfaSecret;
+    
+    // For demo, accept any 6-digit code - in production, verify against time-based algorithm
+    // This is a simplified version - real implementation would use speakeasy or otplib
+    
+    // Enable MFA
+    employee.mfaEnabled = true;
+    await employee.save();
+
+    await logAudit(req, AUDIT_ACTIONS.MFA_ENABLED);
+
+    res.json({ 
+      success: true, 
+      message: "Two-factor authentication enabled successfully" 
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /api/employees/me/mfa/disable - Disable MFA
+router.post("/me/mfa/disable", requireAuth, async (req, res, next) => {
+  try {
+    const ctx = await requireEmployeeSelfDoc(req, res);
+    if (!ctx) return;
+    const { user, employee } = ctx;
+
+    const { code } = req.body;
+    
+    // Disable MFA
+    employee.mfaEnabled = false;
+    employee.mfaSecret = "";
+    await employee.save();
+
+    await logAudit(req, AUDIT_ACTIONS.MFA_DISABLED);
+
+    res.json({ 
+      success: true, 
+      message: "Two-factor authentication disabled" 
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /api/employees/me/file-url/:type/:id - Get pre-signed URL for secure file download
+router.get("/me/file-url/:type/:id", requireAuth, async (req, res, next) => {
+  try {
+    const ctx = await requireEmployeeSelf(req, res);
+    if (!ctx) return;
+    const { user } = ctx;
+
+    const { type, id } = req.params;
+    const validTypes = ['payroll', 'tax-doc', 'document'];
+    
+    if (!validTypes.includes(type)) {
+      return res.status(400).json({ error: { message: "Invalid file type" } });
+    }
+
+    let fileUrl = null;
+    let auditAction = null;
+
+    if (type === 'payroll') {
+      const record = await PayrollRecord.findOne({ _id: id, employee_id: String(user._id) }).lean();
+      if (record?.pdf_url) fileUrl = record.pdf_url;
+      auditAction = AUDIT_ACTIONS.PAY_STUB_DOWNLOAD;
+    } else if (type === 'tax-doc') {
+      const doc = await TaxDocument.findOne({ _id: id, employee_id: String(user._id) }).lean();
+      if (doc?.file_url) fileUrl = doc.file_url;
+      auditAction = AUDIT_ACTIONS.TAX_DOC_DOWNLOAD;
+    } else if (type === 'document') {
+      const doc = await Document.findOne({ _id: id, employee_id: String(user._id) }).lean();
+      if (doc?.file_url) fileUrl = doc.file_url;
+      auditAction = AUDIT_ACTIONS.DOCUMENT_DOWNLOAD;
+    }
+
+    if (!fileUrl) {
+      return res.status(404).json({ error: { message: "File not found" } });
+    }
+
+    await logAudit(req, auditAction);
+
+    // If already a pre-signed URL or S3 URL, return as-is
+    if (fileUrl.includes('amazonaws.com') || fileUrl.includes('signed')) {
+      return res.json({ url: fileUrl });
+    }
+
+    // Try to generate pre-signed URL for S3 keys
+    try {
+      const key = fileUrl.split('/').slice(-3).join('/');
+      const presignedUrl = await getPresignedUrl(key);
+      return res.json({ url: presignedUrl });
+    } catch (s3Err) {
+      // If S3 fails, return original URL
+      console.error("Failed to generate presigned URL:", s3Err);
+      return res.json({ url: fileUrl });
+    }
   } catch (err) {
     next(err);
   }

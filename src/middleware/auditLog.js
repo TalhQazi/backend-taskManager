@@ -58,6 +58,7 @@ function determineAction(method, path, body) {
     },
     GET: {
       'export': 'DATA_EXPORT',
+      'files/*': 'FILE_DOWNLOAD',
     }
   };
   

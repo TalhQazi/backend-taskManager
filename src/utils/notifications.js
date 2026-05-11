@@ -1,5 +1,12 @@
 const Message = require("../models/Message");
 
+// Add notification types for missing documents, payroll updates, and W-2 availability
+const NOTIFICATION_TYPES = {
+  MISSING_DOCUMENT: "Missing Document Alert",
+  PAYROLL_POSTED: "Payroll Posted Alert",
+  W2_AVAILABLE: "End-of-Year W-2 Alert",
+};
+
 /**
  * Create a notification with targeted audience.
  *
@@ -83,4 +90,40 @@ async function createNotification({
   }
 }
 
-module.exports = { createNotification };
+async function notifyMissingDocument(employeeId, documentName) {
+  await createNotification({
+    actor: "System",
+    actorRole: "admin",
+    action: "alerted",
+    resourceType: "document",
+    resourceName: documentName,
+    assignees: [employeeId],
+    details: NOTIFICATION_TYPES.MISSING_DOCUMENT,
+  });
+}
+
+async function notifyPayrollPosted(employeeId) {
+  await createNotification({
+    actor: "System",
+    actorRole: "admin",
+    action: "alerted",
+    resourceType: "payroll",
+    resourceName: "Payroll Update",
+    assignees: [employeeId],
+    details: NOTIFICATION_TYPES.PAYROLL_POSTED,
+  });
+}
+
+async function notifyW2Available(employeeId) {
+  await createNotification({
+    actor: "System",
+    actorRole: "admin",
+    action: "alerted",
+    resourceType: "tax document",
+    resourceName: "W-2 Form",
+    assignees: [employeeId],
+    details: NOTIFICATION_TYPES.W2_AVAILABLE,
+  });
+}
+
+module.exports = { createNotification, notifyMissingDocument, notifyPayrollPosted, notifyW2Available };
