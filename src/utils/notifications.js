@@ -90,15 +90,20 @@ async function createNotification({
       },
     });
 
-    // Emit real-time via socket.io
+    // Emit real-time via socket.io — targeted to recipient rooms only
     const io = global.io;
     if (io) {
-      io.emit("new-notification", {
+      const payload = {
         ...notification.toObject(),
         id: String(notification._id),
         title: titlePlain,
         content: content,
-        message: content // For backward compatibility with frontend expecting 'message'
+        message: content,
+      };
+      // targetSet contains role names ("admin", "manager", "super-admin") and specific usernames.
+      // Each connected client joins their username room + role room via "register-user".
+      Array.from(targetSet).forEach((room) => {
+        io.to(room).emit("new-notification", payload);
       });
     }
 

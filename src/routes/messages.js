@@ -91,6 +91,35 @@ router.post("/upload", requireAuth, upload.single("file"), async (req, res, next
   }
 });
 
+// Unread broadcast notification count for the current user
+router.get("/unread-count", requireAuth, async (req, res, next) => {
+  try {
+    const currentUser = String(req.user?.username || req.user?.name || "").trim();
+    const role = String(req.user?.role || "").trim();
+
+    if (!currentUser) return res.json({ count: 0 });
+
+    const query = { type: "broadcast", readBy: { $ne: currentUser } };
+
+    if (role !== "super-admin") {
+      const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      let candidates = [role, currentUser].filter(Boolean);
+      if (role === "admin" || role === "manager") {
+        candidates.push("admin", "manager");
+      }
+      candidates = [...new Set(candidates)];
+      query.$or = candidates.map((c) => ({
+        recipient: { $regex: new RegExp(`(^|,)${escapeRegex(c)}(,|$)`, "i") },
+      }));
+    }
+
+    const count = await Message.countDocuments(query);
+    return res.json({ count });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // Get all messages (with optional filtering)
 router.get("/", requireAuth, async (req, res, next) => {
   try {

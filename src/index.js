@@ -113,7 +113,19 @@ global.io = io;
 // Socket.io connection handling
 io.on("connection", (socket) => {
   console.log("Client connected:", socket.id);
-  
+
+  // Register user into their personal room + role room for targeted notification delivery
+  socket.on("register-user", ({ username, role } = {}) => {
+    if (username) {
+      socket.join(username);
+      console.log(`Socket ${socket.id} registered as user: ${username}`);
+    }
+    if (role) {
+      socket.join(role);
+      console.log(`Socket ${socket.id} joined role room: ${role}`);
+    }
+  });
+
   // Join task-specific room for receiving real-time comments
   socket.on("join-task", (taskId) => {
     if (taskId) {
@@ -121,7 +133,7 @@ io.on("connection", (socket) => {
       console.log(`Socket ${socket.id} joined task-${taskId}`);
     }
   });
-  
+
   // Leave task room
   socket.on("leave-task", (taskId) => {
     if (taskId) {
@@ -129,17 +141,17 @@ io.on("connection", (socket) => {
       console.log(`Socket ${socket.id} left task-${taskId}`);
     }
   });
-  
+
   // Handle typing indicator
   socket.on("typing", ({ taskId, username }) => {
     socket.to(`task-${taskId}`).emit("typing", { taskId, username });
   });
-  
+
   // Handle stop typing
   socket.on("stop-typing", ({ taskId }) => {
     socket.to(`task-${taskId}`).emit("stop-typing", { taskId });
   });
-  
+
   socket.on("disconnect", () => {
     console.log("Client disconnected:", socket.id);
   });
