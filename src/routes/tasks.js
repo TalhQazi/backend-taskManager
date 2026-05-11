@@ -22,6 +22,7 @@ const { parsePagination, paginatedResponse } = require("../lib/pagination");
 const { cacheWrap, cacheDel } = require("../lib/cache");
 const { uploadToS3, base64ToBuffer, getFromS3, extractS3Key } = require("../lib/s3");
 const contributionTracker = require("../utils/contributionTracker");
+const { sendEmailNotification } = require("../utils/emailNotifications");
 
 const router = express.Router();
 // Middleware to skip body parsing for multipart/form-data (must be before other middleware)
@@ -628,6 +629,9 @@ router.post("/", requireAuth, async (req, res, next) => {
         email: req.user?.email || "",
         role: req.user?.role || "employee",
       }),
+      ...(Array.isArray(created.assignees) ? created.assignees : []).map(assignee =>
+        sendEmailNotification(assignee, "taskAssignment", { taskTitle: created.title })
+      )
     ]).catch((err) => {
       console.error("Task creation side-effects error:", err);
     });
@@ -762,6 +766,13 @@ router.post("/upload", requireAuth, upload.array("files", 10), async (req, res, 
       }),
       cacheDel("tasks:list:*"),
       created.projectId ? cacheDel(`project:${created.projectId}`) : Promise.resolve(),
+      ...(Array.isArray(created.assignees) ? created.assignees : []).map(assignee => {
+        sendEmailNotification(assignee, "taskAssignment", { taskTitle: created.title });
+        sendEmailNotification(assignee, "fileAttachment", { 
+          fileName: attachments[0]?.fileName || parsed.data.attachmentFileName || "Attachment", 
+          taskTitle: created.title 
+        });
+      })
     ]).catch(() => {});
 
     return res.status(201).json({ item: withId(obj) });
@@ -875,6 +886,13 @@ router.post("/:id/comments", requireAuth, async (req, res, next) => {
           details: `"${message.length > 50 ? message.substring(0, 50) + "..." : message}"`,
           resourceId: String(task._id),
         });
+        mentionedUsers.forEach(user => {
+          sendEmailNotification(user, "replyAdded", {
+            taskTitle: task.title,
+            authorName: req.user?.username || req.user?.name || "Someone",
+            replyText: message.length > 50 ? message.substring(0, 50) + "..." : message
+          });
+        });
       }
     }
 
@@ -893,6 +911,14 @@ router.post("/:id/comments", requireAuth, async (req, res, next) => {
         assignees: Array.from(commentRecipients),
         details: `"${message.length > 50 ? message.substring(0, 50) + "..." : message}"`,
         resourceId: String(task._id),
+      });
+      
+      Array.from(commentRecipients).forEach(recipient => {
+        sendEmailNotification(recipient, "commentAdded", {
+          taskTitle: task.title,
+          authorName: req.user?.username || req.user?.name || "Someone",
+          commentText: message.length > 50 ? message.substring(0, 50) + "..." : message
+        });
       });
     }
 
@@ -1451,6 +1477,18 @@ router.put("/:id", requireAuth, async (req, res, next) => {
       }),
       cacheDel("tasks:list:*"),
       updated.projectId ? cacheDel(`project:${updated.projectId}`) : Promise.resolve(),
+      (() => {
+        const hasNewAttachment = (patch.attachment && patch.attachment.url) || (Array.isArray(patch.attachments) && patch.attachments.length > 0);
+        if (hasNewAttachment) {
+          return Promise.all((Array.isArray(updated.assignees) ? updated.assignees : []).map(assignee =>
+            sendEmailNotification(assignee, "fileAttachment", {
+              fileName: patch.attachment?.fileName || patch.attachments?.[0]?.fileName || "New attachment",
+              taskTitle: updated.title
+            })
+          ));
+        }
+        return Promise.resolve();
+      })()
     ]).catch(() => {});
 
     return res.json({ item: withId(updated) });
@@ -1554,6 +1592,10 @@ router.put("/:id/reassign", requireAuth, async (req, res, next) => {
       resourceName: updated.title,
       resourceId: String(req.params.id),
       details: `New assignees: ${assignees.join(", ")}`,
+    });
+
+    assignees.forEach(assignee => {
+      sendEmailNotification(assignee, "taskAssignment", { taskTitle: updated.title });
     });
 
     return res.json({ item: withId(updated) });
