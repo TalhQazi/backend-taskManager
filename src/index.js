@@ -150,6 +150,22 @@ io.on("connection", (socket) => {
     }
   });
 
+  // Join project-specific room for receiving real-time project comments
+  socket.on("join-project", (projectId) => {
+    if (projectId) {
+      socket.join(`project-${projectId}`);
+      console.log(`Socket ${socket.id} joined project-${projectId}`);
+    }
+  });
+
+  // Leave project room
+  socket.on("leave-project", (projectId) => {
+    if (projectId) {
+      socket.leave(`project-${projectId}`);
+      console.log(`Socket ${socket.id} left project-${projectId}`);
+    }
+  });
+
   // Handle typing indicator
   socket.on("typing", ({ taskId, username }) => {
     socket.to(`task-${taskId}`).emit("typing", { taskId, username });
