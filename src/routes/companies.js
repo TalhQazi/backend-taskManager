@@ -73,6 +73,15 @@ const createSchema = z.object({
     currency: z.string().optional().default("USD"),
   }).optional().default({}),
   logo: z.string().optional().default(""),
+  einNumber: z.string().optional().default(""),
+  charterNumber: z.string().optional().default(""),
+  stateOfIncorporation: z.string().optional().default(""),
+  foreignEntities: z.array(z.object({
+    state: z.string().optional().default(""),
+    documentNumber: z.string().optional().default(""),
+  })).optional().default([]),
+  originalFilingDate: z.string().optional().nullable(),
+  annualReportDueDate: z.string().optional().nullable(),
 });
 
 const updateSchema = createSchema.partial();

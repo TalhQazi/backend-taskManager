@@ -333,6 +333,11 @@ connectDb()
     
     // Initialize default founder messages
     await initializeMessages();
+
+    // Start background reminders (Annual Reports)
+    const { checkAnnualReportReminders } = require("./utils/reminders");
+    checkAnnualReportReminders(); // Run once on startup
+    setInterval(checkAnnualReportReminders, 24 * 60 * 60 * 1000); // Run every 24 hours
     
     httpServer.listen(port, () => {
       console.log(`Backend listening on http://localhost:${port}`);

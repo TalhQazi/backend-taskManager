@@ -58,6 +58,37 @@ const companySchema = new mongoose.Schema(
       type: String,
       default: "",
     },
+    // Corporate Compliance Fields
+    einNumber: {
+      type: String,
+      trim: true,
+      default: "",
+    },
+    charterNumber: {
+      type: String,
+      trim: true,
+      default: "",
+    },
+    stateOfIncorporation: {
+      type: String,
+      trim: true,
+      default: "",
+    },
+    foreignEntities: [
+      {
+        state: { type: String, trim: true },
+        documentNumber: { type: String, trim: true },
+      }
+    ],
+    originalFilingDate: {
+      type: Date,
+    },
+    annualReportDueDate: {
+      type: Date,
+    },
+    lastAnnualReportReminderSent: {
+      type: Date,
+    },
     createdBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
