@@ -95,15 +95,18 @@ router.post("/upload", requireAuth, upload.single("file"), async (req, res, next
 router.get("/unread-count", requireAuth, async (req, res, next) => {
   try {
     const currentUser = String(req.user?.username || req.user?.name || "").trim();
+    const currentName = String(req.user?.name || "").trim();
     const role = String(req.user?.role || "").trim();
 
     if (!currentUser) return res.json({ count: 0 });
 
-    const query = { type: "broadcast", readBy: { $ne: currentUser } };
+    const query = { type: "broadcast", readBy: { $ne: currentUser }, "meta.category": { $ne: "SYSTEM" } };
 
     if (role !== "super-admin") {
       const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-      let candidates = [role, currentUser].filter(Boolean);
+      // Include both email-based username AND display name so employees can find
+      // notifications stored with their display name (from task.assignees).
+      let candidates = [role, currentUser, currentName].filter(Boolean);
       if (role === "admin" || role === "manager") {
         candidates.push("admin", "manager");
       }
@@ -146,17 +149,20 @@ router.get("/", requireAuth, async (req, res, next) => {
       } else if (String(type || "").toLowerCase() === "broadcast") {
         const role = String(req.user?.role || "").trim();
         const username = String(req.user?.username || req.user?.name || "").trim();
+        const displayName = String(req.user?.name || "").trim();
         const userId = String(req.user?.sub || req.user?.id || "").trim();
 
         query.type = "broadcast";
+        query["meta.category"] = { $ne: "SYSTEM" };
 
         if (role === "super-admin") {
           // super-admin sees all broadcast notifications
         } else {
           const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-          // Build candidates: include own role + related roles if admin/manager
-          let candidates = [role, username, userId].filter(Boolean);
+          // Include both email-username AND display name. Employees have username=email
+          // but task.assignees stores display names, so both must be searchable.
+          let candidates = [role, username, displayName, userId].filter(Boolean);
 
           // Admin and manager can see each other's notifications
           if (role === "admin" || role === "manager") {
@@ -444,24 +450,22 @@ router.post("/mark-all-read", requireAuth, async (req, res, next) => {
   try {
     const role = String(req.user?.role || "").trim();
     const currentUser = String(req.user?.username || req.user?.name || "").trim();
+    const currentName = String(req.user?.name || "").trim();
     if (!currentUser) return res.status(400).json({ error: { message: "Cannot identify user" } });
 
-    let query = { type: "broadcast" };
+    let query = { type: "broadcast", "meta.category": { $ne: "SYSTEM" } };
     if (role !== "super-admin") {
       const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-      
-      // Build candidates: include own role + related roles if admin/manager
-      let candidates = [role, currentUser].filter(Boolean);
-      
-      // Admin and manager can see each other's notifications
+
+      let candidates = [role, currentUser, currentName].filter(Boolean);
+
       if (role === "admin" || role === "manager") {
         candidates.push("admin");
         candidates.push("manager");
       }
-      
-      // Remove duplicates
+
       candidates = [...new Set(candidates)];
-      
+
       query.$or = candidates.map((c) => ({
         recipient: { $regex: new RegExp(`(^|,)${escapeRegex(c)}(,|$)`, "i") }
       }));

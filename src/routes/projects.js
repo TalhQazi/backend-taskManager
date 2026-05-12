@@ -798,16 +798,6 @@ router.put("/:id", requireAuth, async (req, res, next) => {
       `Updated project: ${updated.name}`
     );
 
-    void createNotification({
-      actor: String(req.user?.username || req.user?.name || "System"),
-      actorRole: String(req.user?.role || ""),
-      action: "updated",
-      resourceType: "project",
-      resourceName: updated.name,
-      resourceId: String(updated._id),
-      category: "SYSTEM",
-    });
-
     if (patch.description) {
       const mentionedUsers = await extractMentions(patch.description);
       if (mentionedUsers.length > 0) {
@@ -863,8 +853,9 @@ router.put("/:id/reassign", requireAuth, async (req, res, next) => {
       action: "reassigned",
       resourceType: "project",
       resourceName: project.name,
+      assignees,
       resourceId: String(req.params.id),
-      details: `New assignees: ${assignees.join(", ")}`,
+      category: "PROJECT_ASSIGNED",
     });
 
     return res.json({ item: withId(project.toObject()) });
@@ -954,15 +945,6 @@ router.delete("/:id", requireAuth, async (req, res, next) => {
       project.name,
       `Archived project: ${project.name}`
     );
-
-    void createNotification({
-      actor: String(req.user?.username || req.user?.name || "System"),
-      actorRole: String(req.user?.role || ""),
-      action: "archived",
-      resourceType: "project",
-      resourceName: project.name,
-      resourceId: String(project._id),
-    });
 
     return res.json({ success: true, message: "Project archived successfully" });
   } catch (err) {

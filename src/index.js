@@ -114,11 +114,17 @@ global.io = io;
 io.on("connection", (socket) => {
   console.log("Client connected:", socket.id);
 
-  // Register user into their personal room + role room for targeted notification delivery
-  socket.on("register-user", ({ username, role } = {}) => {
+  // Register user into their personal room + role room for targeted notification delivery.
+  // `name` is the display name room — needed so @mentions (which use display names) reach
+  // admin/manager sockets that are keyed by email username.
+  socket.on("register-user", ({ username, role, name } = {}) => {
     if (username) {
       socket.join(username);
       console.log(`Socket ${socket.id} registered as user: ${username}`);
+    }
+    if (name && name !== username) {
+      socket.join(name);
+      console.log(`Socket ${socket.id} joined display-name room: ${name}`);
     }
     if (role) {
       socket.join(role);

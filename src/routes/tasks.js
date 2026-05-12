@@ -1366,17 +1366,17 @@ router.patch("/:id/status", requireAuth, async (req, res, next) => {
     // Fire-and-forget
     Promise.allSettled([
       logActivity(req, "TASK_STATUS_UPDATE", "task", req.params.id, updated.title, `Updated task status: ${updated.title} -> ${status}`),
-      createNotification({
+      // Only notify when a task is completed — other status changes are activity-log only
+      ...(status === "completed" ? [createNotification({
         actor: req.user?.username || req.user?.name || "System",
         actorRole: req.user?.role || "",
-        action: status === "completed" ? "completed" : "status changed",
+        action: "completed",
         resourceType: "task",
         resourceName: updated.title,
         assignees: Array.isArray(updated.assignees) ? updated.assignees : [],
-        details: `Status -> ${status}`,
         resourceId: String(req.params.id),
-        category: status === "completed" ? "TASK_COMPLETED" : "SYSTEM",
-      }),
+        category: "TASK_COMPLETED",
+      })] : []),
       cacheDel("tasks:list:*"),
       updated.projectId ? cacheDel(`project:${updated.projectId}`) : Promise.resolve(),
       // Track contribution
@@ -1489,16 +1489,6 @@ router.put("/:id", requireAuth, async (req, res, next) => {
     // Fire-and-forget
     Promise.allSettled([
       logActivity(req, "TASK_UPDATE", "task", req.params.id, updated.title, `Updated task: ${updated.title}`),
-      createNotification({
-        actor: req.user?.username || req.user?.name || "System",
-        actorRole: req.user?.role || "",
-        action: "updated",
-        resourceType: "task",
-        resourceName: updated.title,
-        assignees: Array.isArray(updated.assignees) ? updated.assignees : [],
-        resourceId: String(req.params.id),
-        category: "SYSTEM",
-      }),
       cacheDel("tasks:list:*"),
       updated.projectId ? cacheDel(`project:${updated.projectId}`) : Promise.resolve(),
       (() => {
@@ -1683,15 +1673,6 @@ router.post("/:id/archive", requireAuth, async (req, res, next) => {
     // Fire-and-forget
     Promise.allSettled([
       logActivity(req, "TASK_ARCHIVE", "task", req.params.id, task.title, `Archived task: ${task.title}`),
-      createNotification({
-        actor: req.user?.username || req.user?.name || "System",
-        actorRole: req.user?.role || "",
-        action: "archived",
-        resourceType: "task",
-        resourceName: task.title,
-        resourceId: String(req.params.id),
-        category: "SYSTEM",
-      }),
       cacheDel("tasks:list:*"),
       task.projectId ? cacheDel(`project:${task.projectId}`) : Promise.resolve(),
     ]).catch(() => {});
@@ -1717,15 +1698,6 @@ router.delete("/:id", requireAuth, async (req, res, next) => {
     // Fire-and-forget
     Promise.allSettled([
       logActivity(req, "TASK_DELETE", "task", req.params.id, task.title, `Deleted (Archived) task: ${task.title}`),
-      createNotification({
-        actor: req.user?.username || req.user?.name || "System",
-        actorRole: req.user?.role || "",
-        action: "deleted",
-        resourceType: "task",
-        resourceName: task.title,
-        resourceId: String(req.params.id),
-        category: "SYSTEM",
-      }),
       cacheDel("tasks:list:*"),
       task.projectId ? cacheDel(`project:${task.projectId}`) : Promise.resolve(),
     ]).catch(() => {});
