@@ -58,6 +58,7 @@ const shoppingListsRoutes = require("./routes/shoppingLists");
 const clearhireRoutes = require("./routes/clearhire");
 const systemSettingsRoutes = require("./routes/systemSettings");
 const assetLibraryHeaderSettingsRoutes = require("./routes/assetLibraryHeaderSettings");
+const memeRoutes = require("./routes/meme");
 
 //going to express now
 const app = express();
@@ -314,6 +315,7 @@ app.use("/api/email-accounts", emailAccountsRoutes);
 app.use("/api/clearhire", clearhireRoutes);
 app.use("/api/system-settings", systemSettingsRoutes);
 app.use("/api/asset-library-header-settings", assetLibraryHeaderSettingsRoutes);
+app.use("/api/meme", memeRoutes);
 
 app.use(notFoundHandler);
 app.use(errorHandler);
