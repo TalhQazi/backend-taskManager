@@ -100,7 +100,17 @@ router.get("/unread-count", requireAuth, async (req, res, next) => {
 
     if (!currentUser) return res.json({ count: 0 });
 
-    const query = { type: "broadcast", readBy: { $ne: currentUser }, "meta.category": { $ne: "SYSTEM" } };
+    const query = {
+      type: "broadcast",
+      readBy: { $ne: currentUser },
+      // Whitelist: only show notifications with a recognized category OR admin-created broadcasts
+      $and: [{
+        $or: [
+          { "meta.category": { $in: ["TASK_ASSIGNED", "PROJECT_ASSIGNED", "TASK_COMPLETED", "MENTIONED", "COMMENT_ADDED", "SYSTEM_ALERT"] } },
+          { audience: { $ne: "targeted" } },
+        ],
+      }],
+    };
 
     if (role !== "super-admin") {
       const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -111,9 +121,11 @@ router.get("/unread-count", requireAuth, async (req, res, next) => {
         candidates.push("admin", "manager");
       }
       candidates = [...new Set(candidates)];
-      query.$or = candidates.map((c) => ({
-        recipient: { $regex: new RegExp(`(^|,)${escapeRegex(c)}(,|$)`, "i") },
-      }));
+      query.$and.push({
+        $or: candidates.map((c) => ({
+          recipient: { $regex: new RegExp(`(^|,)${escapeRegex(c)}(,|$)`, "i") },
+        })),
+      });
     }
 
     const count = await Message.countDocuments(query);
@@ -153,7 +165,13 @@ router.get("/", requireAuth, async (req, res, next) => {
         const userId = String(req.user?.sub || req.user?.id || "").trim();
 
         query.type = "broadcast";
-        query["meta.category"] = { $ne: "SYSTEM" };
+        // Whitelist: only show notifications with a recognized category OR admin-created broadcasts
+        query.$and = [{
+          $or: [
+            { "meta.category": { $in: ["TASK_ASSIGNED", "PROJECT_ASSIGNED", "TASK_COMPLETED", "MENTIONED", "COMMENT_ADDED", "SYSTEM_ALERT"] } },
+            { audience: { $ne: "targeted" } },
+          ],
+        }];
 
         if (role === "super-admin") {
           // super-admin sees all broadcast notifications
@@ -173,9 +191,11 @@ router.get("/", requireAuth, async (req, res, next) => {
           // Remove duplicates
           candidates = [...new Set(candidates)];
 
-          query.$or = candidates.map((c) => ({
-            recipient: { $regex: new RegExp(`(^|,)${escapeRegex(c)}(,|$)`, "i") }
-          }));
+          query.$and.push({
+            $or: candidates.map((c) => ({
+              recipient: { $regex: new RegExp(`(^|,)${escapeRegex(c)}(,|$)`, "i") }
+            })),
+          });
         }
       }
     }
@@ -453,7 +473,16 @@ router.post("/mark-all-read", requireAuth, async (req, res, next) => {
     const currentName = String(req.user?.name || "").trim();
     if (!currentUser) return res.status(400).json({ error: { message: "Cannot identify user" } });
 
-    let query = { type: "broadcast", "meta.category": { $ne: "SYSTEM" } };
+    let query = {
+      type: "broadcast",
+      // Whitelist: only mark-read notifications with a recognized category OR admin-created broadcasts
+      $and: [{
+        $or: [
+          { "meta.category": { $in: ["TASK_ASSIGNED", "PROJECT_ASSIGNED", "TASK_COMPLETED", "MENTIONED", "COMMENT_ADDED", "SYSTEM_ALERT"] } },
+          { audience: { $ne: "targeted" } },
+        ],
+      }],
+    };
     if (role !== "super-admin") {
       const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
@@ -466,9 +495,11 @@ router.post("/mark-all-read", requireAuth, async (req, res, next) => {
 
       candidates = [...new Set(candidates)];
 
-      query.$or = candidates.map((c) => ({
-        recipient: { $regex: new RegExp(`(^|,)${escapeRegex(c)}(,|$)`, "i") }
-      }));
+      query.$and.push({
+        $or: candidates.map((c) => ({
+          recipient: { $regex: new RegExp(`(^|,)${escapeRegex(c)}(,|$)`, "i") }
+        })),
+      });
     }
 
     await Message.updateMany(
