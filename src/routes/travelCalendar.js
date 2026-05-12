@@ -39,11 +39,8 @@ async function getVisibleTravelCalendars(user, filters = {}) {
         { visibility: { $in: ["team", "department", "company"] } }
       ];
     } else if (user.role === "employee") {
-      // Employees can only see their own + public travel calendars
-      query.$or = [
-        { employee: user._id },
-        { visibility: "company" }
-      ];
+      // Employees can see all travel calendars
+      // No filtering applied - they can see everything
     }
   }
   
@@ -107,6 +104,7 @@ router.get("/:id", requireAuth, async (req, res) => {
     // Check visibility permissions
     const canAccess = 
       ROLE_GROUPS.ALL_ADMIN.includes(req.user.role) ||
+      req.user.role === "employee" || // Employees can access all travel calendars
       travelCalendar.employee._id.toString() === req.user._id.toString() ||
       travelCalendar.visibility === "company" ||
       (req.user.role === "manager" && ["team", "department"].includes(travelCalendar.visibility));
@@ -163,9 +161,9 @@ router.post("/", requireAuth, async (req, res) => {
     }
     
     console.error("[TravelCalendar POST] Error:", error);
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
-      error: { message: "Failed to create travel calendar" },
+      error: { message: error instanceof Error ? error.message : "Failed to create travel calendar" },
     });
   }
 });

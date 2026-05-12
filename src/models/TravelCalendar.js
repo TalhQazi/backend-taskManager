@@ -84,10 +84,10 @@ travelCalendarSchema.index({ startDate: 1, endDate: 1 });
 travelCalendarSchema.index({ status: 1 });
 travelCalendarSchema.index({ visibility: 1 });
 
-// Validation: end date must be after start date
+// Validation: end date must be on or after start date
 travelCalendarSchema.pre("save", function(next) {
-  if (this.endDate <= this.startDate) {
-    next(new Error("End date must be after start date"));
+  if (this.endDate < this.startDate) {
+    next(new Error("End date must be on or after start date"));
   } else {
     next();
   }

@@ -21,6 +21,9 @@ function requireAuth(req, res, next) {
     }
     const payload = jwt.verify(token, secret);
     req.user = payload;
+    const userId = String((payload && typeof payload === "object" ? payload.sub || payload.id || payload._id : "") || "");
+    req.user._id = userId;
+    req.user.id = userId;
     return next();
   } catch {
     return res.status(401).json({ error: { message: "Unauthorized" } });
