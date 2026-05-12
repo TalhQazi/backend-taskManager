@@ -164,7 +164,7 @@ router.put("/:id", requireAuth, requireRole(["super-admin", "admin"]), async (re
     }
 
     await createNotification({
-      actor: req.user?.username || req.user?.name || "Admin",
+      actor: req.user?.name || req.user?.username || "Admin",
       actorRole: req.user?.role || "admin",
       action: "updated",
       resourceType: "user",
@@ -188,7 +188,7 @@ router.delete("/:id", requireAuth, requireRole(["super-admin", "admin"]), async 
     }
 
     await createNotification({
-      actor: req.user?.username || req.user?.name || "Admin",
+      actor: req.user?.name || req.user?.username || "Admin",
       actorRole: req.user?.role || "admin",
       action: "deleted",
       resourceType: "user",

@@ -469,7 +469,7 @@ const obj = created.toObject();
     Promise.allSettled([
       logActivity(req, "EMPLOYEE_CREATE", "employee", created._id, created.name, `Created employee: ${created.name}`),
       createNotification({
-        actor: req.user?.username || req.user?.name || "Admin",
+        actor: req.user?.name || req.user?.username || "Admin",
         actorRole: req.user?.role || "admin",
         action: "created",
         resourceType: "employee",
@@ -529,7 +529,7 @@ router.put("/:id", requireAuth, async (req, res, next) => {
       if (archived) {
          // Create notification
         await createNotification({
-          actor: req.user?.username || req.user?.name || "Admin",
+          actor: req.user?.name || req.user?.username || "Admin",
           actorRole: req.user?.role || "admin",
           action: "archived (deactivated)",
           resourceType: "employee",
@@ -545,7 +545,7 @@ router.put("/:id", requireAuth, async (req, res, next) => {
 
     // Create notification for all admin/manager users
     await createNotification({
-      actor: req.user?.username || req.user?.name || "Admin",
+      actor: req.user?.name || req.user?.username || "Admin",
       actorRole: req.user?.role || "admin",
       action: "updated",
       resourceType: "employee",
@@ -609,7 +609,7 @@ router.delete("/:id", requireAuth, async (req, res, next) => {
     
     // Create notification
     await createNotification({
-      actor: req.user?.username || req.user?.name || "Admin",
+      actor: req.user?.name || req.user?.username || "Admin",
       actorRole: req.user?.role || "admin",
       action: "archived",
       resourceType: "employee",

@@ -122,9 +122,12 @@ router.get("/unread-count", requireAuth, async (req, res, next) => {
       }
       candidates = [...new Set(candidates)];
       query.$and.push({
-        $or: candidates.map((c) => ({
-          recipient: { $regex: new RegExp(`(^|,)${escapeRegex(c)}(,|$)`, "i") },
-        })),
+        $or: [
+          ...candidates.map((c) => ({
+            recipient: { $regex: new RegExp(`(^|,)${escapeRegex(c)}(,|$)`, "i") },
+          })),
+          { audience: { $ne: "targeted" } },
+        ],
       });
     }
 
@@ -192,9 +195,12 @@ router.get("/", requireAuth, async (req, res, next) => {
           candidates = [...new Set(candidates)];
 
           query.$and.push({
-            $or: candidates.map((c) => ({
-              recipient: { $regex: new RegExp(`(^|,)${escapeRegex(c)}(,|$)`, "i") }
-            })),
+            $or: [
+              ...candidates.map((c) => ({
+                recipient: { $regex: new RegExp(`(^|,)${escapeRegex(c)}(,|$)`, "i") },
+              })),
+              { audience: { $ne: "targeted" } },
+            ],
           });
         }
       }
@@ -496,9 +502,12 @@ router.post("/mark-all-read", requireAuth, async (req, res, next) => {
       candidates = [...new Set(candidates)];
 
       query.$and.push({
-        $or: candidates.map((c) => ({
-          recipient: { $regex: new RegExp(`(^|,)${escapeRegex(c)}(,|$)`, "i") }
-        })),
+        $or: [
+          ...candidates.map((c) => ({
+            recipient: { $regex: new RegExp(`(^|,)${escapeRegex(c)}(,|$)`, "i") },
+          })),
+          { audience: { $ne: "targeted" } },
+        ],
       });
     }
 

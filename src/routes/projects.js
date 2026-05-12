@@ -43,7 +43,7 @@ async function logActivity(req, action, resourceType, resourceId, resourceName, 
   try {
     await ActivityLog.create({
       actorUserId: String(req.user?.sub || req.user?.id || "unknown"),
-      actorUsername: String(req.user?.username || req.user?.name || "unknown"),
+      actorUsername: String(req.user?.name || req.user?.username || "unknown"),
       actorRole: String(req.user?.role || "unknown"),
       action,
       resourceType,
@@ -173,7 +173,7 @@ router.post("/", requireAuth, async (req, res, next) => {
       attachments: data.attachments || [],
       dropboxAttachments: data.dropboxAttachments || [],
       createdByUserId: String(req.user?.sub || req.user?.id || ""),
-      createdByUsername: String(req.user?.username || req.user?.name || ""),
+      createdByUsername: String(req.user?.name || req.user?.username || ""),
       createdByRole: String(req.user?.role || ""),
     });
 
@@ -238,7 +238,7 @@ router.post("/", requireAuth, async (req, res, next) => {
     );
 
     void createNotification({
-      actor: String(req.user?.username || req.user?.name || "System"),
+      actor: String(req.user?.name || req.user?.username || "System"),
       actorRole: String(req.user?.role || ""),
       action: "created",
       resourceType: "project",
@@ -253,7 +253,7 @@ router.post("/", requireAuth, async (req, res, next) => {
     const mentionedUsers = await extractMentions(data.description);
     if (mentionedUsers.length > 0) {
       await createNotification({
-        actor: String(req.user?.username || req.user?.name || "System"),
+        actor: String(req.user?.name || req.user?.username || "System"),
         actorRole: String(req.user?.role || ""),
         action: "mentioned you in project",
         resourceType: "project",
@@ -802,7 +802,7 @@ router.put("/:id", requireAuth, async (req, res, next) => {
       const mentionedUsers = await extractMentions(patch.description);
       if (mentionedUsers.length > 0) {
         await createNotification({
-          actor: String(req.user?.username || req.user?.name || "System"),
+          actor: String(req.user?.name || req.user?.username || "System"),
           actorRole: String(req.user?.role || ""),
           action: "mentioned you in project",
           resourceType: "project",
@@ -848,7 +848,7 @@ router.put("/:id/reassign", requireAuth, async (req, res, next) => {
     await logActivity(req, "PROJECT_REASSIGN", "project", req.params.id, project.name, `Reassigned project: ${project.name} to ${assignees.join(", ")}`);
 
     await createNotification({
-      actor: req.user?.username || req.user?.name || "System",
+      actor: req.user?.name || req.user?.username || "System",
       actorRole: req.user?.role || "",
       action: "reassigned",
       resourceType: "project",
@@ -896,7 +896,7 @@ router.delete("/:id", requireAuth, async (req, res, next) => {
       parentId: String(project._id),
       parentName: project.name,
       archivedByUserId: String(req.user?.sub || req.user?.id || ""),
-      archivedByUsername: String(req.user?.username || req.user?.name || ""),
+      archivedByUsername: String(req.user?.name || req.user?.username || ""),
       archivedByRole: String(req.user?.role || ""),
     });
 
@@ -1027,7 +1027,7 @@ router.post("/:id/comments", requireAuth, async (req, res, next) => {
     const mentionedUsers = await extractMentions(message);
     if (mentionedUsers.length > 0) {
       await createNotification({
-        actor: String(req.user?.username || req.user?.name || "Someone"),
+        actor: String(req.user?.name || req.user?.username || "Someone"),
         actorRole: String(req.user?.role || ""),
         action: "mentioned you in a",
         resourceType: "project comment",
@@ -1046,7 +1046,7 @@ router.post("/:id/comments", requireAuth, async (req, res, next) => {
     ].filter(Boolean));
     if (commentRecipients.size > 0) {
       await createNotification({
-        actor: String(req.user?.username || req.user?.name || "Someone"),
+        actor: String(req.user?.name || req.user?.username || "Someone"),
         actorRole: String(req.user?.role || ""),
         action: "commented on",
         resourceType: "project",
@@ -1122,7 +1122,7 @@ router.delete("/:id/priorities", requireAuth, async (req, res, next) => {
     // Log activity
     await ActivityLog.create({
       actorUserId: String(req.user?.sub || req.user?.id || "unknown"),
-      actorUsername: String(req.user?.username || req.user?.name || "unknown"),
+      actorUsername: String(req.user?.name || req.user?.username || "unknown"),
       actorRole: String(req.user?.role || "unknown"),
       action: "cleared_project_execution_priorities",
       resourceType: "project",
