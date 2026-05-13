@@ -60,6 +60,7 @@ const systemSettingsRoutes = require("./routes/systemSettings");
 const assetLibraryHeaderSettingsRoutes = require("./routes/assetLibraryHeaderSettings");
 const crmCompanyRoutes = require("./routes/crmcompany");
 const crmContactsRoutes = require("./routes/crmcontacts");
+const crmDealsRoutes = require("./routes/crmdeals");
 
 //going to express now
 const app = express();
@@ -324,6 +325,7 @@ app.use("/api/system-settings", systemSettingsRoutes);
 app.use("/api/asset-library-header-settings", assetLibraryHeaderSettingsRoutes);
 app.use("/api/crm-company", crmCompanyRoutes);
 app.use("/api/crm-contacts", crmContactsRoutes);
+app.use("/api/crm-deals", crmDealsRoutes);
 
 app.use(notFoundHandler);
 app.use(errorHandler);
