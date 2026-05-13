@@ -16,6 +16,12 @@ const PayrollRecord = require("../models/PayrollRecord");
 const Budget = require("../models/Budget");
 const FixedAsset = require("../models/FixedAsset");
 
+// Phase 5 Models
+const Loan = require("../models/Loan");
+const TaxSetting = require("../models/TaxSetting");
+const CurrencyExchange = require("../models/CurrencyExchange");
+const InvestorStatement = require("../models/InvestorStatement");
+
 // Generic CRUD handlers
 const handleGet = (Model, populate = "") => async (req, res) => {
   try { const items = await Model.find().populate(populate); res.json({ success: true, items }); } 
@@ -38,7 +44,6 @@ router.post("/journal", requireAuth, async (req, res) => {
   try { 
     const item = new JournalEntry({ ...req.body, createdBy: req.user._id }); 
     await item.save(); 
-    // Update account balances based on journal lines
     for (const line of req.body.lines) {
       const adjustment = (line.debit || 0) - (line.credit || 0);
       await AtlasAccount.findByIdAndUpdate(line.account, { $inc: { balance: adjustment } });
@@ -65,70 +70,54 @@ router.post("/budgets", requireAuth, handlePost(Budget));
 router.get("/assets", requireAuth, handleGet(FixedAsset));
 router.post("/assets", requireAuth, handlePost(FixedAsset));
 
-// --- PHASE 4 ANALYTICAL ROUTES ---
+// --- PHASE 5 ROUTES ---
+router.get("/loans", requireAuth, handleGet(Loan, "property"));
+router.post("/loans", requireAuth, handlePost(Loan));
+router.get("/tax-settings", requireAuth, handleGet(TaxSetting, "account"));
+router.post("/tax-settings", requireAuth, handlePost(TaxSetting));
+router.get("/exchange-rates", requireAuth, handleGet(CurrencyExchange));
+router.post("/exchange-rates", requireAuth, handlePost(CurrencyExchange));
+router.get("/investor-statements", requireAuth, handleGet(InvestorStatement, "property"));
+router.post("/investor-statements", requireAuth, handlePost(InvestorStatement));
 
-// Profit & Loss Report
+// --- ANALYTICAL ROUTES ---
 router.get("/reports/pl", requireAuth, async (req, res) => {
   try {
     const revenueAccounts = await AtlasAccount.find({ type: "Revenue" });
     const expenseAccounts = await AtlasAccount.find({ type: "Expense" });
-    
     const revenue = revenueAccounts.reduce((sum, a) => sum + Math.abs(a.balance), 0);
     const expenses = expenseAccounts.reduce((sum, a) => sum + a.balance, 0);
-    
-    res.json({
-      success: true,
-      revenue,
-      expenses,
-      netProfit: revenue - expenses,
-      breakdown: { revenue: revenueAccounts, expenses: expenseAccounts }
-    });
+    res.json({ success: true, revenue, expenses, netProfit: revenue - expenses, breakdown: { revenue: revenueAccounts, expenses: expenseAccounts } });
   } catch (error) { res.status(500).json({ success: false, message: error.message }); }
 });
 
-// Balance Sheet Report
 router.get("/reports/balance-sheet", requireAuth, async (req, res) => {
   try {
     const assets = await AtlasAccount.find({ type: "Asset" });
     const liabilities = await AtlasAccount.find({ type: "Liability" });
     const equity = await AtlasAccount.find({ type: "Equity" });
-    
     const totalAssets = assets.reduce((sum, a) => sum + a.balance, 0);
     const totalLiabilities = liabilities.reduce((sum, a) => sum + Math.abs(a.balance), 0);
     const totalEquity = equity.reduce((sum, a) => sum + Math.abs(a.balance), 0);
-    
-    res.json({
-      success: true,
-      totalAssets,
-      totalLiabilities,
-      totalEquity,
-      isBalanced: totalAssets === (totalLiabilities + totalEquity),
-      assets, liabilities, equity
-    });
+    res.json({ success: true, totalAssets, totalLiabilities, totalEquity, isBalanced: totalAssets === (totalLiabilities + totalEquity), assets, liabilities, equity });
   } catch (error) { res.status(500).json({ success: false, message: error.message }); }
 });
 
-// Fraud Alerts
 router.get("/fraud/alerts", requireAuth, async (req, res) => {
   try {
-    // Basic logic: Find duplicate amounts in a short window or unusually high transactions
     const transactions = await AtlasTransaction.find().sort("-createdAt").limit(100);
     const alerts = [];
-    
     const amountMap = new Map();
     transactions.forEach(t => {
       if (amountMap.has(t.amount)) {
         const prev = amountMap.get(t.amount);
-        if (Math.abs(new Date(t.date) - new Date(prev.date)) < 86400000) { // Same day
+        if (Math.abs(new Date(t.date) - new Date(prev.date)) < 86400000) {
           alerts.push({ type: "Duplicate Transaction", message: `Possible duplicate of $${t.amount} found for ${t.description}`, severity: "Medium" });
         }
       }
       amountMap.set(t.amount, t);
-      if (t.amount > 10000) {
-        alerts.push({ type: "High Value Transaction", message: `Large transaction of $${t.amount} recorded`, severity: "High" });
-      }
+      if (t.amount > 10000) alerts.push({ type: "High Value Transaction", message: `Large transaction of $${t.amount} recorded`, severity: "High" });
     });
-    
     res.json({ success: true, alerts });
   } catch (error) { res.status(500).json({ success: false, message: error.message }); }
 });
