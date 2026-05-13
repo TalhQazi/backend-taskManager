@@ -115,4 +115,65 @@ async function createNotification({
   }
 }
 
-module.exports = { createNotification };
+/**
+ * In-app milestone toast for an employee (uses Message broadcast, same as /api/messages).
+ * @param {import("mongoose").Document | object} employee - Employee doc or lean object
+ * @param {{ milestoneLevel: string, milestoneLabel: string }} milestone
+ */
+async function createMilestoneBroadcastForEmployee(employee, { milestoneLevel, milestoneLabel }) {
+  try {
+    const idStr = String(employee._id || "");
+    const username = String(employee.username || "").trim();
+    const email = String(employee.email || "").trim();
+    const recipient = [...new Set([username, email, idStr].filter(Boolean))].join(",");
+    if (!recipient) {
+      console.warn("[Milestone] No recipient identifiers for employee", idStr);
+      return null;
+    }
+
+    const timestamp = new Date().toISOString();
+    const titlePlain = "🎉 Milestone Achievement!";
+    const contentPlain = `Congratulations! You've reached ${milestoneLabel || milestoneLevel}!`;
+
+    const notification = await Message.create({
+      title: encrypt(titlePlain),
+      sender: "system",
+      senderAvatar: "",
+      recipient,
+      audience: recipient,
+      assignees: [],
+      content: encrypt(contentPlain),
+      timestamp,
+      type: "broadcast",
+      status: "sent",
+      readBy: [],
+      meta: {
+        resourceType: "milestone",
+        resourceId: idStr,
+        link: "/employee/profile",
+        category: "MILESTONE",
+      },
+    });
+
+    const io = global.io;
+    if (io) {
+      const payload = {
+        ...notification.toObject(),
+        id: String(notification._id),
+        title: titlePlain,
+        content: contentPlain,
+        message: contentPlain,
+      };
+      recipient.split(",").forEach((room) => {
+        if (room) io.to(room).emit("new-notification", payload);
+      });
+    }
+
+    return notification;
+  } catch (err) {
+    console.error("[Milestone] Failed to create milestone broadcast:", err);
+    return null;
+  }
+}
+
+module.exports = { createNotification, createMilestoneBroadcastForEmployee };
