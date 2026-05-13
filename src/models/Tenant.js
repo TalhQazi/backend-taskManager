@@ -1,0 +1,17 @@
+const mongoose = require("mongoose");
+
+const TenantSchema = new mongoose.Schema(
+  {
+    name: { type: String, required: true },
+    email: { type: String },
+    phone: { type: String },
+    type: { type: String, enum: ["Individual", "Company"], default: "Individual" },
+    status: { type: String, enum: ["Active", "Former", "Prospect"], default: "Prospect" },
+    identification: { type: String }, // SSN/EIN/ID
+    notes: { type: String },
+    company: { type: mongoose.Schema.Types.ObjectId, ref: "Company" },
+  },
+  { timestamps: true }
+);
+
+module.exports = mongoose.model("Tenant", TenantSchema);
