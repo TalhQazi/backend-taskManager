@@ -59,8 +59,14 @@ const shoppingListsRoutes = require("./routes/shoppingLists");
 const clearhireRoutes = require("./routes/clearhire");
 const systemSettingsRoutes = require("./routes/systemSettings");
 const assetLibraryHeaderSettingsRoutes = require("./routes/assetLibraryHeaderSettings");
+
+const crmCompanyRoutes = require("./routes/crmcompany");
+const crmContactsRoutes = require("./routes/crmcontacts");
+const crmDealsRoutes = require("./routes/crmdeals");
+
 const memeRoutes = require("./routes/meme");
 const milestonesRoutes = require("./routes/milestones");
+
 
 //going to express now
 const app = express();
@@ -340,8 +346,14 @@ app.use("/api/email-accounts", emailAccountsRoutes);
 app.use("/api/clearhire", clearhireRoutes);
 app.use("/api/system-settings", systemSettingsRoutes);
 app.use("/api/asset-library-header-settings", assetLibraryHeaderSettingsRoutes);
+
+app.use("/api/crm-company", crmCompanyRoutes);
+app.use("/api/crm-contacts", crmContactsRoutes);
+app.use("/api/crm-deals", crmDealsRoutes);
+
 app.use("/api/meme", memeRoutes);
 app.use("/api/milestones", milestonesRoutes);
+
 
 app.use(notFoundHandler);
 app.use(errorHandler);
