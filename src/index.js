@@ -60,6 +60,7 @@ const clearhireRoutes = require("./routes/clearhire");
 const systemSettingsRoutes = require("./routes/systemSettings");
 const assetLibraryHeaderSettingsRoutes = require("./routes/assetLibraryHeaderSettings");
 const memeRoutes = require("./routes/meme");
+const announcementsRoutes = require("./routes/announcements");
 
 //going to express now
 const app = express();
@@ -340,6 +341,7 @@ app.use("/api/clearhire", clearhireRoutes);
 app.use("/api/system-settings", systemSettingsRoutes);
 app.use("/api/asset-library-header-settings", assetLibraryHeaderSettingsRoutes);
 app.use("/api/meme", memeRoutes);
+app.use("/api/announcements", announcementsRoutes);
 
 app.use(notFoundHandler);
 app.use(errorHandler);
@@ -358,6 +360,17 @@ connectDb()
     const { checkAnnualReportReminders } = require("./utils/reminders");
     checkAnnualReportReminders(); // Run once on startup
     setInterval(checkAnnualReportReminders, 24 * 60 * 60 * 1000); // Run every 24 hours
+
+    // Initialize announcement scheduler
+    const { runAllTasks: runAnnouncementScheduler } = require("./lib/announcementScheduler");
+    runAnnouncementScheduler().catch((err) => console.error("[Announcements] Startup scheduler error:", err));
+    // Run announcement scheduler every 5 minutes
+    setInterval(
+      () => {
+        runAnnouncementScheduler().catch((err) => console.error("[Announcements] Scheduler error:", err));
+      },
+      5 * 60 * 1000
+    );
     
     httpServer.listen(port, () => {
       console.log(`Backend listening on http://localhost:${port}`);
