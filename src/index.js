@@ -67,6 +67,7 @@ const crmDealsRoutes = require("./routes/crmdeals");
 
 const memeRoutes = require("./routes/meme");
 const milestonesRoutes = require("./routes/milestones");
+const announcementsRoutes = require("./routes/announcements");
 
 
 //going to express now
@@ -355,6 +356,7 @@ app.use("/api/crm-deals", crmDealsRoutes);
 
 app.use("/api/meme", memeRoutes);
 app.use("/api/milestones", milestonesRoutes);
+app.use("/api/announcements", announcementsRoutes);
 
 
 app.use(notFoundHandler);

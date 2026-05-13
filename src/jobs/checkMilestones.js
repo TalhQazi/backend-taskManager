@@ -1,6 +1,6 @@
 const Employee = require("../models/Employee");
 const Milestone = require("../models/Milestone");
-const Notification = require("../models/Notification");
+const { createMilestoneBroadcastForEmployee } = require("../utils/notifications");
 const { connectDb } = require("../lib/db");
 
 // Helper function to calculate tenure in days
@@ -101,16 +101,9 @@ async function checkMilestones() {
         milestoneOverlayExpires: overlayExpires,
       });
 
-      // Create notification for the employee
-      await Notification.create({
-        userId: employee._id,
-        title: `🎉 Milestone Achievement!`,
-        message: `Congratulations! You've reached ${getMilestoneLabel(milestoneLevel)}!`,
-        type: "milestone",
-        metadata: {
-          milestoneLevel,
-          milestoneLabel: getMilestoneLabel(milestoneLevel),
-        },
+      await createMilestoneBroadcastForEmployee(employee, {
+        milestoneLevel,
+        milestoneLabel: getMilestoneLabel(milestoneLevel),
       });
 
       milestonesTriggered++;
