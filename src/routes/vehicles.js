@@ -295,7 +295,7 @@ router.post("/", requireAuth, async (req, res, next) => {
 
       // Create notification
       await createNotification({
-        actor: req.user?.username || req.user?.name || "Admin",
+        actor: req.user?.name || req.user?.username || "Admin",
         actorRole: req.user?.role || "admin",
         action: "created",
         resourceType: "vehicle",
@@ -432,7 +432,7 @@ router.put("/:id", requireAuth, async (req, res, next) => {
 
       // Create notification
       await createNotification({
-        actor: req.user?.username || req.user?.name || "Admin",
+        actor: req.user?.name || req.user?.username || "Admin",
         actorRole: req.user?.role || "admin",
         action: "updated",
         resourceType: "vehicle",
@@ -465,7 +465,7 @@ router.put("/:id", requireAuth, async (req, res, next) => {
       if (archived) {
          // Create notification
         await createNotification({
-          actor: req.user?.username || req.user?.name || "Admin",
+          actor: req.user?.name || req.user?.username || "Admin",
           actorRole: req.user?.role || "admin",
           action: "archived (deactivated)",
           resourceType: "vehicle",
@@ -486,7 +486,7 @@ router.put("/:id", requireAuth, async (req, res, next) => {
 
     // Create notification
     await createNotification({
-      actor: req.user?.username || req.user?.name || "Admin",
+      actor: req.user?.name || req.user?.username || "Admin",
       actorRole: req.user?.role || "admin",
       action: "updated",
       resourceType: "vehicle",
@@ -537,7 +537,7 @@ router.delete("/:id", requireAuth, async (req, res, next) => {
 
     // Create notification
     await createNotification({
-      actor: req.user?.username || req.user?.name || "Admin",
+      actor: req.user?.name || req.user?.username || "Admin",
       actorRole: req.user?.role || "admin",
       action: "archived",
       resourceType: "vehicle",

@@ -53,14 +53,20 @@ const emailAccountsRoutes = require("./routes/emailAccounts");
 const uiPreferencesRoutes = require("./routes/uiPreferences");
 const vendorCategoriesRoutes = require("./routes/vendorCategories");
 const trademarksRoutes = require("./routes/trademarks");
+const travelCalendarRoutes = require("./routes/travelCalendar");
 const dropboxRoutes = require("./routes/dropbox");
 const shoppingListsRoutes = require("./routes/shoppingLists");
 const clearhireRoutes = require("./routes/clearhire");
 const systemSettingsRoutes = require("./routes/systemSettings");
 const assetLibraryHeaderSettingsRoutes = require("./routes/assetLibraryHeaderSettings");
+
 const crmCompanyRoutes = require("./routes/crmcompany");
 const crmContactsRoutes = require("./routes/crmcontacts");
 const crmDealsRoutes = require("./routes/crmdeals");
+
+const memeRoutes = require("./routes/meme");
+const milestonesRoutes = require("./routes/milestones");
+
 
 //going to express now
 const app = express();
@@ -148,6 +154,22 @@ io.on("connection", (socket) => {
     if (taskId) {
       socket.leave(`task-${taskId}`);
       console.log(`Socket ${socket.id} left task-${taskId}`);
+    }
+  });
+
+  // Join project-specific room for receiving real-time project comments
+  socket.on("join-project", (projectId) => {
+    if (projectId) {
+      socket.join(`project-${projectId}`);
+      console.log(`Socket ${socket.id} joined project-${projectId}`);
+    }
+  });
+
+  // Leave project room
+  socket.on("leave-project", (projectId) => {
+    if (projectId) {
+      socket.leave(`project-${projectId}`);
+      console.log(`Socket ${socket.id} left project-${projectId}`);
     }
   });
 
@@ -317,15 +339,21 @@ app.use("/api/contributors", contributorsRoutes);
 app.use("/api/ui-preferences", uiPreferencesRoutes);
 app.use("/api/vendor-categories", vendorCategoriesRoutes);
 app.use("/api/trademarks", trademarksRoutes);
+app.use("/api/travel-calendar", travelCalendarRoutes);
 app.use("/api/dropbox", dropboxRoutes);
 app.use("/api/shopping-lists", shoppingListsRoutes);
 app.use("/api/email-accounts", emailAccountsRoutes);
 app.use("/api/clearhire", clearhireRoutes);
 app.use("/api/system-settings", systemSettingsRoutes);
 app.use("/api/asset-library-header-settings", assetLibraryHeaderSettingsRoutes);
+
 app.use("/api/crm-company", crmCompanyRoutes);
 app.use("/api/crm-contacts", crmContactsRoutes);
 app.use("/api/crm-deals", crmDealsRoutes);
+
+app.use("/api/meme", memeRoutes);
+app.use("/api/milestones", milestonesRoutes);
+
 
 app.use(notFoundHandler);
 app.use(errorHandler);

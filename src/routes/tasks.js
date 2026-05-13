@@ -253,7 +253,7 @@ async function logActivity(req, action, resourceType, resourceId, resourceName, 
   try {
     await ActivityLog.create({
       actorUserId: String(req.user?.sub || req.user?.id || "unknown"),
-      actorUsername: String(req.user?.username || req.user?.name || "unknown"),
+      actorUsername: String(req.user?.name || req.user?.username || "unknown"),
       actorRole: String(req.user?.role || "unknown"),
       action,
       resourceType,
@@ -283,6 +283,7 @@ router.get("/", requireAuth, async (req, res, next) => {
     const priorityQ = String(req.query.priority || "").trim();
     const sortQ = String(req.query.sort || "").trim().toLowerCase();
     const projectIdQ = String(req.query.projectId || "").trim();
+    const assignment = String(req.query.assignment || "all").trim().toLowerCase();
 
     const conditions = [];
     const username = String(req.user?.username || "").trim();
@@ -352,6 +353,13 @@ router.get("/", requireAuth, async (req, res, next) => {
     // 4. Status Filter
     if (statusQ && statusQ !== "all") {
       conditions.push({ status: statusQ });
+    }
+
+    // 5. Assignment Filter
+    if (assignment === "unassigned") {
+      conditions.push({ assignees: { $size: 0 } });
+    } else if (assignment === "assigned") {
+      conditions.push({ assignees: { $not: { $size: 0 } } });
     }
 
     // 5. Priority Filter
@@ -624,7 +632,7 @@ router.post("/", requireAuth, async (req, res, next) => {
       }),
       logActivity(req, "TASK_CREATE", "task", created._id, created.title, `Created task: ${created.title}`),
       createNotification({
-        actor: req.user?.username || req.user?.name || "System",
+        actor: req.user?.name || req.user?.username || "System",
         actorRole: req.user?.role || "",
         action: "created",
         resourceType: "task",
@@ -637,7 +645,7 @@ router.post("/", requireAuth, async (req, res, next) => {
       extractMentions(created.description).then(mentionedUsers => {
         if (mentionedUsers.length > 0) {
           return createNotification({
-            actor: req.user?.username || req.user?.name || "System",
+            actor: req.user?.name || req.user?.username || "System",
             actorRole: req.user?.role || "",
             action: "mentioned you in",
             resourceType: "task",
@@ -785,7 +793,7 @@ router.post("/upload", requireAuth, upload.array("files", 10), async (req, res, 
       }),
       logActivity(req, "TASK_CREATE", "task", created._id, created.title, `Created task with attachment: ${created.title}`),
       createNotification({
-        actor: req.user?.username || req.user?.name || "System",
+        actor: req.user?.name || req.user?.username || "System",
         actorRole: req.user?.role || "",
         action: "created",
         resourceType: "task",
@@ -896,7 +904,7 @@ router.post("/:id/comments", requireAuth, async (req, res, next) => {
     const mentionedUsers = await extractMentions(message);
     if (mentionedUsers.length > 0) {
       await createNotification({
-        actor: String(req.user?.username || req.user?.name || "Someone"),
+        actor: String(req.user?.name || req.user?.username || "Someone"),
         actorRole: String(req.user?.role || ""),
         action: "mentioned you in a",
         resourceType: "task comment",
@@ -909,7 +917,7 @@ router.post("/:id/comments", requireAuth, async (req, res, next) => {
       mentionedUsers.forEach(user => {
         sendEmailNotification(user, "replyAdded", {
           taskTitle: task.title,
-          authorName: req.user?.username || req.user?.name || "Someone",
+          authorName: req.user?.name || req.user?.username || "Someone",
           replyText: message.length > 50 ? message.substring(0, 50) + "..." : message
         });
       });
@@ -922,7 +930,7 @@ router.post("/:id/comments", requireAuth, async (req, res, next) => {
     ].filter(Boolean));
     if (commentRecipients.size > 0) {
       await createNotification({
-        actor: String(req.user?.username || req.user?.name || "Someone"),
+        actor: String(req.user?.name || req.user?.username || "Someone"),
         actorRole: String(req.user?.role || ""),
         action: "commented on",
         resourceType: "task",
@@ -936,7 +944,7 @@ router.post("/:id/comments", requireAuth, async (req, res, next) => {
       Array.from(commentRecipients).forEach(recipient => {
         sendEmailNotification(recipient, "commentAdded", {
           taskTitle: task.title,
-          authorName: req.user?.username || req.user?.name || "Someone",
+          authorName: req.user?.name || req.user?.username || "Someone",
           commentText: message.length > 50 ? message.substring(0, 50) + "..." : message
         });
       });
@@ -1368,7 +1376,7 @@ router.patch("/:id/status", requireAuth, async (req, res, next) => {
       logActivity(req, "TASK_STATUS_UPDATE", "task", req.params.id, updated.title, `Updated task status: ${updated.title} -> ${status}`),
       // Only notify when a task is completed — other status changes are activity-log only
       ...(status === "completed" ? [createNotification({
-        actor: req.user?.username || req.user?.name || "System",
+        actor: req.user?.name || req.user?.username || "System",
         actorRole: req.user?.role || "",
         action: "completed",
         resourceType: "task",
@@ -1599,7 +1607,7 @@ router.put("/:id/reassign", requireAuth, async (req, res, next) => {
     await logActivity(req, "TASK_REASSIGN", "task", req.params.id, updated.title, `Reassigned task: ${updated.title} to ${assignees.join(", ")}`);
 
     await createNotification({
-      actor: req.user?.username || req.user?.name || "System",
+      actor: req.user?.name || req.user?.username || "System",
       actorRole: req.user?.role || "",
       action: "reassigned",
       resourceType: "task",
@@ -1810,7 +1818,7 @@ router.delete("/priorities", requireAuth, async (req, res, next) => {
     // Log activity
     await ActivityLog.create({
       actorUserId: String(req.user?.sub || req.user?.id || "unknown"),
-      actorUsername: String(req.user?.username || req.user?.name || req.user?.email || "unknown"),
+      actorUsername: String(req.user?.name || req.user?.username || req.user?.email || "unknown"),
       actorRole: String(req.user?.role || "unknown"),
       action: "TASK_UPDATE",
       resourceType: "task",
@@ -1865,7 +1873,7 @@ router.post("/resequence", requireAuth, async (req, res, next) => {
     // Log activity
     await ActivityLog.create({
       actorUserId: String(req.user?.sub || req.user?.id || "unknown"),
-      actorUsername: String(req.user?.username || req.user?.name || req.user?.email || "unknown"),
+      actorUsername: String(req.user?.name || req.user?.username || req.user?.email || "unknown"),
       actorRole: String(req.user?.role || "unknown"),
       action: "TASK_UPDATE",
       resourceType: "task",
@@ -1920,7 +1928,7 @@ router.post("/:id/priority", requireAuth, async (req, res, next) => {
     // Log activity
     await ActivityLog.create({
       actorUserId: String(req.user?.sub || req.user?.id || "unknown"),
-      actorUsername: String(req.user?.username || req.user?.name || req.user?.email || "unknown"),
+      actorUsername: String(req.user?.name || req.user?.username || req.user?.email || "unknown"),
       actorRole: String(req.user?.role || "unknown"),
       action: "TASK_UPDATE",
       resourceType: "task",
@@ -1988,7 +1996,7 @@ router.delete("/:id/priority", requireAuth, async (req, res, next) => {
     // Log activity
     await ActivityLog.create({
       actorUserId: String(req.user?.sub || req.user?.id || "unknown"),
-      actorUsername: String(req.user?.username || req.user?.name || req.user?.email || "unknown"),
+      actorUsername: String(req.user?.name || req.user?.username || req.user?.email || "unknown"),
       actorRole: String(req.user?.role || "unknown"),
       action: "TASK_UPDATE",
       resourceType: "task",

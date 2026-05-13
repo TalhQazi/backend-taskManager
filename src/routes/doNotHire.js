@@ -61,7 +61,7 @@ router.post("/", requireAuth, async (req, res, next) => {
       
       // Create notification
       await createNotification({
-        actor: req.user?.username || req.user?.name || "Admin",
+        actor: req.user?.name || req.user?.username || "Admin",
         actorRole: req.user?.role || "admin",
         action: "created",
         resourceType: "do not hire entry",
@@ -81,7 +81,7 @@ router.post("/", requireAuth, async (req, res, next) => {
 
     // Create notification
     await createNotification({
-      actor: req.user?.username || req.user?.name || "Admin",
+      actor: req.user?.name || req.user?.username || "Admin",
       actorRole: req.user?.role || "admin",
       action: "created",
       resourceType: "do not hire entry",
@@ -113,7 +113,7 @@ router.put("/:id", requireAuth, async (req, res, next) => {
       
       // Create notification
       await createNotification({
-        actor: req.user?.username || req.user?.name || "Admin",
+        actor: req.user?.name || req.user?.username || "Admin",
         actorRole: req.user?.role || "admin",
         action: "updated",
         resourceType: "do not hire entry",
@@ -133,7 +133,7 @@ router.put("/:id", requireAuth, async (req, res, next) => {
 
     // Create notification
     await createNotification({
-      actor: req.user?.username || req.user?.name || "Admin",
+      actor: req.user?.name || req.user?.username || "Admin",
       actorRole: req.user?.role || "admin",
       action: "updated",
       resourceType: "do not hire entry",
@@ -154,7 +154,7 @@ router.delete("/:id", requireAuth, async (req, res, next) => {
     
     // Create notification
     await createNotification({
-      actor: req.user?.username || req.user?.name || "Admin",
+      actor: req.user?.name || req.user?.username || "Admin",
       actorRole: req.user?.role || "admin",
       action: "deleted",
       resourceType: "do not hire entry",

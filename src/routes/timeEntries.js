@@ -232,7 +232,7 @@ router.post("/", requireAuth, async (req, res, next) => {
       
       // Create notification
       await createNotification({
-        actor: req.user?.username || req.user?.name || "Admin",
+        actor: req.user?.name || req.user?.username || "Admin",
         actorRole: req.user?.role || "admin",
         action: "created",
         resourceType: "time entry",
@@ -267,7 +267,7 @@ router.post("/", requireAuth, async (req, res, next) => {
     // Fire-and-forget side effects
     Promise.allSettled([
       createNotification({
-        actor: req.user?.username || req.user?.name || "Admin",
+        actor: req.user?.name || req.user?.username || "Admin",
         actorRole: req.user?.role || "admin",
         action: "created",
         resourceType: "time entry",
@@ -475,7 +475,7 @@ router.put("/:id", requireAuth, async (req, res, next) => {
       
       // Create notification
       await createNotification({
-        actor: req.user?.username || req.user?.name || "Admin",
+        actor: req.user?.name || req.user?.username || "Admin",
         actorRole: req.user?.role || "admin",
         action: "updated",
         resourceType: "time entry",
@@ -547,7 +547,7 @@ router.put("/:id", requireAuth, async (req, res, next) => {
     
     // Create notification
     await createNotification({
-      actor: req.user?.username || req.user?.name || "Admin",
+      actor: req.user?.name || req.user?.username || "Admin",
       actorRole: req.user?.role || "admin",
       action: "updated",
       resourceType: "time entry",
@@ -597,7 +597,7 @@ router.delete("/:id", requireAuth, async (req, res, next) => {
     // Create notification
     Promise.allSettled([
       createNotification({
-        actor: req.user?.username || req.user?.name || "Admin",
+        actor: req.user?.name || req.user?.username || "Admin",
         actorRole: req.user?.role || "admin",
         action: "deleted",
         resourceType: "time entry",

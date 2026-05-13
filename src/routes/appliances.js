@@ -244,7 +244,7 @@ router.put("/:id", requireAuth, async (req, res, next) => {
 
     // Create notification
     await createNotification({
-      actor: req.user?.username || req.user?.name || "Admin",
+      actor: req.user?.name || req.user?.username || "Admin",
       actorRole: req.user?.role || "admin",
       action: "updated",
       resourceType: "appliance",
@@ -308,7 +308,7 @@ router.post("/upload", requireAuth, upload.single("photoFile"), async (req, res,
 
     // Create notification
     await createNotification({
-      actor: req.user?.username || req.user?.name || "Admin",
+      actor: req.user?.name || req.user?.username || "Admin",
       actorRole: req.user?.role || "admin",
       action: "created",
       resourceType: "appliance",
@@ -333,7 +333,7 @@ router.delete("/:id", requireAuth, async (req, res, next) => {
 
     // Create notification
     await createNotification({
-      actor: req.user?.username || req.user?.name || "Admin",
+      actor: req.user?.name || req.user?.username || "Admin",
       actorRole: req.user?.role || "admin",
       action: "deleted",
       resourceType: "appliance",

@@ -87,15 +87,9 @@ async function createNotification({
 
     const recipient = Array.from(targetSet).join(",");
 
-    // Derive link
-    let derivedLink = link;
-    if (!derivedLink && resourceId) {
-      if (resourceType === "task" || resourceType === "task comment") {
-        derivedLink = `/admin/tasks/${resourceId}`;
-      } else if (resourceType === "project" || resourceType === "project comment") {
-        derivedLink = `/admin/projects/${resourceId}`;
-      }
-    }
+    // Leave meta.link empty for task/project — each panel's frontend computes
+    // the correct route from resourceType + resourceId (avoids hardcoding /admin/ paths).
+    const derivedLink = link || "";
 
     const titlePlain = `${action.charAt(0).toUpperCase() + action.slice(1)} ${resourceType}`;
 
