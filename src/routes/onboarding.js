@@ -9,12 +9,32 @@ const router = express.Router();
 // Helper function to get employee context
 async function requireEmployeeSelf(req, res) {
   try {
-    const employee = await Employee.findById(req.user.sub);
+    const userId = String(req.user?.sub || "").trim();
+    const username = String(req.user?.username || "").trim();
+    const name = String(req.user?.name || "").trim();
+
+    let employee = await Employee.findById(userId);
+
+    if (!employee && (username || name)) {
+      const candidates = [username, name].filter(Boolean);
+      const regexes = candidates.map((c) => new RegExp(`^${String(c).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i"));
+      employee = await Employee.findOne({
+        $or: [{ email: { $in: regexes } }, { name: { $in: regexes } }],
+      });
+    }
+
     if (!employee) {
       res.status(404).json({ error: { message: "Employee not found" } });
       return null;
     }
-    return { employee };
+    const user = {
+      _id: employee._id,
+      email: employee.email || "",
+      name: employee.name || "",
+      username: username || employee.email || "",
+      role: req.user?.role || "employee",
+    };
+    return { user, employee };
   } catch (err) {
     res.status(500).json({ error: { message: "Server error" } });
     return null;
@@ -53,7 +73,12 @@ function calculateProgress(onboarding) {
     completed++;
   }
 
-  return Math.round((completed / total) * 100);
+  // Work Information
+  if (onboarding.workInfo?.completed) {
+    completed++;
+  }
+
+  return Math.round((completed / 6) * 100);
 }
 
 // GET /api/onboarding/me - Get employee's onboarding status
@@ -85,6 +110,7 @@ router.get("/me", requireAuth, async (req, res, next) => {
         w4Form: onboarding.w4Form,
         employeeHandbook: onboarding.employeeHandbook,
         digitalSignature: onboarding.digitalSignature,
+        workInfo: onboarding.workInfo,
         overallStatus: onboarding.overallStatus,
         progress: calculateProgress(onboarding),
         adminReview: onboarding.adminReview,
@@ -470,6 +496,57 @@ router.put("/me/signature", requireAuth, async (req, res, next) => {
       item: {
         id: String(onboarding._id),
         digitalSignature: onboarding.digitalSignature,
+        overallStatus: onboarding.overallStatus,
+        progress: calculateProgress(onboarding),
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// PUT /api/onboarding/me/work-info - Update work information
+router.put("/me/work-info", requireAuth, async (req, res, next) => {
+  try {
+    const ctx = await requireEmployeeSelf(req, res);
+    if (!ctx) return;
+    const { user, employee } = ctx;
+
+    const { department, jobTitle, manager } = req.body;
+
+    if (!department || !jobTitle) {
+      return res.status(400).json({ error: { message: "Department and Job Title are required" } });
+    }
+
+    let onboarding = await Onboarding.findOne({ userId: user._id });
+    if (!onboarding) {
+      onboarding = new Onboarding({
+        userId: user._id,
+        employeeId: employee._id,
+        employeeName: employee.name,
+      });
+    }
+
+    onboarding.workInfo = {
+      completed: true,
+      department,
+      jobTitle,
+      manager: manager || "",
+    };
+
+    // Also update the employee record itself to keep them in sync
+    await Employee.findByIdAndUpdate(employee._id, {
+      department,
+      jobTitle,
+      manager,
+    });
+
+    await onboarding.save();
+
+    return res.json({
+      item: {
+        id: String(onboarding._id),
+        workInfo: onboarding.workInfo,
         overallStatus: onboarding.overallStatus,
         progress: calculateProgress(onboarding),
       },
