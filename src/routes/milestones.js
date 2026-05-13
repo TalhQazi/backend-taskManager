@@ -2,7 +2,7 @@ const express = require("express");
 const { z } = require("zod");
 const Employee = require("../models/Employee");
 const Milestone = require("../models/Milestone");
-const Notification = require("../models/Notification");
+const { createMilestoneBroadcastForEmployee } = require("../utils/notifications");
 const { requireAuth } = require("../middleware/auth");
 
 const router = express.Router();
@@ -118,16 +118,9 @@ router.get("/user/:id", requireAuth, async (req, res, next) => {
       milestoneOverlayExpires: overlayExpires,
     });
 
-    // Create notification for the employee
-    await Notification.create({
-      userId: employee._id,
-      title: `🎉 Milestone Achievement!`,
-      message: `Congratulations! You've reached ${getMilestoneLabel(currentMilestoneLevel)}!`,
-      type: "milestone",
-      metadata: {
-        milestoneLevel: currentMilestoneLevel,
-        milestoneLabel: getMilestoneLabel(currentMilestoneLevel),
-      },
+    await createMilestoneBroadcastForEmployee(employee, {
+      milestoneLevel: currentMilestoneLevel,
+      milestoneLabel: getMilestoneLabel(currentMilestoneLevel),
     });
 
     res.json({
