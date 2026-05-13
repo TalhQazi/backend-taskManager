@@ -512,7 +512,7 @@ router.put("/me/work-info", requireAuth, async (req, res, next) => {
     if (!ctx) return;
     const { user, employee } = ctx;
 
-    const { department, jobTitle, manager } = req.body;
+    const { department, jobTitle, manager, joinDate } = req.body; // ← joinDate add
 
     if (!department || !jobTitle) {
       return res.status(400).json({ error: { message: "Department and Job Title are required" } });
@@ -532,13 +532,15 @@ router.put("/me/work-info", requireAuth, async (req, res, next) => {
       department,
       jobTitle,
       manager: manager || "",
+      joinDate: joinDate || "",  // ← ADD
     };
 
-    // Also update the employee record itself to keep them in sync
+    // Employee record sync
     await Employee.findByIdAndUpdate(employee._id, {
       department,
       jobTitle,
       manager,
+      joinDate, // ← ADD (agar Employee model mein hai)
     });
 
     await onboarding.save();

@@ -49,12 +49,14 @@ const OnboardingSchema = new mongoose.Schema(
       status: { type: String, enum: ["missing", "submitted", "verified"], default: "missing" },
     },
     // Step 6: Work Information
-    workInfo: {
-      completed: { type: Boolean, default: false },
-      department: { type: String },
-      jobTitle: { type: String },
-      manager: { type: String },
-    },
+   // Step 6: Work Information
+workInfo: {
+  completed: { type: Boolean, default: false },
+  department: { type: String },
+  jobTitle: { type: String },
+  manager: { type: String },
+  joinDate: { type: String }, // ← YEH ADD KARO
+},
 
     // Overall Status
     overallStatus: {
