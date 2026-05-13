@@ -60,6 +60,7 @@ const systemSettingsRoutes = require("./routes/systemSettings");
 const assetLibraryHeaderSettingsRoutes = require("./routes/assetLibraryHeaderSettings");
 const memeRoutes = require("./routes/meme");
 const milestonesRoutes = require("./routes/milestones");
+const announcementsRoutes = require("./routes/announcements");
 
 //going to express now
 const app = express();
@@ -318,6 +319,7 @@ app.use("/api/system-settings", systemSettingsRoutes);
 app.use("/api/asset-library-header-settings", assetLibraryHeaderSettingsRoutes);
 app.use("/api/meme", memeRoutes);
 app.use("/api/milestones", milestonesRoutes);
+app.use("/api/announcements", announcementsRoutes);
 
 app.use(notFoundHandler);
 app.use(errorHandler);
