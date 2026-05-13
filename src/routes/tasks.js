@@ -283,6 +283,7 @@ router.get("/", requireAuth, async (req, res, next) => {
     const priorityQ = String(req.query.priority || "").trim();
     const sortQ = String(req.query.sort || "").trim().toLowerCase();
     const projectIdQ = String(req.query.projectId || "").trim();
+    const assignment = String(req.query.assignment || "all").trim().toLowerCase();
 
     const conditions = [];
     const username = String(req.user?.username || "").trim();
@@ -352,6 +353,13 @@ router.get("/", requireAuth, async (req, res, next) => {
     // 4. Status Filter
     if (statusQ && statusQ !== "all") {
       conditions.push({ status: statusQ });
+    }
+
+    // 5. Assignment Filter
+    if (assignment === "unassigned") {
+      conditions.push({ assignees: { $size: 0 } });
+    } else if (assignment === "assigned") {
+      conditions.push({ assignees: { $not: { $size: 0 } } });
     }
 
     // 5. Priority Filter
