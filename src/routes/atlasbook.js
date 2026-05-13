@@ -2,6 +2,7 @@ const express = require("express");
 const router = express.Router();
 const { requireAuth } = require("../middleware/auth");
 
+// Models (Phases 1-5)
 const Property = require("../models/Property");
 const Unit = require("../models/Unit");
 const AtlasAccount = require("../models/AtlasAccount");
@@ -15,12 +16,14 @@ const InventoryItem = require("../models/InventoryItem");
 const PayrollRecord = require("../models/PayrollRecord");
 const Budget = require("../models/Budget");
 const FixedAsset = require("../models/FixedAsset");
-
-// Phase 5 Models
 const Loan = require("../models/Loan");
 const TaxSetting = require("../models/TaxSetting");
 const CurrencyExchange = require("../models/CurrencyExchange");
 const InvestorStatement = require("../models/InvestorStatement");
+
+// Phase 6 Models
+const ApprovalRequest = require("../models/ApprovalRequest");
+const TitleRecord = require("../models/TitleRecord");
 
 // Generic CRUD handlers
 const handleGet = (Model, populate = "") => async (req, res) => {
@@ -69,8 +72,6 @@ router.get("/budgets", requireAuth, handleGet(Budget, "account"));
 router.post("/budgets", requireAuth, handlePost(Budget));
 router.get("/assets", requireAuth, handleGet(FixedAsset));
 router.post("/assets", requireAuth, handlePost(FixedAsset));
-
-// --- PHASE 5 ROUTES ---
 router.get("/loans", requireAuth, handleGet(Loan, "property"));
 router.post("/loans", requireAuth, handlePost(Loan));
 router.get("/tax-settings", requireAuth, handleGet(TaxSetting, "account"));
@@ -80,7 +81,41 @@ router.post("/exchange-rates", requireAuth, handlePost(CurrencyExchange));
 router.get("/investor-statements", requireAuth, handleGet(InvestorStatement, "property"));
 router.post("/investor-statements", requireAuth, handlePost(InvestorStatement));
 
-// --- ANALYTICAL ROUTES ---
+// --- PHASE 6 ROUTES ---
+router.get("/approvals", requireAuth, handleGet(ApprovalRequest, "requestedBy approvers"));
+router.post("/approvals", requireAuth, handlePost(ApprovalRequest));
+router.get("/titles", requireAuth, handleGet(TitleRecord, "property"));
+router.post("/titles", requireAuth, handlePost(TitleRecord));
+
+// --- ANALYTICAL & GLOBAL ROUTES ---
+
+// Global Search across main modules
+router.get("/search", requireAuth, async (req, res) => {
+  try {
+    const q = req.query.q || "";
+    if (!q) return res.json({ success: true, results: [] });
+    
+    const regex = new RegExp(q, "i");
+    const [properties, tenants, units, accounts, transactions] = await Promise.all([
+      Property.find({ name: regex }).limit(5),
+      Tenant.find({ name: regex }).limit(5),
+      Unit.find({ unitNumber: regex }).limit(5),
+      AtlasAccount.find({ name: regex }).limit(5),
+      AtlasTransaction.find({ description: regex }).limit(5)
+    ]);
+    
+    const results = [
+      ...properties.map(i => ({ type: "Property", title: i.name, id: i._id, link: `/admin/atlas-book/property` })),
+      ...tenants.map(i => ({ type: "Tenant", title: i.name, id: i._id, link: `/admin/atlas-book/customer` })),
+      ...units.map(i => ({ type: "Unit", title: `Unit ${i.unitNumber}`, id: i._id, link: `/admin/atlas-book/unit` })),
+      ...accounts.map(i => ({ type: "Account", title: i.name, id: i._id, link: `/admin/atlas-book/coa` })),
+      ...transactions.map(i => ({ type: "Transaction", title: i.description, id: i._id, link: `/admin/atlas-book/transactions` }))
+    ];
+    
+    res.json({ success: true, results });
+  } catch (error) { res.status(500).json({ success: false, message: error.message }); }
+});
+
 router.get("/reports/pl", requireAuth, async (req, res) => {
   try {
     const revenueAccounts = await AtlasAccount.find({ type: "Revenue" });
