@@ -63,9 +63,11 @@ const assetLibraryHeaderSettingsRoutes = require("./routes/assetLibraryHeaderSet
 const crmCompanyRoutes = require("./routes/crmcompany");
 const crmContactsRoutes = require("./routes/crmcontacts");
 const crmDealsRoutes = require("./routes/crmdeals");
+const crmTasksRoutes = require("./routes/crmtasks");
 
 const memeRoutes = require("./routes/meme");
 const milestonesRoutes = require("./routes/milestones");
+
 
 
 //going to express now
@@ -350,7 +352,7 @@ app.use("/api/asset-library-header-settings", assetLibraryHeaderSettingsRoutes);
 app.use("/api/crm-company", crmCompanyRoutes);
 app.use("/api/crm-contacts", crmContactsRoutes);
 app.use("/api/crm-deals", crmDealsRoutes);
-
+app.use("/api/crm-tasks", crmTasksRoutes);
 app.use("/api/meme", memeRoutes);
 app.use("/api/milestones", milestonesRoutes);
 
