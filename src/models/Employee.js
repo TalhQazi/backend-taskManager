@@ -21,7 +21,11 @@ const EmployeeSchema = new mongoose.Schema(
     shift: { type: String, default: "" },
     hireDate: { type: String, default: "" },
     joinDate: { type: Date },
+    department: { type: String, default: "" },
+    userRole: { type: String, default: "" },
+    userStatus: { type: String, default: "active" },
     passwordHash: { type: String, default: "" },
+
     address: { type: String, default: "" },
 
 emergencyContact: {
@@ -41,6 +45,10 @@ taxSettings: {
   withholdingStatus: { type: String, default: "" },
   extraWithholding: { type: Number, default: 0 },
 },
+
+    resetPasswordCode: { type: String, default: null },
+    resetPasswordExpires: { type: Date, default: null },
+
   },
   { timestamps: true }
 );

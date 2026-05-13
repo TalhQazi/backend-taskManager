@@ -5,7 +5,7 @@ const multer = require("multer");
 const Message = require("../models/Message");
 const Employee = require("../models/Employee");
 const { requireAuth } = require("../middleware/auth");
-const { encryptString, decryptString } = require("../lib/encryption");
+const { encrypt, decrypt } = require("../lib/encryption");
 const { checkAndFlagOffTheClock } = require("../lib/offTheClockWork");
 const { parsePagination, paginatedResponse } = require("../lib/pagination");
 const { cacheWrap, cacheDel } = require("../lib/cache");
@@ -21,8 +21,12 @@ function withId(doc) {
 function decryptOut(doc) {
   if (!doc) return doc;
   const next = { ...doc };
-  if (typeof next.title === "string") next.title = decryptString(next.title);
-  if (typeof next.content === "string") next.content = decryptString(next.content);
+  try {
+    if (typeof next.title === "string") next.title = decrypt(next.title);
+  } catch (e) { /* keep original on decrypt failure */ }
+  try {
+    if (typeof next.content === "string") next.content = decrypt(next.content);
+  } catch (e) { /* keep original on decrypt failure */ }
   return next;
 }
 
@@ -87,6 +91,53 @@ router.post("/upload", requireAuth, upload.single("file"), async (req, res, next
   }
 });
 
+// Unread broadcast notification count for the current user
+router.get("/unread-count", requireAuth, async (req, res, next) => {
+  try {
+    const currentUser = String(req.user?.username || req.user?.name || "").trim();
+    const currentName = String(req.user?.name || "").trim();
+    const role = String(req.user?.role || "").trim();
+
+    if (!currentUser) return res.json({ count: 0 });
+
+    const query = {
+      type: "broadcast",
+      readBy: { $ne: currentUser },
+      // Whitelist: only show notifications with a recognized category OR admin-created broadcasts
+      $and: [{
+        $or: [
+          { "meta.category": { $in: ["TASK_ASSIGNED", "PROJECT_ASSIGNED", "TASK_COMPLETED", "MENTIONED", "COMMENT_ADDED", "SYSTEM_ALERT"] } },
+          { audience: { $ne: "targeted" } },
+        ],
+      }],
+    };
+
+    if (role !== "super-admin") {
+      const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      // Include both email-based username AND display name so employees can find
+      // notifications stored with their display name (from task.assignees).
+      let candidates = [role, currentUser, currentName].filter(Boolean);
+      if (role === "admin" || role === "manager") {
+        candidates.push("admin", "manager");
+      }
+      candidates = [...new Set(candidates)];
+      query.$and.push({
+        $or: [
+          ...candidates.map((c) => ({
+            recipient: { $regex: new RegExp(`(^|,)${escapeRegex(c)}(,|$)`, "i") },
+          })),
+          { audience: { $ne: "targeted" } },
+        ],
+      });
+    }
+
+    const count = await Message.countDocuments(query);
+    return res.json({ count });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // Get all messages (with optional filtering)
 router.get("/", requireAuth, async (req, res, next) => {
   try {
@@ -113,39 +164,64 @@ router.get("/", requireAuth, async (req, res, next) => {
       } else if (String(type || "").toLowerCase() === "broadcast") {
         const role = String(req.user?.role || "").trim();
         const username = String(req.user?.username || req.user?.name || "").trim();
+        const displayName = String(req.user?.name || "").trim();
         const userId = String(req.user?.sub || req.user?.id || "").trim();
 
         query.type = "broadcast";
+        // Whitelist: only show notifications with a recognized category OR admin-created broadcasts
+        query.$and = [{
+          $or: [
+            { "meta.category": { $in: ["TASK_ASSIGNED", "PROJECT_ASSIGNED", "TASK_COMPLETED", "MENTIONED", "COMMENT_ADDED", "SYSTEM_ALERT"] } },
+            { audience: { $ne: "targeted" } },
+          ],
+        }];
+
         if (role === "super-admin") {
           // super-admin sees all broadcast notifications
         } else {
           const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-          const candidates = [role, username, userId].filter(Boolean);
-          query.$or = candidates.map((c) => ({
-            recipient: { $regex: new RegExp(`(^|,)${escapeRegex(c)}(,|$)`, "i") }
-          }));
+
+          // Include both email-username AND display name. Employees have username=email
+          // but task.assignees stores display names, so both must be searchable.
+          let candidates = [role, username, displayName, userId].filter(Boolean);
+
+          // Admin and manager can see each other's notifications
+          if (role === "admin" || role === "manager") {
+            candidates.push("admin");
+            candidates.push("manager");
+          }
+
+          // Remove duplicates
+          candidates = [...new Set(candidates)];
+
+          query.$and.push({
+            $or: [
+              ...candidates.map((c) => ({
+                recipient: { $regex: new RegExp(`(^|,)${escapeRegex(c)}(,|$)`, "i") },
+              })),
+              { audience: { $ne: "targeted" } },
+            ],
+          });
         }
       }
     }
 
     const cacheKey = `messages:list:${user || 'all'}:${sender || 'any'}:${recipient || 'any'}:${type || 'any'}:p${page}:l${limit}:${req.user?.sub || ''}`;
     
-    const result = await cacheWrap(cacheKey, async () => {
-      const [items, total] = await Promise.all([
-        Message.find(query).sort({ createdAt: -1 }).skip(skip).limit(limit).lean(),
-        Message.countDocuments(query),
-      ]);
+    const [items, total] = await Promise.all([
+      Message.find(query).sort({ timestamp: -1, createdAt: -1 }).skip(skip).limit(limit).lean(),
+      Message.countDocuments(query),
+    ]);
 
-      const currentUser = String(req.user?.username || req.user?.name || "").trim();
-      const enriched = items.map((x) => {
-        const doc = withId(decryptOut(x));
-        const readByList = Array.isArray(x.readBy) ? x.readBy : [];
-        const isReadByMe = currentUser && readByList.includes(currentUser);
-        return { ...doc, status: isReadByMe ? "read" : "sent" };
-      });
+    const currentUser = String(req.user?.username || req.user?.name || "").trim();
+    const enriched = items.map((x) => {
+      const doc = withId(decryptOut(x));
+      const readByList = Array.isArray(x.readBy) ? x.readBy : [];
+      const isReadByMe = currentUser && readByList.includes(currentUser);
+      return { ...doc, status: isReadByMe ? "read" : "sent" };
+    });
 
-      return paginatedResponse(enriched, total, page, limit);
-    }, 15);
+    const result = paginatedResponse(enriched, total, page, limit);
 
     res.json(result);
   } catch (err) {
@@ -286,7 +362,7 @@ router.post("/mark-read", requireAuth, async (req, res, next) => {
     );
 
     // Invalidate message caches
-    cacheDel("messages:list:*").catch(() => {});
+    await cacheDel("messages:list:*").catch(() => {});
 
     res.json({ success: true, message: "Messages marked as read" });
   } catch (err) {
@@ -301,13 +377,13 @@ router.post("/", requireAuth, async (req, res, next) => {
     if (notificationParsed.success) {
       const now = new Date();
       const created = await Message.create({
-        title: encryptString(notificationParsed.data.title),
+        title: encrypt(notificationParsed.data.title),
         audience: notificationParsed.data.audience,
         createdAt: notificationParsed.data.createdAt || now.toISOString().split("T")[0],
         sender: "system",
         senderAvatar: "",
         recipient: notificationParsed.data.audience,
-        content: encryptString(notificationParsed.data.message),
+        content: encrypt(notificationParsed.data.message),
         timestamp: now.toISOString(),
         type: "broadcast",
         status: "sent",
@@ -345,8 +421,8 @@ router.post("/", requireAuth, async (req, res, next) => {
 
     const created = await Message.create({
       ...parsed.data,
-      title: typeof parsed.data.title === "string" ? encryptString(parsed.data.title) : "",
-      content: encryptString(content),
+      title: typeof parsed.data.title === "string" ? encrypt(parsed.data.title) : "",
+      content: encrypt(content),
       attachment: parsed.data.attachment || undefined,
     });
 
@@ -386,6 +462,9 @@ router.post("/:id/mark-read", requireAuth, async (req, res, next) => {
       $addToSet: { readBy: currentUser },
     });
 
+    // Invalidate message caches
+    await cacheDel("messages:list:*").catch(() => {});
+
     return res.json({ success: true });
   } catch (err) {
     next(err);
@@ -397,21 +476,48 @@ router.post("/mark-all-read", requireAuth, async (req, res, next) => {
   try {
     const role = String(req.user?.role || "").trim();
     const currentUser = String(req.user?.username || req.user?.name || "").trim();
+    const currentName = String(req.user?.name || "").trim();
     if (!currentUser) return res.status(400).json({ error: { message: "Cannot identify user" } });
 
-    let query = { type: "broadcast" };
+    let query = {
+      type: "broadcast",
+      // Whitelist: only mark-read notifications with a recognized category OR admin-created broadcasts
+      $and: [{
+        $or: [
+          { "meta.category": { $in: ["TASK_ASSIGNED", "PROJECT_ASSIGNED", "TASK_COMPLETED", "MENTIONED", "COMMENT_ADDED", "SYSTEM_ALERT"] } },
+          { audience: { $ne: "targeted" } },
+        ],
+      }],
+    };
     if (role !== "super-admin") {
       const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-      const candidates = [role, currentUser].filter(Boolean);
-      query.$or = candidates.map((c) => ({
-        recipient: { $regex: new RegExp(`(^|,)${escapeRegex(c)}(,|$)`, "i") }
-      }));
+
+      let candidates = [role, currentUser, currentName].filter(Boolean);
+
+      if (role === "admin" || role === "manager") {
+        candidates.push("admin");
+        candidates.push("manager");
+      }
+
+      candidates = [...new Set(candidates)];
+
+      query.$and.push({
+        $or: [
+          ...candidates.map((c) => ({
+            recipient: { $regex: new RegExp(`(^|,)${escapeRegex(c)}(,|$)`, "i") },
+          })),
+          { audience: { $ne: "targeted" } },
+        ],
+      });
     }
 
     await Message.updateMany(
       { ...query, readBy: { $ne: currentUser } },
       { $addToSet: { readBy: currentUser } }
     );
+
+    // Invalidate message caches
+    await cacheDel("messages:list:*").catch(() => {});
 
     return res.json({ success: true });
   } catch (err) {
@@ -431,13 +537,13 @@ router.put("/:id", requireAuth, async (req, res, next) => {
         userId: String(req.user?.sub || ""),
         timestamp: parsed.data.timestamp || new Date(),
         activityType: "message_update",
-        metadata: { messageId: String(req.params.id) },
+        metadata: { messageId: req.params.id },
       });
     }
 
     const patch = { ...parsed.data };
-    if (typeof patch.title === "string") patch.title = encryptString(patch.title);
-    if (typeof patch.content === "string") patch.content = encryptString(patch.content);
+    if (typeof patch.title === "string") patch.title = encrypt(patch.title);
+    if (typeof patch.content === "string") patch.content = encrypt(patch.content);
 
     const updated = await Message.findByIdAndUpdate(req.params.id, patch, { new: true }).lean();
     if (!updated) return res.status(404).json({ error: { message: "Message not found" } });
@@ -454,7 +560,7 @@ router.delete("/:id", requireAuth, async (req, res, next) => {
     const deleted = await Message.findByIdAndDelete(req.params.id).lean();
     if (!deleted) return res.status(404).json({ error: { message: "Message not found" } });
     
-    cacheDel("messages:list:*").catch(() => {});
+    await cacheDel("messages:list:*").catch(() => {});
     
     res.status(204).send();
   } catch (err) {

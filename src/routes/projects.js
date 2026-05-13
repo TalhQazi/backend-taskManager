@@ -6,11 +6,12 @@ const Project = require("../models/Project");
 const Task = require("../models/Task");
 const ProjectComment = require("../models/ProjectComment");
 const Settings = require("../models/Settings");
-const User = require("../models/User");
+const Employee = require("../models/Employee");
 const Archive = require("../models/Archive");
 const ActivityLog = require("../models/ActivityLog");
 const { requireAuth } = require("../middleware/auth");
 const { createNotification } = require("../utils/notifications");
+const { extractMentions } = require("../utils/mentions");
 const { parsePagination, paginatedResponse } = require("../lib/pagination");
 const { cacheWrap, cacheDel } = require("../lib/cache");
 const { uploadToS3, base64ToBuffer } = require("../lib/s3");
@@ -42,7 +43,7 @@ async function logActivity(req, action, resourceType, resourceId, resourceName, 
   try {
     await ActivityLog.create({
       actorUserId: String(req.user?.sub || req.user?.id || "unknown"),
-      actorUsername: String(req.user?.username || req.user?.name || "unknown"),
+      actorUsername: String(req.user?.name || req.user?.username || "unknown"),
       actorRole: String(req.user?.role || "unknown"),
       action,
       resourceType,
@@ -97,6 +98,7 @@ const projectCreateSchema = z.object({
   name: z.string().min(1, "Project name is required"),
   description: z.string().optional().default(""),
   assignees: z.array(z.string()).optional().default([]),
+  teamLead: z.string().optional().default(""),
   logo: logoSchema,
   attachments: z.array(z.object({
     fileName: z.string().optional().default(""),
@@ -104,6 +106,14 @@ const projectCreateSchema = z.object({
     mimeType: z.string().optional().default(""),
     size: z.number().optional().default(0),
     uploadedAt: z.date().optional(),
+  })).optional().default([]),
+  dropboxAttachments: z.array(z.object({
+    file_name: z.string(),
+    file_type: z.string().optional().default(""),
+    file_size: z.number().optional().default(0),
+    dropbox_file_id: z.string(),
+    dropbox_path: z.string(),
+    temporary_link: z.string().optional().default(""),
   })).optional().default([]),
   tasks: z.array(taskCreateSchema).optional().default([]),
 });
@@ -158,10 +168,12 @@ router.post("/", requireAuth, async (req, res, next) => {
       name: data.name,
       description: data.description || "",
       assignees: data.assignees || [],
+      teamLead: data.teamLead || "",
       logo: data.logo || { fileName: "", url: "", mimeType: "", size: 0 },
       attachments: data.attachments || [],
+      dropboxAttachments: data.dropboxAttachments || [],
       createdByUserId: String(req.user?.sub || req.user?.id || ""),
-      createdByUsername: String(req.user?.username || req.user?.name || ""),
+      createdByUsername: String(req.user?.name || req.user?.username || ""),
       createdByRole: String(req.user?.role || ""),
     });
 
@@ -226,7 +238,7 @@ router.post("/", requireAuth, async (req, res, next) => {
     );
 
     void createNotification({
-      actor: String(req.user?.username || req.user?.name || "System"),
+      actor: String(req.user?.name || req.user?.username || "System"),
       actorRole: String(req.user?.role || ""),
       action: "created",
       resourceType: "project",
@@ -234,7 +246,24 @@ router.post("/", requireAuth, async (req, res, next) => {
       assignees: Array.isArray(data.assignees) ? data.assignees : [],
       details: `Tasks: ${createdTasks.length}`,
       resourceId: String(createdProject._id),
+      category: "PROJECT_ASSIGNED",
     });
+
+    // Extract mentions from description
+    const mentionedUsers = await extractMentions(data.description);
+    if (mentionedUsers.length > 0) {
+      await createNotification({
+        actor: String(req.user?.name || req.user?.username || "System"),
+        actorRole: String(req.user?.role || ""),
+        action: "mentioned you in project",
+        resourceType: "project",
+        resourceName: createdProject.name,
+        assignees: mentionedUsers,
+        details: `"${data.description.length > 50 ? data.description.substring(0, 50) + "..." : data.description}"`,
+        resourceId: String(createdProject._id),
+        category: "MENTIONED",
+      });
+    }
 
     return res.status(201).json({
       item: {
@@ -269,8 +298,21 @@ router.get("/", requireAuth, async (req, res, next) => {
         return res.json(paginatedResponse([], 0, page, limit));
       }
 
-      const regexes = candidates.map((c) => new RegExp(`^${escapeRegExp(c)}$`, "i"));
-      matchStages.push({ $match: { assignees: { $elemMatch: { $in: regexes } } } });
+      // For managers and team-leads, filter by teamLead field
+      if (role === "manager" || role === "team-lead") {
+        const regexes = candidates.map((c) => new RegExp(`^${escapeRegExp(c)}$`, "i"));
+        matchStages.push({
+          $match: {
+            $or: [
+              { teamLead: { $in: regexes } },
+              { assignees: { $elemMatch: { $in: regexes } } }
+            ]
+          }
+        });
+      } else {
+        const regexes = candidates.map((c) => new RegExp(`^${escapeRegExp(c)}$`, "i"));
+        matchStages.push({ $match: { assignees: { $elemMatch: { $in: regexes } } } });
+      }
     }
 
     if (searchQ) {
@@ -401,6 +443,7 @@ router.get("/", requireAuth, async (req, res, next) => {
           name: 1,
           description: 1,
           assignees: 1,
+          teamLead: 1,
           logo: {
             fileName: { $ifNull: ["$logo.fileName", ""] },
             url: { 
@@ -423,6 +466,22 @@ router.get("/", requireAuth, async (req, res, next) => {
                 mimeType: "$$att.mimeType",
                 size: "$$att.size",
                 uploadedAt: "$$att.uploadedAt",
+              },
+            },
+          },
+          dropboxAttachments: {
+            $map: {
+              input: { $ifNull: ["$dropboxAttachments", []] },
+              as: "dbf",
+              in: {
+                id: "$$dbf._id",
+                file_name: "$$dbf.file_name",
+                file_type: "$$dbf.file_type",
+                file_size: "$$dbf.file_size",
+                dropbox_file_id: "$$dbf.dropbox_file_id",
+                dropbox_path: "$$dbf.dropbox_path",
+                temporary_link: "$$dbf.temporary_link",
+                created_at: "$$dbf.created_at",
               },
             },
           },
@@ -491,8 +550,11 @@ router.get("/:id", requireAuth, async (req, res, next) => {
                   title: 1,
                   description: 1,
                   assignees: { $ifNull: ["$assignees", { $cond: [{ $ifNull: ["$assignee", false] }, ["$assignee"], []] }] },
+                  teamLead: 1,
                   priority: 1,
                   status: 1,
+                  taskNumber: 1,
+                  executionPriority: 1,
                   dueDate: 1,
                   dueTime: 1,
                   location: 1,
@@ -560,6 +622,7 @@ router.get("/:id", requireAuth, async (req, res, next) => {
             name: 1,
             description: 1,
             assignees: 1,
+            teamLead: 1,
             logo: {
               fileName: { $ifNull: ["$logo.fileName", ""] },
               url: { $ifNull: ["$logo.url", ""] },
@@ -582,6 +645,22 @@ router.get("/:id", requireAuth, async (req, res, next) => {
                   mimeType: "$$att.mimeType",
                   size: "$$att.size",
                   uploadedAt: "$$att.uploadedAt",
+                },
+              },
+            },
+            dropboxAttachments: {
+              $map: {
+                input: { $ifNull: ["$dropboxAttachments", []] },
+                as: "dbf",
+                in: {
+                  id: "$$dbf._id",
+                  file_name: "$$dbf.file_name",
+                  file_type: "$$dbf.file_type",
+                  file_size: "$$dbf.file_size",
+                  dropbox_file_id: "$$dbf.dropbox_file_id",
+                  dropbox_path: "$$dbf.dropbox_path",
+                  temporary_link: "$$dbf.temporary_link",
+                  created_at: "$$dbf.created_at",
                 },
               },
             },
@@ -613,6 +692,7 @@ const projectUpdateSchema = z.object({
   name: z.string().min(1, "Project name is required").optional(),
   description: z.string().optional(),
   assignees: z.array(z.string()).optional(),
+  teamLead: z.string().optional(),
   logo: logoSchema,
   attachments: z.array(z.object({
     fileName: z.string().optional(),
@@ -620,6 +700,14 @@ const projectUpdateSchema = z.object({
     mimeType: z.string().optional(),
     size: z.number().optional(),
     uploadedAt: z.union([z.date(), z.string()]).optional(),
+  })).optional(),
+  dropboxAttachments: z.array(z.object({
+    file_name: z.string(),
+    file_type: z.string().optional().default(""),
+    file_size: z.number().optional().default(0),
+    dropbox_file_id: z.string(),
+    dropbox_path: z.string(),
+    temporary_link: z.string().optional().default(""),
   })).optional(),
   status: z.string().optional(),
 });
@@ -710,14 +798,22 @@ router.put("/:id", requireAuth, async (req, res, next) => {
       `Updated project: ${updated.name}`
     );
 
-    void createNotification({
-      actor: String(req.user?.username || req.user?.name || "System"),
-      actorRole: String(req.user?.role || ""),
-      action: "updated",
-      resourceType: "project",
-      resourceName: updated.name,
-      resourceId: String(updated._id),
-    });
+    if (patch.description) {
+      const mentionedUsers = await extractMentions(patch.description);
+      if (mentionedUsers.length > 0) {
+        await createNotification({
+          actor: String(req.user?.name || req.user?.username || "System"),
+          actorRole: String(req.user?.role || ""),
+          action: "mentioned you in project",
+          resourceType: "project",
+          resourceName: updated.name,
+          assignees: mentionedUsers,
+          details: `"${patch.description.length > 50 ? patch.description.substring(0, 50) + "..." : patch.description}"`,
+          resourceId: String(updated._id),
+          category: "MENTIONED",
+        });
+      }
+    }
 
     return res.json({ item: withId(updated) });
   } catch (err) {
@@ -752,13 +848,14 @@ router.put("/:id/reassign", requireAuth, async (req, res, next) => {
     await logActivity(req, "PROJECT_REASSIGN", "project", req.params.id, project.name, `Reassigned project: ${project.name} to ${assignees.join(", ")}`);
 
     await createNotification({
-      actor: req.user?.username || req.user?.name || "System",
+      actor: req.user?.name || req.user?.username || "System",
       actorRole: req.user?.role || "",
       action: "reassigned",
       resourceType: "project",
       resourceName: project.name,
+      assignees,
       resourceId: String(req.params.id),
-      details: `New assignees: ${assignees.join(", ")}`,
+      category: "PROJECT_ASSIGNED",
     });
 
     return res.json({ item: withId(project.toObject()) });
@@ -789,6 +886,7 @@ router.delete("/:id", requireAuth, async (req, res, next) => {
         assignees: project.assignees,
         logo: project.logo,
         attachments: project.attachments,
+        dropboxAttachments: project.dropboxAttachments,
         createdAt: project.createdAt,
         createdByUserId: project.createdByUserId,
         createdByUsername: project.createdByUsername,
@@ -798,7 +896,7 @@ router.delete("/:id", requireAuth, async (req, res, next) => {
       parentId: String(project._id),
       parentName: project.name,
       archivedByUserId: String(req.user?.sub || req.user?.id || ""),
-      archivedByUsername: String(req.user?.username || req.user?.name || ""),
+      archivedByUsername: String(req.user?.name || req.user?.username || ""),
       archivedByRole: String(req.user?.role || ""),
     });
 
@@ -847,15 +945,6 @@ router.delete("/:id", requireAuth, async (req, res, next) => {
       project.name,
       `Archived project: ${project.name}`
     );
-
-    void createNotification({
-      actor: String(req.user?.username || req.user?.name || "System"),
-      actorRole: String(req.user?.role || ""),
-      action: "archived",
-      resourceType: "project",
-      resourceName: project.name,
-      resourceId: String(project._id),
-    });
 
     return res.json({ success: true, message: "Project archived successfully" });
   } catch (err) {
@@ -935,37 +1024,38 @@ router.post("/:id/comments", requireAuth, async (req, res, next) => {
     await logActivity(req, "PROJECT_COMMENT_CREATE", "project", project._id, project.name, `Comment added on project: ${project.name}`);
 
     // Process Mentions
-    if (message.includes("@")) {
-      const Employee = require("../models/Employee");
-      const activeEmployees = await Employee.find({ status: "active" }).select("name").lean();
-      const mentionedUsers = [];
-      const lowerMessage = message.toLowerCase();
-      
-      activeEmployees.forEach(emp => {
-        if (lowerMessage.includes("@" + emp.name.toLowerCase())) {
-          mentionedUsers.push(emp.name);
-        }
+    const mentionedUsers = await extractMentions(message);
+    if (mentionedUsers.length > 0) {
+      await createNotification({
+        actor: String(req.user?.name || req.user?.username || "Someone"),
+        actorRole: String(req.user?.role || ""),
+        action: "mentioned you in a",
+        resourceType: "project comment",
+        resourceName: project.name,
+        assignees: mentionedUsers,
+        details: `"${message.length > 50 ? message.substring(0, 50) + "..." : message}"`,
+        resourceId: String(project._id),
+        category: "MENTIONED",
       });
+    }
 
-      const activeUsers = await User.find({}).select("username").lean();
-      activeUsers.forEach(u => {
-        if (u.username && lowerMessage.includes("@" + u.username.toLowerCase()) && !mentionedUsers.includes(u.username)) {
-          mentionedUsers.push(u.username);
-        }
+    // Notify task assignees and creator about the new comment
+    const commentRecipients = new Set([
+      ...(Array.isArray(project.assignees) ? project.assignees : []),
+      project.createdByUsername || ""
+    ].filter(Boolean));
+    if (commentRecipients.size > 0) {
+      await createNotification({
+        actor: String(req.user?.name || req.user?.username || "Someone"),
+        actorRole: String(req.user?.role || ""),
+        action: "commented on",
+        resourceType: "project",
+        resourceName: project.name,
+        assignees: Array.from(commentRecipients),
+        details: `"${message.length > 50 ? message.substring(0, 50) + "..." : message}"`,
+        resourceId: String(project._id),
+        category: "COMMENT_ADDED",
       });
-
-      if (mentionedUsers.length > 0) {
-        await createNotification({
-          actor: String(req.user?.username || "Someone"),
-          actorRole: String(req.user?.role || ""),
-          action: "mentioned you in a",
-          resourceType: "project comment",
-          resourceName: project.name,
-          assignees: mentionedUsers,
-          details: `"${message.length > 50 ? message.substring(0, 50) + "..." : message}"`,
-          resourceId: String(project._id),
-        });
-      }
     }
 
     const authorUserId = String(req.user?.sub || req.user?.id || "");
@@ -995,6 +1085,61 @@ router.post("/:id/comments", requireAuth, async (req, res, next) => {
     }
 
     return res.status(201).json({ item: commentData });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// ============================================================================
+// Execution Priority System - Admin Only (Project Tasks)
+// ============================================================================
+
+// DELETE /api/projects/:id/priorities - Clear all execution priorities for a project's tasks
+router.delete("/:id/priorities", requireAuth, async (req, res, next) => {
+  try {
+    // Check admin role
+    if (req.user?.role !== "admin") {
+      return res.status(403).json({ error: { message: "Only admins can manage execution priorities" } });
+    }
+
+    const { id } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ error: { message: "Invalid project ID" } });
+    }
+
+    const project = await Project.findById(id);
+    if (!project) {
+      return res.status(404).json({ error: { message: "Project not found" } });
+    }
+
+    // Clear execution priorities for all tasks in this project
+    const result = await Task.updateMany(
+      { projectId: new mongoose.Types.ObjectId(id), executionPriority: { $ne: null } },
+      { executionPriority: null }
+    );
+
+    // Log activity
+    await ActivityLog.create({
+      actorUserId: String(req.user?.sub || req.user?.id || "unknown"),
+      actorUsername: String(req.user?.name || req.user?.username || "unknown"),
+      actorRole: String(req.user?.role || "unknown"),
+      action: "cleared_project_execution_priorities",
+      resourceType: "project",
+      resourceId: String(project._id),
+      resourceName: project.name,
+      description: `Cleared all execution priorities for ${result.modifiedCount} tasks in project "${project.name}"`,
+    });
+
+    // Clear cache
+    await cacheDel("tasks:*");
+    await cacheDel("projects:*");
+
+    return res.status(200).json({
+      success: true,
+      modifiedCount: result.modifiedCount,
+      message: `All execution priorities cleared for ${result.modifiedCount} tasks in project "${project.name}"`,
+    });
   } catch (err) {
     return next(err);
   }

@@ -16,8 +16,6 @@ const ImportJob = require("../models/ImportJob");
 const Project = require("../models/Project");
 const Task = require("../models/Task");
 const TaskComment = require("../models/TaskComment");
-const User = require("../models/User");
-
 const router = express.Router();
 
 function newJobId() {
@@ -330,8 +328,9 @@ router.post("/transfer-project", requireAuth, requireRole(["admin", "super-admin
     
     // 3. Prep User Mapping (Asana Email -> Internal User)
     const asanaUsers = await AsanaUser.find({}).lean();
-    const internalUsers = await User.find({}).lean();
-    const emailToInternalUser = new Map(internalUsers.map(u => [u.email.toLowerCase(), u]));
+    const Employee = require("../models/Employee");
+    const internalUsers = await Employee.find({}).lean();
+    const emailToInternalUser = new Map(internalUsers.map(u => [(u.email || "").toLowerCase(), u]));
     
     const asanaIdToInternalUser = new Map();
     for (const au of asanaUsers) {

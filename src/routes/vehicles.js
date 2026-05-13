@@ -107,6 +107,7 @@ const createSchema = z.object({
   nextInspection: z.union([z.string(), z.date()]).optional(),
   tagPhotoFileName: z.string().optional().default(""),
   tagPhotoDataUrl: z.string().optional().default(""),
+  requiresInspection: z.boolean().optional().default(true),
 }).passthrough();
 
 const adminUiSchema = z.object({
@@ -122,6 +123,7 @@ const adminUiSchema = z.object({
   assignedTo: z.string().optional().default(""),
   tagPhotoFileName: z.string().optional().default(""),
   tagPhotoDataUrl: z.string().optional().default(""),
+  requiresInspection: z.boolean().optional().default(true),
 }).passthrough();
 
 const adminUiUpdateSchema = adminUiSchema.partial();
@@ -153,13 +155,44 @@ async function logActivity(req, action, resourceType, resourceId, resourceName, 
   }
 }
 
-router.get("/", requireAuth, async (_req, res, next) => {
+router.get("/", requireAuth, async (req, res, next) => {
   try {
-    const result = await cacheWrap("vehicles:list", async () => {
-      const items = await Vehicle.find()
-        .sort({ name: 1 })
-        .lean();
-      return { items: items.map(withId) };
+    const page = Math.max(1, parseInt(req.query.page) || 1);
+    const limit = Math.max(1, parseInt(req.query.limit) || 100);
+    const skip = (page - 1) * limit;
+    const search = String(req.query.search || "").trim();
+
+    const query = {};
+    if (search) {
+      query.$or = [
+        { name: { $regex: search, $options: "i" } },
+        { licensePlate: { $regex: search, $options: "i" } },
+        { model: { $regex: search, $options: "i" } },
+        { make: { $regex: search, $options: "i" } },
+      ];
+    }
+
+    const cacheKey = `vehicles:list:${page}:${limit}:${search}`;
+    const result = await cacheWrap(cacheKey, async () => {
+      const [items, total] = await Promise.all([
+        Vehicle.find(query)
+          .select('-tagPhotoDataUrl')
+          .sort({ name: 1 })
+          .skip(skip)
+          .limit(limit)
+          .lean(),
+        Vehicle.countDocuments(query),
+      ]);
+
+      return {
+        items: items.map(withId),
+        pagination: {
+          total,
+          page,
+          limit,
+          totalPages: Math.ceil(total / limit),
+        },
+      };
     }, 60);
     res.json(result);
   } catch (err) {
@@ -175,6 +208,16 @@ router.get("/:id", requireAuth, async (req, res, next) => {
       return res.status(404).json({ error: { message: "Vehicle not found" } });
     }
     return res.json({ item: withId(item) });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+router.get("/:id/photo", requireAuth, async (req, res, next) => {
+  try {
+    const item = await Vehicle.findById(req.params.id).select("tagPhotoDataUrl tagPhotoFileName").lean();
+    if (!item) return res.status(404).json({ error: { message: "Not found" } });
+    return res.json({ photo: item.tagPhotoDataUrl || "", fileName: item.tagPhotoFileName || "" });
   } catch (err) {
     return next(err);
   }
@@ -241,6 +284,7 @@ router.post("/", requireAuth, async (req, res, next) => {
         nextInspection: adminParsed.data.nextInspection ? new Date(adminParsed.data.nextInspection) : undefined,
         tagPhotoFileName: adminParsed.data.tagPhotoFileName || "",
         tagPhotoDataUrl: adminParsed.data.tagPhotoDataUrl || "",
+        requiresInspection: adminParsed.data.requiresInspection ?? true,
         fuelLevel: 100,
       });
 
@@ -251,7 +295,7 @@ router.post("/", requireAuth, async (req, res, next) => {
 
       // Create notification
       await createNotification({
-        actor: req.user?.username || req.user?.name || "Admin",
+        actor: req.user?.name || req.user?.username || "Admin",
         actorRole: req.user?.role || "admin",
         action: "created",
         resourceType: "vehicle",
@@ -370,6 +414,7 @@ router.put("/:id", requireAuth, async (req, res, next) => {
       }
       if (typeof adminParsed.data.tagPhotoFileName === "string") patch.tagPhotoFileName = adminParsed.data.tagPhotoFileName;
       if (typeof adminParsed.data.tagPhotoDataUrl === "string") patch.tagPhotoDataUrl = adminParsed.data.tagPhotoDataUrl;
+      if (typeof adminParsed.data.requiresInspection === "boolean") patch.requiresInspection = adminParsed.data.requiresInspection;
 
       if (typeof patch.year === "string" || typeof patch.make === "string" || typeof patch.model === "string") {
         const existing = await Vehicle.findById(req.params.id).lean();
@@ -387,7 +432,7 @@ router.put("/:id", requireAuth, async (req, res, next) => {
 
       // Create notification
       await createNotification({
-        actor: req.user?.username || req.user?.name || "Admin",
+        actor: req.user?.name || req.user?.username || "Admin",
         actorRole: req.user?.role || "admin",
         action: "updated",
         resourceType: "vehicle",
@@ -420,7 +465,7 @@ router.put("/:id", requireAuth, async (req, res, next) => {
       if (archived) {
          // Create notification
         await createNotification({
-          actor: req.user?.username || req.user?.name || "Admin",
+          actor: req.user?.name || req.user?.username || "Admin",
           actorRole: req.user?.role || "admin",
           action: "archived (deactivated)",
           resourceType: "vehicle",
@@ -441,7 +486,7 @@ router.put("/:id", requireAuth, async (req, res, next) => {
 
     // Create notification
     await createNotification({
-      actor: req.user?.username || req.user?.name || "Admin",
+      actor: req.user?.name || req.user?.username || "Admin",
       actorRole: req.user?.role || "admin",
       action: "updated",
       resourceType: "vehicle",
@@ -492,7 +537,7 @@ router.delete("/:id", requireAuth, async (req, res, next) => {
 
     // Create notification
     await createNotification({
-      actor: req.user?.username || req.user?.name || "Admin",
+      actor: req.user?.name || req.user?.username || "Admin",
       actorRole: req.user?.role || "admin",
       action: "archived",
       resourceType: "vehicle",

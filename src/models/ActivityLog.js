@@ -46,13 +46,17 @@ const ActivityLogSchema = new mongoose.Schema(
         "EVENT_DELETE",
         "ONBOARDING_CREATE",
         "ONBOARDING_UPDATE",
+        "CLEARHIRE_SUBMIT",
+        "CLEARHIRE_SCAN_COMPLETE",
+        "CLEARHIRE_OVERRIDE",
+        "CLEARHIRE_RECHECK",
         "OTHER"
       ]
     },
     resourceType: { 
       type: String, 
       required: true,
-      enum: ["user", "task", "employee", "time-entry", "notification", "message", "settings", "system", "auth", "appliance", "vehicle", "location", "vendor", "event", "onboarding"]
+      enum: ["user", "task", "employee", "time-entry", "notification", "message", "settings", "system", "auth", "appliance", "vehicle", "location", "vendor", "event", "onboarding", "clearhire"]
     },
     resourceId: { type: String, default: "" },
     resourceName: { type: String, default: "" },

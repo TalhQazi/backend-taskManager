@@ -29,6 +29,7 @@ const reportsRoutes = require("./routes/reports");
 const usersRoutes = require("./routes/users");
 const dashboardRoutes = require("./routes/dashboard");
 const vendorsRoutes = require("./routes/vendors");
+const companyRegistryRoutes = require("./routes/companyRegistry");
 const complianceRoutes = require("./routes/compliance");
 const activityLogsRoutes = require("./routes/activityLogs");
 const companiesRoutes = require("./routes/companies");
@@ -43,17 +44,25 @@ const patentsRoutes = require("./routes/patents");
 const credentialsRoutes = require("./routes/credentials");
 const archiveRoutes = require("./routes/archive");
 
+const teamLeadMappingsRoutes = require("./routes/teamLeadMappings");
+const taskPermissionsRoutes = require("./routes/taskPermissions");
+
 const { router: founderMessagesRoutes, initializeMessages } = require("./routes/founderMessages");
 const notesRoutes = require("./routes/notes");
 const assetLibraryRoutes = require("./routes/assetLibrary");
 const contributorsRoutes = require("./routes/contributors");
 const eodReportsRoutes = require("./routes/eodReports");
+const emailAccountsRoutes = require("./routes/emailAccounts");
 const uiPreferencesRoutes = require("./routes/uiPreferences");
 const vendorCategoriesRoutes = require("./routes/vendorCategories");
 const trademarksRoutes = require("./routes/trademarks");
+const travelCalendarRoutes = require("./routes/travelCalendar");
 const dropboxRoutes = require("./routes/dropbox");
 const shoppingListsRoutes = require("./routes/shoppingLists");
-const emailAccountsRoutes = require("./routes/emailAccounts");
+const clearhireRoutes = require("./routes/clearhire");
+const systemSettingsRoutes = require("./routes/systemSettings");
+const assetLibraryHeaderSettingsRoutes = require("./routes/assetLibraryHeaderSettings");
+const memeRoutes = require("./routes/meme");
 
 
 const expenseItemsRoutes = require("./routes/expenseItems");
@@ -117,7 +126,25 @@ global.io = io;
 // Socket.io connection handling
 io.on("connection", (socket) => {
   console.log("Client connected:", socket.id);
-  
+
+  // Register user into their personal room + role room for targeted notification delivery.
+  // `name` is the display name room — needed so @mentions (which use display names) reach
+  // admin/manager sockets that are keyed by email username.
+  socket.on("register-user", ({ username, role, name } = {}) => {
+    if (username) {
+      socket.join(username);
+      console.log(`Socket ${socket.id} registered as user: ${username}`);
+    }
+    if (name && name !== username) {
+      socket.join(name);
+      console.log(`Socket ${socket.id} joined display-name room: ${name}`);
+    }
+    if (role) {
+      socket.join(role);
+      console.log(`Socket ${socket.id} joined role room: ${role}`);
+    }
+  });
+
   // Join task-specific room for receiving real-time comments
   socket.on("join-task", (taskId) => {
     if (taskId) {
@@ -125,7 +152,7 @@ io.on("connection", (socket) => {
       console.log(`Socket ${socket.id} joined task-${taskId}`);
     }
   });
-  
+
   // Leave task room
   socket.on("leave-task", (taskId) => {
     if (taskId) {
@@ -133,17 +160,33 @@ io.on("connection", (socket) => {
       console.log(`Socket ${socket.id} left task-${taskId}`);
     }
   });
-  
+
+  // Join project-specific room for receiving real-time project comments
+  socket.on("join-project", (projectId) => {
+    if (projectId) {
+      socket.join(`project-${projectId}`);
+      console.log(`Socket ${socket.id} joined project-${projectId}`);
+    }
+  });
+
+  // Leave project room
+  socket.on("leave-project", (projectId) => {
+    if (projectId) {
+      socket.leave(`project-${projectId}`);
+      console.log(`Socket ${socket.id} left project-${projectId}`);
+    }
+  });
+
   // Handle typing indicator
   socket.on("typing", ({ taskId, username }) => {
     socket.to(`task-${taskId}`).emit("typing", { taskId, username });
   });
-  
+
   // Handle stop typing
   socket.on("stop-typing", ({ taskId }) => {
     socket.to(`task-${taskId}`).emit("stop-typing", { taskId });
   });
-  
+
   socket.on("disconnect", () => {
     console.log("Client disconnected:", socket.id);
   });
@@ -205,7 +248,10 @@ app.use((req, res, next) => {
   if (ct.includes('multipart/form-data')) {
     return next();
   }
+
   express.json({ limit: "50mb" })(req, res, next);
+
+  // For other requests, use JSON parser
 });
 
 app.use(express.urlencoded({ limit: "50mb", extended: true }));
@@ -283,6 +329,7 @@ app.use("/api/reports", reportsRoutes);
 app.use("/api/users", usersRoutes);
 app.use("/api/dashboard", dashboardRoutes);
 app.use("/api/vendors", vendorsRoutes);
+app.use("/api/company-registry", companyRegistryRoutes);
 app.use("/api/compliance", complianceRoutes);
 app.use("/api/activity-logs", activityLogsRoutes);
 app.use("/api/companies", companiesRoutes);
@@ -297,6 +344,9 @@ app.use("/api/patents", patentsRoutes);
 app.use("/api/credentials", credentialsRoutes);
 app.use("/api/archive", archiveRoutes);
 
+app.use("/api/team-lead-mappings", teamLeadMappingsRoutes);
+app.use("/api/task-permissions", taskPermissionsRoutes);
+
 app.use("/api/founder-messages", founderMessagesRoutes);
 app.use("/api/notes", notesRoutes);
 app.use("/api/asset-library", assetLibraryRoutes);
@@ -304,9 +354,14 @@ app.use("/api/contributors", contributorsRoutes);
 app.use("/api/ui-preferences", uiPreferencesRoutes);
 app.use("/api/vendor-categories", vendorCategoriesRoutes);
 app.use("/api/trademarks", trademarksRoutes);
+app.use("/api/travel-calendar", travelCalendarRoutes);
 app.use("/api/dropbox", dropboxRoutes);
 app.use("/api/shopping-lists", shoppingListsRoutes);
 app.use("/api/email-accounts", emailAccountsRoutes);
+app.use("/api/clearhire", clearhireRoutes);
+app.use("/api/system-settings", systemSettingsRoutes);
+app.use("/api/asset-library-header-settings", assetLibraryHeaderSettingsRoutes);
+app.use("/api/meme", memeRoutes);
 
 
 app.use("/api/expense-items", expenseItemsRoutes);
@@ -326,6 +381,11 @@ connectDb()
     
     // Initialize default founder messages
     await initializeMessages();
+
+    // Start background reminders (Annual Reports)
+    const { checkAnnualReportReminders } = require("./utils/reminders");
+    checkAnnualReportReminders(); // Run once on startup
+    setInterval(checkAnnualReportReminders, 24 * 60 * 60 * 1000); // Run every 24 hours
     
     httpServer.listen(port, () => {
       console.log(`Backend listening on http://localhost:${port}`);

@@ -25,6 +25,10 @@ function toObjectIdOrNull(value) {
   return new mongoose.Types.ObjectId(v);
 }
 
+function getModuleFilter(moduleName) {
+  return moduleName === "asset-library" ? { $in: ["asset-library", null, ""] } : moduleName;
+}
+
 function buildFolderTree(items) {
   const map = new Map();
   const roots = [];
@@ -63,6 +67,7 @@ const folderCreateSchema = z.object({
   description: z.string().optional().default(""),
   isReadOnly: z.boolean().optional().default(false),
   sortOrder: z.number().optional().default(0),
+  module: z.enum(["asset-library", "company-information"]).optional().default("asset-library"),
 });
 
 const folderPatchSchema = z.object({
@@ -82,13 +87,15 @@ const assetPatchSchema = z.object({
   status: z.enum(["active", "archived", "deleted"]).optional(),
 });
 
-router.get("/folders", requireAuth, async (_req, res, next) => {
+router.get("/folders", requireAuth, async (req, res, next) => {
   try {
-    const items = await AssetLibraryFolder.find({ isArchived: false }).lean();
+    const moduleName = String(req.query.module || "asset-library");
+    const fModuleFilter = getModuleFilter(moduleName);
+    const items = await AssetLibraryFolder.find({ isArchived: false, module: fModuleFilter }).lean();
 
     const folderIds = items.map((f) => f._id);
     const counts = await AssetLibraryAsset.aggregate([
-      { $match: { status: "active", folderId: { $in: folderIds } } },
+      { $match: { status: "active", folderId: { $in: folderIds }, module: fModuleFilter } },
       { $group: { _id: "$folderId", count: { $sum: 1 } } },
     ]);
     const countMap = new Map(counts.map((c) => [String(c._id), Number(c.count || 0)]));
@@ -105,9 +112,11 @@ router.get("/folders", requireAuth, async (_req, res, next) => {
   }
 });
 
-router.get("/stats", requireAuth, async (_req, res, next) => {
+router.get("/stats", requireAuth, async (req, res, next) => {
   try {
-    const totalAssets = await AssetLibraryAsset.countDocuments({ status: "active" });
+    const moduleName = String(req.query.module || "asset-library");
+    const sModuleFilter = getModuleFilter(moduleName);
+    const totalAssets = await AssetLibraryAsset.countDocuments({ status: "active", module: sModuleFilter });
     res.json({ totalAssets });
   } catch (err) {
     next(err);
@@ -136,6 +145,7 @@ router.post("/folders", requireAuth, requireRole(["super-admin", "admin"]), asyn
       isReadOnly: parsed.data.isReadOnly,
       sortOrder: parsed.data.sortOrder,
       createdBy,
+      module: parsed.data.module,
     });
 
     res.json({ item: { ...doc.toObject(), id: String(doc._id) } });
@@ -203,8 +213,10 @@ router.get("/assets", requireAuth, async (req, res, next) => {
     const type = String(req.query.type || "").trim().toLowerCase();
     const sort = String(req.query.sort || "newest").trim().toLowerCase();
     const { page, limit, skip } = parsePagination(req.query);
+    const moduleName = String(req.query.module || "asset-library");
+    const aModuleFilter = getModuleFilter(moduleName);
 
-    const filter = { status: "active" };
+    const filter = { status: "active", module: aModuleFilter };
     if (folderId) filter.folderId = folderId;
 
     if (type === "image") {
@@ -220,14 +232,21 @@ router.get("/assets", requireAuth, async (req, res, next) => {
 
     let sortSpec = { createdAt: -1 };
     if (sort === "oldest") sortSpec = { createdAt: 1 };
-    if (sort === "az") sortSpec = { originalFilename: 1 };
-    if (sort === "za") sortSpec = { originalFilename: -1 };
+    if (sort === "az") sortSpec = { title: 1, originalFilename: 1 };
+    if (sort === "za") sortSpec = { title: -1, originalFilename: -1 };
     if (sort === "size-asc") sortSpec = { sizeBytes: 1 };
     if (sort === "size-desc") sortSpec = { sizeBytes: -1 };
 
+    const query = AssetLibraryAsset.find(filter).sort(sortSpec).skip(skip).limit(limit);
+    
+    // Add collation for case-insensitive alphabetical sorting
+    if (sort === "az" || sort === "za") {
+      query.collation({ locale: "en", strength: 2 });
+    }
+
     const [total, docs] = await Promise.all([
       AssetLibraryAsset.countDocuments(filter),
-      AssetLibraryAsset.find(filter).sort(sortSpec).skip(skip).limit(limit).lean(),
+      query.lean(),
     ]);
 
     const items = docs.map((a) => ({
@@ -312,6 +331,7 @@ router.post(
   async (req, res, next) => {
     try {
       const folderId = toObjectIdOrNull(req.body.folderId);
+      const moduleName = String(req.body.module || "asset-library");
       if (req.body.folderId && !folderId) {
         return res.status(400).json({ error: { message: "Invalid folderId" } });
       }
@@ -359,6 +379,7 @@ router.post(
           urlOriginal,
           status: "active",
           uploadedBy,
+          module: moduleName,
           attachment: {
             fileName: originalFilename,
             url: urlOriginal,

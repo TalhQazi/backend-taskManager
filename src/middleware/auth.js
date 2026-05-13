@@ -1,4 +1,5 @@
 const jwt = require("jsonwebtoken");
+const ClearHireProfile = require("../models/ClearHireProfile");
 
 function requireAuth(req, res, next) {
   const header = req.headers.authorization || "";
@@ -20,6 +21,9 @@ function requireAuth(req, res, next) {
     }
     const payload = jwt.verify(token, secret);
     req.user = payload;
+    const userId = String((payload && typeof payload === "object" ? payload.sub || payload.id || payload._id : "") || "");
+    req.user._id = userId;
+    req.user.id = userId;
     return next();
   } catch {
     return res.status(401).json({ error: { message: "Unauthorized" } });
@@ -36,4 +40,71 @@ function requireRole(roles) {
   };
 }
 
-module.exports = { requireAuth, requireRole };
+/**
+ * ClearHire® Hard Gate Middleware
+ * ───────────────────────────────
+ * Blocks access for users whose ClearHire status is not GREEN.
+ * 
+ * Exemptions:
+ *   - super-admin, admin: they manage the ClearHire system itself
+ *   - Routes can opt out by not using this middleware
+ *
+ * Status behavior:
+ *   GREEN   → pass through
+ *   YELLOW  → 403 "Awaiting admin review"
+ *   RED     → 403 "Background check failed"
+ *   PENDING → 403 "Background check in progress"
+ *   No profile → 403 "Background check not completed"
+ */
+function requireClearHire(req, res, next) {
+  // Exempt admin roles — they manage the system
+  const role = req.user?.role;
+  if (["super-admin", "admin"].includes(role)) {
+    return next();
+  }
+
+  const userId = req.user?.sub;
+  if (!userId) {
+    return res.status(401).json({ error: { message: "Unauthorized" } });
+  }
+
+  ClearHireProfile.findOne({ userId })
+    .select("status")
+    .lean()
+    .then((profile) => {
+      if (!profile) {
+        return res.status(403).json({
+          error: {
+            message: "Background check not completed. Please contact your administrator.",
+            code: "CLEARHIRE_NOT_FOUND",
+          },
+        });
+      }
+
+      if (profile.status === "GREEN") {
+        return next();
+      }
+
+      const messages = {
+        PENDING: "Background check is in progress. Please wait.",
+        YELLOW: "Your account is under review. Awaiting admin approval.",
+        RED: "Access denied. Background check failed.",
+      };
+
+      return res.status(403).json({
+        error: {
+          message: messages[profile.status] || "Access denied.",
+          code: `CLEARHIRE_${profile.status}`,
+          clearHireStatus: profile.status,
+        },
+      });
+    })
+    .catch((err) => {
+      console.error("[ClearHire Middleware] Error:", err.message);
+      // Fail open for DB errors — don't lock everyone out if DB hiccups
+      return next();
+    });
+}
+
+module.exports = { requireAuth, requireRole, requireClearHire };
+

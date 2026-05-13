@@ -8,15 +8,22 @@ const fs = require("fs");
 const Task = require("../models/Task");
 const TaskComment = require("../models/TaskComment");
 const ActivityLog = require("../models/ActivityLog");
-const User = require("../models/User");
+const Employee = require("../models/Employee");
+
+const TeamLeadMapping = require("../models/TeamLeadMapping");
+const TaskPermission = require("../models/TaskPermission");
+
 const Attachment = require("../models/Attachment");
+
 const { requireAuth } = require("../middleware/auth");
 const { checkAndFlagOffTheClock } = require("../lib/offTheClockWork");
 const { createNotification } = require("../utils/notifications");
+const { extractMentions } = require("../utils/mentions");
 const { parsePagination, paginatedResponse } = require("../lib/pagination");
 const { cacheWrap, cacheDel } = require("../lib/cache");
 const { uploadToS3, base64ToBuffer, getFromS3, extractS3Key } = require("../lib/s3");
 const contributionTracker = require("../utils/contributionTracker");
+const { sendEmailNotification } = require("../utils/emailNotifications");
 
 
 const router = express.Router();
@@ -48,6 +55,7 @@ const createSchema = z.object({
   description: z.string().min(1, "Task description is required"),
   projectId: z.string().optional(),
   assignees: z.array(z.string()).optional().default([]),
+  teamLead: z.string().optional().default(""),
   priority: z.enum(["high", "medium", "low"]).optional(),
   status: z.enum(["pending", "in-progress", "completed", "overdue"]).optional(),
   dueDate: z.union([z.string(), z.date()]).optional(),
@@ -86,6 +94,7 @@ const updateSchema = z.object({
   description: z.string().min(1).optional(),
   projectId: z.string().optional(),
   assignees: z.array(z.string()).optional(),
+  teamLead: z.string().optional(),
   priority: z.enum(["high", "medium", "low"]).optional(),
   status: z.enum(["pending", "in-progress", "completed", "overdue"]).optional(),
   dueDate: z.union([z.string(), z.date()]).optional(),
@@ -122,12 +131,15 @@ function withId(doc) {
     ...rest, 
     assignees: nextAssignees, 
     id: String(doc._id),
+    taskNumber: doc.taskNumber,
+    teamLead: doc.teamLead,
     attachments: doc.attachments,
     attachment: doc.attachment,
     attachmentFileName: doc.attachmentFileName,
     attachmentNote: doc.attachmentNote,
     startedAt: doc.startedAt,
     totalTimeSpent: doc.totalTimeSpent || 0,
+    executionPriority: doc.executionPriority,
   };
 }
 
@@ -146,7 +158,7 @@ function canAccessTask(user, task) {
   const name = String(user?.name || "").trim();
   const fullName = String(user?.fullName || "").trim();
 
-  if (role === "super-admin" || role === "admin" || role === "manager") return true;
+  if (role === "super-admin" || role === "admin" || role === "manager" || role === "team-lead") return true;
   if (role === "employee") {
     const assignees = Array.isArray(task?.assignees) ? task.assignees : [];
 
@@ -171,7 +183,7 @@ function canAccessTask(user, task) {
 async function canAccessTaskAsync(user, task) {
   const role = String(user?.role || "").trim().toLowerCase();
 
-  if (role === "super-admin" || role === "admin" || role === "manager") return true;
+  if (role === "super-admin" || role === "admin" || role === "manager" || role === "team-lead") return true;
   if (role !== "employee") return false;
 
   const legacyAssignee = typeof task?.assignee === "string" ? task.assignee : "";
@@ -201,8 +213,7 @@ async function canAccessTaskAsync(user, task) {
     const userId = String(user?.sub || user?.id || "").trim();
     if (userId) {
       try {
-        const dbUser = await User.findById(userId).lean();
-        pushCandidate(dbUser?.username);
+        const dbUser = await Employee.findById(userId).lean();
         pushCandidate(dbUser?.name);
         pushCandidate(dbUser?.email);
       } catch {
@@ -243,7 +254,7 @@ async function logActivity(req, action, resourceType, resourceId, resourceName, 
   try {
     await ActivityLog.create({
       actorUserId: String(req.user?.sub || req.user?.id || "unknown"),
-      actorUsername: String(req.user?.username || req.user?.name || "unknown"),
+      actorUsername: String(req.user?.name || req.user?.username || "unknown"),
       actorRole: String(req.user?.role || "unknown"),
       action,
       resourceType,
@@ -271,6 +282,7 @@ router.get("/", requireAuth, async (req, res, next) => {
     const searchQ = String(req.query.search || "").trim();
     const statusQ = String(req.query.status || "").trim();
     const priorityQ = String(req.query.priority || "").trim();
+    const sortQ = String(req.query.sort || "").trim().toLowerCase();
     const projectIdQ = String(req.query.projectId || "").trim();
 
     const conditions = [];
@@ -279,28 +291,39 @@ router.get("/", requireAuth, async (req, res, next) => {
     const fullName = String(req.user?.fullName || "").trim();
     const candidates = [username, name, fullName].filter(Boolean);
 
-    // 1. Accessibility Filter for Employees
-    if (role !== "admin" && role !== "super-admin" && role !== "manager") {
+    // 1. Accessibility Filter for Employees and Managers
+    // Managers should only see tasks where they are the teamLead or assigned to them
+    if (role !== "admin" && role !== "super-admin") {
       if (candidates.length === 0) {
         return res.json(paginatedResponse([], 0, page, limit));
       }
 
-      // Find projects where the user is an assignee
-      const Project = require("../models/Project");
-      const assignedProjects = await Project.find({
-        assignees: { $elemMatch: { $regex: new RegExp(`^(${candidates.map(escapeRegExp).join("|")})$`, "i") } }
-      }).select("_id").lean();
-      const assignedProjectIds = assignedProjects.map(p => p._id);
-
-      conditions.push({
-        $or: [
-          ...candidates.flatMap((c) => [
+      // For managers and team-leads, filter by teamLead field
+      if (role === "manager" || role === "team-lead") {
+        conditions.push({
+          $or: candidates.flatMap((c) => [
+            { teamLead: { $regex: new RegExp(`^${escapeRegExp(c)}$`, "i") } },
             { assignees: { $elemMatch: { $regex: new RegExp(`^${escapeRegExp(c)}$`, "i") } } },
-            { assignee: { $regex: new RegExp(`^${escapeRegExp(c)}$`, "i") } }, // Legacy
-          ]),
-          { projectId: { $in: assignedProjectIds } }
-        ]
-      });
+          ])
+        });
+      } else {
+        // Find projects where the user is an assignee
+        const Project = require("../models/Project");
+        const assignedProjects = await Project.find({
+          assignees: { $elemMatch: { $regex: new RegExp(`^(${candidates.map(escapeRegExp).join("|")})$`, "i") } }
+        }).select("_id").lean();
+        const assignedProjectIds = assignedProjects.map(p => p._id);
+
+        conditions.push({
+          $or: [
+            ...candidates.flatMap((c) => [
+              { assignees: { $elemMatch: { $regex: new RegExp(`^${escapeRegExp(c)}$`, "i") } } },
+              { assignee: { $regex: new RegExp(`^${escapeRegExp(c)}$`, "i") } }, // Legacy
+            ]),
+            { projectId: { $in: assignedProjectIds } }
+          ]
+        });
+      }
     }
 
     // 2. Project Filter
@@ -339,12 +362,34 @@ router.get("/", requireAuth, async (req, res, next) => {
 
     const filter = conditions.length > 0 ? { $and: conditions } : {};
 
-    const cacheKey = `tasks:list:${role}:${req.user?.sub || ''}:p${page}:l${limit}:s${searchQ}:st${statusQ}:pr${priorityQ}`;
+    const cacheKey = `tasks:list:${role}:${req.user?.sub || ''}:p${page}:l${limit}:s${searchQ}:st${statusQ}:pr${priorityQ}:so${sortQ}:pid${projectIdQ}`;
     const result = await cacheWrap(cacheKey, async () => {
-      const [items, total] = await Promise.all([
-        Task.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit).lean(),
-        Task.countDocuments(filter),
-      ]);
+
+      const total = await Task.countDocuments(filter);
+
+      // When sorting by execution priority, we want NULLs last.
+      // Mongo's default sort places nulls first for ascending sorts, so use an aggregate overlay.
+      if (sortQ === "priority") {
+        const pipeline = [
+          { $match: filter },
+          {
+            $addFields: {
+              __priorityNull: {
+                $cond: [{ $eq: ["$executionPriority", null] }, 1, 0],
+              },
+            },
+          },
+          { $sort: { __priorityNull: 1, executionPriority: 1, createdAt: -1 } },
+          { $skip: skip },
+          { $limit: limit },
+          { $project: { __priorityNull: 0 } },
+        ];
+
+        const items = await Task.aggregate(pipeline);
+        return paginatedResponse(items.map(withId), total, page, limit);
+      }
+
+      const items = await Task.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit).lean();
 
       // Append Dropbox attachment count to task objects
       if (items.length > 0) {
@@ -580,13 +625,30 @@ router.post("/", requireAuth, async (req, res, next) => {
       }),
       logActivity(req, "TASK_CREATE", "task", created._id, created.title, `Created task: ${created.title}`),
       createNotification({
-        actor: req.user?.username || req.user?.name || "System",
+        actor: req.user?.name || req.user?.username || "System",
         actorRole: req.user?.role || "",
         action: "created",
         resourceType: "task",
         resourceName: created.title,
         assignees: Array.isArray(created.assignees) ? created.assignees : [],
         resourceId: String(created._id),
+        category: "TASK_ASSIGNED",
+      }),
+      // Extract mentions from task description
+      extractMentions(created.description).then(mentionedUsers => {
+        if (mentionedUsers.length > 0) {
+          return createNotification({
+            actor: req.user?.name || req.user?.username || "System",
+            actorRole: req.user?.role || "",
+            action: "mentioned you in",
+            resourceType: "task",
+            resourceName: created.title,
+            assignees: mentionedUsers,
+            details: `"${created.description.length > 50 ? created.description.substring(0, 50) + "..." : created.description}"`,
+            resourceId: String(created._id),
+            category: "MENTIONED",
+          });
+        }
       }),
       cacheDel("tasks:list:*"),
       created.projectId ? cacheDel(`project:${created.projectId}`) : Promise.resolve(),
@@ -597,6 +659,9 @@ router.post("/", requireAuth, async (req, res, next) => {
         email: req.user?.email || "",
         role: req.user?.role || "employee",
       }),
+      ...(Array.isArray(created.assignees) ? created.assignees : []).map(assignee =>
+        sendEmailNotification(assignee, "taskAssignment", { taskTitle: created.title })
+      )
     ]).catch((err) => {
       console.error("Task creation side-effects error:", err);
     });
@@ -723,16 +788,24 @@ router.post("/upload", requireAuth, upload.array("files", 10), async (req, res, 
       }),
       logActivity(req, "TASK_CREATE", "task", created._id, created.title, `Created task with attachment: ${created.title}`),
       createNotification({
-        actor: req.user?.username || req.user?.name || "System",
+        actor: req.user?.name || req.user?.username || "System",
         actorRole: req.user?.role || "",
         action: "created",
         resourceType: "task",
         resourceName: created.title,
         assignees: Array.isArray(created.assignees) ? created.assignees : [],
         resourceId: String(created._id),
+        category: "TASK_ASSIGNED",
       }),
       cacheDel("tasks:list:*"),
       created.projectId ? cacheDel(`project:${created.projectId}`) : Promise.resolve(),
+      ...(Array.isArray(created.assignees) ? created.assignees : []).map(assignee => {
+        sendEmailNotification(assignee, "taskAssignment", { taskTitle: created.title });
+        sendEmailNotification(assignee, "fileAttachment", { 
+          fileName: attachments[0]?.fileName || parsed.data.attachmentFileName || "Attachment", 
+          taskTitle: created.title 
+        });
+      })
     ]).catch(() => {});
 
     return res.status(201).json({ item: withId(obj) });
@@ -822,39 +895,54 @@ router.post("/:id/comments", requireAuth, async (req, res, next) => {
 
     await logActivity(req, "TASK_COMMENT_CREATE", "task", task._id, task.title, `Comment added on task: ${task.title}`);
 
-    // Process Mentions
-    if (message.includes("@")) {
-      const Employee = require("../models/Employee");
-      const activeEmployees = await Employee.find({ status: "active" }).select("name").lean();
-      const mentionedUsers = [];
-      const lowerMessage = message.toLowerCase();
-      
-      activeEmployees.forEach(emp => {
-        if (lowerMessage.includes("@" + emp.name.toLowerCase())) {
-          mentionedUsers.push(emp.name);
-        }
+    // Process Mentions using shared utility
+    const mentionedUsers = await extractMentions(message);
+    if (mentionedUsers.length > 0) {
+      await createNotification({
+        actor: String(req.user?.name || req.user?.username || "Someone"),
+        actorRole: String(req.user?.role || ""),
+        action: "mentioned you in a",
+        resourceType: "task comment",
+        resourceName: task.title,
+        assignees: mentionedUsers,
+        details: `"${message.length > 50 ? message.substring(0, 50) + "..." : message}"`,
+        resourceId: String(task._id),
+        category: "MENTIONED",
       });
-
-      // Also allow mentioning admins if they are in the User collection
-      const activeUsers = await User.find({}).select("username").lean();
-      activeUsers.forEach(u => {
-        if (u.username && lowerMessage.includes("@" + u.username.toLowerCase()) && !mentionedUsers.includes(u.username)) {
-          mentionedUsers.push(u.username);
-        }
-      });
-
-      if (mentionedUsers.length > 0) {
-        await createNotification({
-          actor: String(req.user?.username || "Someone"),
-          actorRole: String(req.user?.role || ""),
-          action: "mentioned you in a",
-          resourceType: "task comment",
-          resourceName: task.title,
-          assignees: mentionedUsers,
-          details: `"${message.length > 50 ? message.substring(0, 50) + "..." : message}"`,
-          resourceId: String(task._id),
+      mentionedUsers.forEach(user => {
+        sendEmailNotification(user, "replyAdded", {
+          taskTitle: task.title,
+          authorName: req.user?.name || req.user?.username || "Someone",
+          replyText: message.length > 50 ? message.substring(0, 50) + "..." : message
         });
-      }
+      });
+    }
+
+    // Notify task assignees and creator about the new comment
+    const commentRecipients = new Set([
+      ...(Array.isArray(task.assignees) ? task.assignees : []),
+      task.createdBy?.name || ""
+    ].filter(Boolean));
+    if (commentRecipients.size > 0) {
+      await createNotification({
+        actor: String(req.user?.name || req.user?.username || "Someone"),
+        actorRole: String(req.user?.role || ""),
+        action: "commented on",
+        resourceType: "task",
+        resourceName: task.title,
+        assignees: Array.from(commentRecipients),
+        details: `"${message.length > 50 ? message.substring(0, 50) + "..." : message}"`,
+        resourceId: String(task._id),
+        category: "COMMENT_ADDED",
+      });
+      
+      Array.from(commentRecipients).forEach(recipient => {
+        sendEmailNotification(recipient, "commentAdded", {
+          taskTitle: task.title,
+          authorName: req.user?.name || req.user?.username || "Someone",
+          commentText: message.length > 50 ? message.substring(0, 50) + "..." : message
+        });
+      });
     }
 
     const Settings = require("../models/Settings");
@@ -1281,15 +1369,17 @@ router.patch("/:id/status", requireAuth, async (req, res, next) => {
     // Fire-and-forget
     Promise.allSettled([
       logActivity(req, "TASK_STATUS_UPDATE", "task", req.params.id, updated.title, `Updated task status: ${updated.title} -> ${status}`),
-      createNotification({
-        actor: req.user?.username || req.user?.name || "System",
+      // Only notify when a task is completed — other status changes are activity-log only
+      ...(status === "completed" ? [createNotification({
+        actor: req.user?.name || req.user?.username || "System",
         actorRole: req.user?.role || "",
-        action: "status changed",
+        action: "completed",
         resourceType: "task",
         resourceName: updated.title,
-        details: `Status -> ${status}`,
+        assignees: Array.isArray(updated.assignees) ? updated.assignees : [],
         resourceId: String(req.params.id),
-      }),
+        category: "TASK_COMPLETED",
+      })] : []),
       cacheDel("tasks:list:*"),
       updated.projectId ? cacheDel(`project:${updated.projectId}`) : Promise.resolve(),
       // Track contribution
@@ -1402,16 +1492,20 @@ router.put("/:id", requireAuth, async (req, res, next) => {
     // Fire-and-forget
     Promise.allSettled([
       logActivity(req, "TASK_UPDATE", "task", req.params.id, updated.title, `Updated task: ${updated.title}`),
-      createNotification({
-        actor: req.user?.username || req.user?.name || "System",
-        actorRole: req.user?.role || "",
-        action: "updated",
-        resourceType: "task",
-        resourceName: updated.title,
-        resourceId: String(req.params.id),
-      }),
       cacheDel("tasks:list:*"),
       updated.projectId ? cacheDel(`project:${updated.projectId}`) : Promise.resolve(),
+      (() => {
+        const hasNewAttachment = (patch.attachment && patch.attachment.url) || (Array.isArray(patch.attachments) && patch.attachments.length > 0);
+        if (hasNewAttachment) {
+          return Promise.all((Array.isArray(updated.assignees) ? updated.assignees : []).map(assignee =>
+            sendEmailNotification(assignee, "fileAttachment", {
+              fileName: patch.attachment?.fileName || patch.attachments?.[0]?.fileName || "New attachment",
+              taskTitle: updated.title
+            })
+          ));
+        }
+        return Promise.resolve();
+      })()
     ]).catch(() => {});
 
     return res.json({ item: withId(updated) });
@@ -1424,13 +1518,56 @@ router.put("/:id", requireAuth, async (req, res, next) => {
 router.put("/:id/reassign", requireAuth, async (req, res, next) => {
   try {
     const role = String(req.user?.role || "").toLowerCase();
-    if (role !== "admin" && role !== "super-admin") {
-      return res.status(403).json({ error: { message: "Forbidden: Admin access required" } });
+    if (role !== "admin" && role !== "super-admin" && role !== "team-lead") {
+      return res.status(403).json({ error: { message: "Forbidden" } });
+    }
+
+    const taskPermission = await TaskPermission.findOne({ taskId: req.params.id }).lean();
+    if (role === "team-lead" && taskPermission && taskPermission.canReassign === false) {
+      return res.status(403).json({ error: { message: "Forbidden: Task cannot be reassigned" } });
     }
 
     const assignees = normalizeAssignees(req.body?.assignees);
     if (assignees.length === 0) {
       return res.status(400).json({ error: { message: "At least one assignee is required" } });
+    }
+
+    if (role === "team-lead") {
+      const teamLeadIdent = String(req.user?.username || req.user?.name || "").trim();
+      if (!teamLeadIdent) {
+        return res.status(400).json({ error: { message: "Cannot identify team lead" } });
+      }
+
+      const mappings = await TeamLeadMapping.find({ teamLead: teamLeadIdent }).lean();
+      const mappedUsers = new Set(
+        (Array.isArray(mappings) ? mappings : [])
+          .map((m) => String(m?.user || "").trim().toLowerCase())
+          .filter(Boolean)
+      );
+
+      if (mappedUsers.size === 0) {
+        return res.status(403).json({ error: { message: "Forbidden: No mapped users for this team lead" } });
+      }
+
+      const allowOverrideAdminAssignments = (Array.isArray(mappings) ? mappings : []).some((m) => !!m?.allowOverrideAdminAssignments);
+
+      const requestedAssigneesAllowed = assignees.every((a) => mappedUsers.has(String(a).trim().toLowerCase()));
+      if (!requestedAssigneesAllowed) {
+        return res.status(403).json({ error: { message: "Forbidden: Can only assign tasks within your mapped users" } });
+      }
+
+      if (!allowOverrideAdminAssignments) {
+        const existing = await Task.findById(req.params.id, { assignees: 1 }).lean();
+        if (!existing) {
+          return res.status(404).json({ error: { message: "Task not found" } });
+        }
+
+        const currentAssignees = Array.isArray(existing.assignees) ? existing.assignees : [];
+        const currentAllInTeam = currentAssignees.every((a) => mappedUsers.has(String(a).trim().toLowerCase()));
+        if (!currentAllInTeam) {
+          return res.status(403).json({ error: { message: "Forbidden: Cannot override admin assignments" } });
+        }
+      }
     }
 
     // Use updateOne for better performance - only updates, doesn't fetch full document
@@ -1465,13 +1602,19 @@ router.put("/:id/reassign", requireAuth, async (req, res, next) => {
     await logActivity(req, "TASK_REASSIGN", "task", req.params.id, updated.title, `Reassigned task: ${updated.title} to ${assignees.join(", ")}`);
 
     await createNotification({
-      actor: req.user?.username || req.user?.name || "System",
+      actor: req.user?.name || req.user?.username || "System",
       actorRole: req.user?.role || "",
       action: "reassigned",
       resourceType: "task",
       resourceName: updated.title,
+      assignees: assignees,
       resourceId: String(req.params.id),
       details: `New assignees: ${assignees.join(", ")}`,
+      category: "TASK_ASSIGNED",
+    });
+
+    assignees.forEach(assignee => {
+      sendEmailNotification(assignee, "taskAssignment", { taskTitle: updated.title });
     });
 
     return res.json({ item: withId(updated) });
@@ -1533,14 +1676,6 @@ router.post("/:id/archive", requireAuth, async (req, res, next) => {
     // Fire-and-forget
     Promise.allSettled([
       logActivity(req, "TASK_ARCHIVE", "task", req.params.id, task.title, `Archived task: ${task.title}`),
-      createNotification({
-        actor: req.user?.username || req.user?.name || "System",
-        actorRole: req.user?.role || "",
-        action: "archived",
-        resourceType: "task",
-        resourceName: task.title,
-        resourceId: String(req.params.id),
-      }),
       cacheDel("tasks:list:*"),
       task.projectId ? cacheDel(`project:${task.projectId}`) : Promise.resolve(),
     ]).catch(() => {});
@@ -1566,14 +1701,6 @@ router.delete("/:id", requireAuth, async (req, res, next) => {
     // Fire-and-forget
     Promise.allSettled([
       logActivity(req, "TASK_DELETE", "task", req.params.id, task.title, `Deleted (Archived) task: ${task.title}`),
-      createNotification({
-        actor: req.user?.username || req.user?.name || "System",
-        actorRole: req.user?.role || "",
-        action: "deleted",
-        resourceType: "task",
-        resourceName: task.title,
-        resourceId: String(req.params.id),
-      }),
       cacheDel("tasks:list:*"),
       task.projectId ? cacheDel(`project:${task.projectId}`) : Promise.resolve(),
     ]).catch(() => {});
@@ -1657,6 +1784,235 @@ router.get("/:id/attachments/:index/download", requireAuth, async (req, res, nex
     }
 
     return res.status(404).json({ error: { message: "Attachment file not available" } });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// ============================================================================
+// Execution Priority System - Admin Only
+// ============================================================================
+
+// IMPORTANT: Place specific routes BEFORE parameterized routes
+// to avoid Express route matching issues
+
+// DELETE /api/tasks/priorities - Clear all execution priorities (standalone tasks)
+router.delete("/priorities", requireAuth, async (req, res, next) => {
+  try {
+    // Check admin role
+    if (!['admin', 'super-admin'].includes(String(req.user?.role || '').trim().toLowerCase())) {
+      return res.status(403).json({ error: { message: "Only admins can manage execution priorities" } });
+    }
+
+    // Clear execution priorities for all standalone tasks (no projectId)
+    await Task.updateMany(
+      { projectId: null, executionPriority: { $ne: null } },
+      { executionPriority: null }
+    );
+
+    // Log activity
+    await ActivityLog.create({
+      actorUserId: String(req.user?.sub || req.user?.id || "unknown"),
+      actorUsername: String(req.user?.name || req.user?.username || req.user?.email || "unknown"),
+      actorRole: String(req.user?.role || "unknown"),
+      action: "TASK_UPDATE",
+      resourceType: "task",
+      resourceId: "all-standalone",
+      resourceName: "All Standalone Tasks",
+      description: "Cleared all execution priorities for standalone tasks",
+    });
+
+    // Clear cache
+    await cacheDel("tasks:*");
+    await cacheDel("projects:*");
+
+    return res.status(200).json({
+      success: true,
+      message: "All execution priorities cleared for standalone tasks",
+    });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// POST /api/tasks/resequence - Global re-sequence of prioritized tasks
+router.post("/resequence", requireAuth, async (req, res, next) => {
+  try {
+    // Check admin role
+    if (!['admin', 'super-admin'].includes(String(req.user?.role || '').trim().toLowerCase())) {
+      return res.status(403).json({ error: { message: "Only admins can manage execution priorities" } });
+    }
+
+    const { taskIds } = req.body;
+
+    if (!Array.isArray(taskIds) || taskIds.length === 0) {
+      return res.status(400).json({ error: { message: "taskIds array is required" } });
+    }
+
+    // Validate all task IDs
+    const validIds = taskIds.filter(id => mongoose.Types.ObjectId.isValid(id));
+
+    // Update tasks with new sequential priorities
+    const updatedTasks = [];
+    for (let i = 0; i < validIds.length; i++) {
+      const task = await Task.findByIdAndUpdate(
+        validIds[i],
+        { executionPriority: i + 1 },
+        { new: true, runValidators: true }
+      );
+      if (task) {
+        updatedTasks.push(task);
+      }
+    }
+
+    // Log activity
+    await ActivityLog.create({
+      actorUserId: String(req.user?.sub || req.user?.id || "unknown"),
+      actorUsername: String(req.user?.name || req.user?.username || req.user?.email || "unknown"),
+      actorRole: String(req.user?.role || "unknown"),
+      action: "TASK_UPDATE",
+      resourceType: "task",
+      resourceId: "batch-resequence",
+      resourceName: "Batch Resequence",
+      description: `Resequenced ${updatedTasks.length} tasks with execution priorities`,
+    });
+
+    // Clear cache
+    await cacheDel("tasks:*");
+    await cacheDel("projects:*");
+
+    return res.status(200).json({
+      success: true,
+      items: updatedTasks,
+      message: "Tasks re-sequenced successfully",
+    });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// POST /api/tasks/:id/priority - Assign execution priority to a task
+router.post("/:id/priority", requireAuth, async (req, res, next) => {
+  try {
+    // Check admin role
+    if (!['admin', 'super-admin'].includes(String(req.user?.role || '').trim().toLowerCase())) {
+      return res.status(403).json({ error: { message: "Only admins can manage execution priorities" } });
+    }
+
+    const { id } = req.params;
+    const { executionPriority } = req.body;
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ error: { message: "Invalid task ID" } });
+    }
+
+    if (typeof executionPriority !== "number" || executionPriority < 1) {
+      return res.status(400).json({ error: { message: "executionPriority must be a positive number" } });
+    }
+
+    const task = await Task.findByIdAndUpdate(
+      id,
+      { executionPriority },
+      { new: true, runValidators: true }
+    );
+
+    if (!task) {
+      return res.status(404).json({ error: { message: "Task not found" } });
+    }
+
+    // Log activity
+    await ActivityLog.create({
+      actorUserId: String(req.user?.sub || req.user?.id || "unknown"),
+      actorUsername: String(req.user?.name || req.user?.username || req.user?.email || "unknown"),
+      actorRole: String(req.user?.role || "unknown"),
+      action: "TASK_UPDATE",
+      resourceType: "task",
+      resourceId: String(task._id),
+      resourceName: task.title || "",
+      description: `Assigned execution priority #${executionPriority} to task "${task.title}"`,
+    });
+
+    // Clear cache
+    await cacheDel("tasks:*");
+    await cacheDel(`task:${id}`);
+    await cacheDel("projects:*");
+    await cacheDel("project:*");
+
+    return res.status(200).json({
+      success: true,
+      item: task,
+      message: `Execution priority #${executionPriority} assigned successfully`,
+    });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// DELETE /api/tasks/:id/priority - Remove execution priority from a task
+router.delete("/:id/priority", requireAuth, async (req, res, next) => {
+  try {
+    // Check admin role
+    if (!['admin', 'super-admin'].includes(String(req.user?.role || '').trim().toLowerCase())) {
+      return res.status(403).json({ error: { message: "Only admins can manage execution priorities" } });
+    }
+
+    const { id } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ error: { message: "Invalid task ID" } });
+    }
+
+    const task = await Task.findByIdAndUpdate(
+      id,
+      { executionPriority: null },
+      { new: true, runValidators: true }
+    );
+
+    if (!task) {
+      return res.status(404).json({ error: { message: "Task not found" } });
+    }
+
+    // Re-sequence remaining prioritized tasks
+    const projectId = task.projectId;
+    const filter = projectId
+      ? { projectId, executionPriority: { $ne: null } }
+      : { projectId: null, executionPriority: { $ne: null } };
+
+    const prioritizedTasks = await Task.find(filter).sort({ executionPriority: 1 });
+
+    // Update priorities sequentially
+    for (let i = 0; i < prioritizedTasks.length; i++) {
+      await Task.findByIdAndUpdate(
+        prioritizedTasks[i]._id,
+        { executionPriority: i + 1 }
+      );
+    }
+
+    // Log activity
+    await ActivityLog.create({
+      actorUserId: String(req.user?.sub || req.user?.id || "unknown"),
+      actorUsername: String(req.user?.name || req.user?.username || req.user?.email || "unknown"),
+      actorRole: String(req.user?.role || "unknown"),
+      action: "TASK_UPDATE",
+      resourceType: "task",
+      resourceId: String(task._id),
+      resourceName: task.title || "",
+      description: `Removed execution priority from task "${task.title}" and re-sequenced remaining tasks`,
+    });
+
+    // Clear cache
+    await cacheDel("tasks:*");
+    await cacheDel(`task:${id}`);
+    await cacheDel("projects:*");
+
+    // Return updated task
+    const updatedTask = await Task.findById(id);
+
+    return res.status(200).json({
+      success: true,
+      item: updatedTask,
+      message: "Execution priority removed and tasks re-sequenced",
+    });
   } catch (err) {
     return next(err);
   }

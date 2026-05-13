@@ -58,19 +58,25 @@ router.get("/summary", requireAuth, async (_req, res, next) => {
       employeeTotal,
       entriesToday,
       vehicleTotal,
-      patentTotal,
-      websiteTotal,
+      patentFiled,
+      patentPending,
+      websiteActive,
+      websiteFuture,
       projectTotal,
-      openBugReports
+      openBugReports,
+      companyTotal
     ] = await Promise.all([
       Task.find().lean(),
       Employee.countDocuments({ status: "active" }),
       TimeEntry.find({ date: { $gte: start, $lte: end } }).lean(),
       Vehicle.countDocuments(),
       Patent.countDocuments({ patentType: "filed" }),
-      Website.countDocuments(),
+      Patent.countDocuments({ patentType: "pending" }),
+      Website.countDocuments({ websiteType: "active" }),
+      Website.countDocuments({ websiteType: "future" }),
       Project.countDocuments(),
-      require("../models/BugReport").countDocuments({ status: "open" })
+      require("../models/BugReport").countDocuments({ status: "open" }),
+      require("../models/Company").countDocuments({ status: "active" })
     ]);
 
     const isCompletedTask = (t) => String(t?.status || "").toLowerCase() === "completed";
@@ -122,10 +128,13 @@ router.get("/summary", requireAuth, async (_req, res, next) => {
       hoursLoggedToday,
       avgHoursPerEmployee,
       vehicleTotal,
-      patentTotal,
-      websiteTotal,
+      patentFiled,
+      patentPending,
+      websiteActive,
+      websiteFuture,
       projectTotal,
       pendingBugs,
+      companyTotal,
     });
   } catch (err) {
     next(err);
