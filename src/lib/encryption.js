@@ -11,11 +11,11 @@ const IV_LENGTH = 16;
 let didWarnMissingKey = false;
 
 function getKey() {
-  const raw = process.env.DROPBOX_ENCRYPTION_KEY || process.env.APP_ENCRYPTION_KEY;
+  const raw = process.env.DROPBOX_ENCRYPTION_KEY || process.env.APP_ENCRYPTION_KEY || process.env.ENCRYPTION_KEY;
   if (!raw) {
     if (!didWarnMissingKey) {
       didWarnMissingKey = true;
-      console.warn("[encryption] Encryption key is not set. Falling back to plaintext mode.");
+      console.warn("[encryption] No encryption key set (DROPBOX_ENCRYPTION_KEY, APP_ENCRYPTION_KEY, or ENCRYPTION_KEY). Falling back to plaintext.");
     }
     return null;
   }
