@@ -2,7 +2,7 @@ const express = require("express");
 const { z } = require("zod");
 const Employee = require("../models/Employee");
 const Milestone = require("../models/Milestone");
-const Notification = require("../models/Notification");
+const Notification = require("../utils/notifications");
 const { requireAuth } = require("../middleware/auth");
 
 const router = express.Router();
