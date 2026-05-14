@@ -60,7 +60,7 @@ async function sendSystemEmail({ to, templateKey, variables = {} }) {
     });
 
     const mailOptions = {
-      from: emailConfig.fromAddress || emailConfig.user,
+      from: emailConfig.fromAddress || `"Task Manager By Reardon" <${emailConfig.user}>`,
       to,
       subject,
       text: body, // You could also support HTML here if needed
