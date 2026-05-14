@@ -254,7 +254,10 @@ router.post("/", requireAuth, async (req, res, next) => {
     if (Array.isArray(createdProject.assignees) && createdProject.assignees.length > 0) {
       void Promise.all(
         createdProject.assignees.map(assignee =>
-          sendEmailNotification(assignee, "projectAssignment", { projectName: createdProject.name })
+          sendEmailNotification(assignee, "projectAssignment", { 
+            projectName: createdProject.name,
+            description: createdProject.description || "No description provided."
+          })
             .catch(e => console.error(`[email] projectAssignment to ${assignee}:`, e.message))
         )
       );

@@ -9,6 +9,7 @@ const Task = require("../models/Task");
 const TaskComment = require("../models/TaskComment");
 const ActivityLog = require("../models/ActivityLog");
 const Employee = require("../models/Employee");
+const Project = require("../models/Project");
 
 const TeamLeadMapping = require("../models/TeamLeadMapping");
 const TaskPermission = require("../models/TaskPermission");
@@ -308,7 +309,6 @@ router.get("/", requireAuth, async (req, res, next) => {
         });
       } else {
         // Find projects where the user is an assignee
-        const Project = require("../models/Project");
         const assignedProjects = await Project.find({
           assignees: { $elemMatch: { $regex: new RegExp(`^(${candidates.map(escapeRegExp).join("|")})$`, "i") } }
         }).select("_id").lean();
@@ -666,9 +666,23 @@ router.post("/", requireAuth, async (req, res, next) => {
         email: req.user?.email || "",
         role: req.user?.role || "employee",
       }),
-      ...(Array.isArray(created.assignees) ? created.assignees : []).map(assignee =>
-        sendEmailNotification(assignee, "taskAssignment", { taskTitle: created.title })
-      )
+      ...(async () => {
+        let projectName = "General";
+        if (created.projectId) {
+          const proj = await Project.findById(created.projectId).select("name").lean();
+          if (proj) projectName = proj.name;
+        }
+        const assignees = Array.isArray(created.assignees) ? created.assignees : [];
+        for (const assignee of assignees) {
+          await sendEmailNotification(assignee, "taskAssignment", {
+            taskTitle: created.title,
+            projectName,
+            priority: created.priority || "Normal",
+            dueDate: created.dueDate ? new Date(created.dueDate).toLocaleDateString() : "No due date",
+            description: created.description || ""
+          });
+        }
+      })()
     ]).catch((err) => {
       console.error("Task creation side-effects error:", err);
     });
@@ -804,14 +818,32 @@ router.post("/upload", requireAuth, upload.array("files", 10), async (req, res, 
       }),
       cacheDel("tasks:list:*"),
       created.projectId ? cacheDel(`project:${created.projectId}`) : Promise.resolve(),
-      ...(Array.isArray(created.assignees) ? created.assignees : []).map(assignee => {
-        sendEmailNotification(assignee, "taskAssignment", { taskTitle: created.title });
-        sendEmailNotification(assignee, "fileAttachment", { 
-          fileName: attachments[0]?.fileName || parsed.data.attachmentFileName || "Attachment", 
-          taskTitle: created.title 
-        });
-      })
-    ]).catch(() => {});
+      ...(async () => {
+        let projectName = "General";
+        if (created.projectId) {
+          const proj = await Project.findById(created.projectId).select("name").lean();
+          if (proj) projectName = proj.name;
+        }
+        const assignees = Array.isArray(created.assignees) ? created.assignees : [];
+        for (const assignee of assignees) {
+          await sendEmailNotification(assignee, "taskAssignment", {
+            taskTitle: created.title,
+            projectName,
+            priority: created.priority || "Normal",
+            dueDate: created.dueDate ? new Date(created.dueDate).toLocaleDateString() : "No due date",
+            description: created.description || ""
+          });
+          if (attachments.length > 0) {
+            await sendEmailNotification(assignee, "fileAttachment", {
+              fileName: attachments[0]?.fileName || "Attachment",
+              taskTitle: created.title
+            });
+          }
+        }
+      })()
+    ]).catch((err) => {
+      console.error("Upload side-effects error:", err);
+    });
 
     return res.status(201).json({ item: withId(obj) });
   } catch (err) {
