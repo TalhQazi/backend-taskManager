@@ -50,13 +50,15 @@ const ActivityLogSchema = new mongoose.Schema(
         "CLEARHIRE_SCAN_COMPLETE",
         "CLEARHIRE_OVERRIDE",
         "CLEARHIRE_RECHECK",
+        "PROJECT_ASSIGN",
+        "PROJECT_REASSIGN",
         "OTHER"
       ]
     },
-    resourceType: { 
-      type: String, 
+    resourceType: {
+      type: String,
       required: true,
-      enum: ["user", "task", "employee", "time-entry", "notification", "message", "settings", "system", "auth", "appliance", "vehicle", "location", "vendor", "event", "onboarding", "clearhire"]
+      enum: ["user", "task", "employee", "time-entry", "notification", "message", "settings", "system", "auth", "appliance", "vehicle", "location", "vendor", "event", "onboarding", "clearhire", "project"]
     },
     resourceId: { type: String, default: "" },
     resourceName: { type: String, default: "" },
