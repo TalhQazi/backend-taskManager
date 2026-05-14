@@ -13,6 +13,12 @@ const crmCompanySchema = new mongoose.Schema(
       enum: ["Technology", "Finance", "Healthcare", "Retail", "Manufacturing", "Logistics", "Other"],
       trim: true,
     },
+    entityType: {
+      type: String,
+      enum: ["LLC single member", "LLC multi member", "S Corp", "C Corp", "DBA", "Other"],
+      default: "LLC single member",
+      trim: true,
+    },
     contactCount: {
       type: Number,
       default: 0,
