@@ -47,6 +47,16 @@ const SystemSettingsSchema = new mongoose.Schema(
         subject: { type: String, default: "New Reply to Your Comment" },
         body: { type: String, default: "Hello {name},\n\n{authorName} replied to your comment on task '{taskTitle}'.\n\nReply: {replyText}\n\nPlease login to view it." },
       },
+      projectAssignment: {
+        enabled: { type: Boolean, default: true },
+        subject: { type: String, default: "You've Been Assigned to a Project" },
+        body: { type: String, default: "Hello {name},\n\nYou have been assigned to the project: {projectName}.\n\nPlease login to view the project details and associated tasks." },
+      },
+      projectReassignment: {
+        enabled: { type: Boolean, default: true },
+        subject: { type: String, default: "Project Reassigned to You" },
+        body: { type: String, default: "Hello {name},\n\nThe project '{projectName}' has been reassigned to you.\n\nPlease login to review your updated assignments." },
+      },
     },
     taskRewardSystemEnabled: { type: Boolean, default: true },
   },

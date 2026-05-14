@@ -33,6 +33,8 @@ const systemSettingsSchema = z.object({
     fileAttachment: templateSchema.optional(),
     commentAdded: templateSchema.optional(),
     replyAdded: templateSchema.optional(),
+    projectAssignment: templateSchema.optional(),
+    projectReassignment: templateSchema.optional(),
   }).optional(),
   taskRewardSystemEnabled: z.boolean().optional(),
 });
