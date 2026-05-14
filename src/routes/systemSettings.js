@@ -164,8 +164,13 @@ router.post("/test-email", requireAuth, requireSuperAdmin, async (req, res, next
     // Verify connection first — this catches wrong host/port/credentials immediately
     await transporter.verify();
 
+    const fromEmail = emailConfig.fromAddress || emailConfig.user;
+    const fromField = emailConfig.senderName
+      ? `${emailConfig.senderName} <${fromEmail}>`
+      : fromEmail;
+
     await transporter.sendMail({
-      from: emailConfig.fromAddress || emailConfig.user,
+      from: fromField,
       to: String(to).trim(),
       subject: "Test Email — Task Manager System",
       text: `This is a test email from your Task Manager system.\n\nIf you received this, your SMTP configuration is working correctly.\n\nSMTP Host: ${emailConfig.host}\nPort: ${emailConfig.port}\nUser: ${emailConfig.user}`,
