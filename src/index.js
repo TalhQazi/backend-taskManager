@@ -64,6 +64,9 @@ const crmCompanyRoutes = require("./routes/crmcompany");
 const crmContactsRoutes = require("./routes/crmcontacts");
 const crmDealsRoutes = require("./routes/crmdeals");
 const crmTasksRoutes = require("./routes/crmtasks");
+const crmDashboardRoutes = require("./routes/crmdashboard");
+const crmFilesRoutes = require("./routes/crmfiles");
+const crmCommunicationRoutes = require("./routes/crmcommunication");
 
 const memeRoutes = require("./routes/meme");
 const milestonesRoutes = require("./routes/milestones");
@@ -353,6 +356,9 @@ app.use("/api/crm-company", crmCompanyRoutes);
 app.use("/api/crm-contacts", crmContactsRoutes);
 app.use("/api/crm-deals", crmDealsRoutes);
 app.use("/api/crm-tasks", crmTasksRoutes);
+app.use("/api/crm-dashboard", crmDashboardRoutes);
+app.use("/api/crm-files", crmFilesRoutes);
+app.use("/api/crm-communication", crmCommunicationRoutes);
 app.use("/api/meme", memeRoutes);
 app.use("/api/milestones", milestonesRoutes);
 
