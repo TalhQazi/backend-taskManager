@@ -31,15 +31,22 @@ async function sendSystemEmail({ to, templateKey, variables = {} }) {
       return false;
     }
 
+    let decryptedPass;
+    try {
+      decryptedPass = decrypt(emailConfig.pass);
+    } catch (e) {
+      decryptedPass = emailConfig.pass; // fallback if password was stored unencrypted
+    }
+
     const transporter = nodemailer.createTransport({
       host: emailConfig.host,
       port: emailConfig.port,
-      secure: emailConfig.secure, // true for 465, false for other ports
+      secure: emailConfig.secure,
       auth: {
         user: emailConfig.user,
-        pass: decrypt(emailConfig.pass),
+        pass: decryptedPass,
       },
-
+      tls: { rejectUnauthorized: false },
     });
 
     let subject = template.subject;

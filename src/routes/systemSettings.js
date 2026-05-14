@@ -1,5 +1,6 @@
 const express = require("express");
 const { z } = require("zod");
+const nodemailer = require("nodemailer");
 const SystemSettings = require("../models/SystemSettings");
 const { requireAuth } = require("../middleware/auth");
 const { encrypt, decrypt } = require("../lib/encryption");
@@ -28,6 +29,10 @@ const systemSettingsSchema = z.object({
     userRegistration: templateSchema.optional(),
     managerRegistration: templateSchema.optional(),
     forgotPassword: templateSchema.optional(),
+    taskAssignment: templateSchema.optional(),
+    fileAttachment: templateSchema.optional(),
+    commentAdded: templateSchema.optional(),
+    replyAdded: templateSchema.optional(),
   }).optional(),
   taskRewardSystemEnabled: z.boolean().optional(),
 });
@@ -117,6 +122,56 @@ router.put("/", requireAuth, requireSuperAdmin, async (req, res, next) => {
 
   } catch (err) {
     next(err);
+  }
+});
+
+// Test SMTP connection and send a test email
+router.post("/test-email", requireAuth, requireSuperAdmin, async (req, res, next) => {
+  try {
+    const { to } = req.body;
+    if (!to || !String(to).includes("@")) {
+      return res.status(400).json({ error: { message: "A valid recipient email address is required." } });
+    }
+
+    const settings = await SystemSettings.findOne({ key: "global" });
+    if (!settings) {
+      return res.status(400).json({ error: { message: "No system settings found. Please save your SMTP config first." } });
+    }
+
+    const { emailConfig } = settings;
+    if (!emailConfig?.host || !emailConfig?.user || !emailConfig?.pass) {
+      return res.status(400).json({ error: { message: "SMTP configuration is incomplete. Host, username, and password are all required." } });
+    }
+
+    let decryptedPass;
+    try {
+      decryptedPass = decrypt(emailConfig.pass);
+    } catch (e) {
+      decryptedPass = emailConfig.pass; // fallback if not encrypted
+    }
+
+    const transporter = nodemailer.createTransport({
+      host: emailConfig.host,
+      port: emailConfig.port || 587,
+      secure: emailConfig.secure || false,
+      auth: { user: emailConfig.user, pass: decryptedPass },
+      tls: { rejectUnauthorized: false },
+    });
+
+    // Verify connection first — this catches wrong host/port/credentials immediately
+    await transporter.verify();
+
+    await transporter.sendMail({
+      from: emailConfig.fromAddress || emailConfig.user,
+      to: String(to).trim(),
+      subject: "Test Email — Task Manager System",
+      text: `This is a test email from your Task Manager system.\n\nIf you received this, your SMTP configuration is working correctly.\n\nSMTP Host: ${emailConfig.host}\nPort: ${emailConfig.port}\nUser: ${emailConfig.user}`,
+    });
+
+    res.json({ ok: true, message: "Test email sent successfully!" });
+  } catch (err) {
+    // Return the real SMTP error so the admin can diagnose it
+    res.status(400).json({ error: { message: err.message || "Failed to send test email." } });
   }
 });
 
