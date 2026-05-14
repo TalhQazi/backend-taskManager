@@ -59,11 +59,16 @@ async function sendSystemEmail({ to, templateKey, variables = {} }) {
       body = body.replace(placeholder, variables[key]);
     });
 
+    const fromEmail = emailConfig.fromAddress || emailConfig.user;
+    const fromField = emailConfig.senderName
+      ? `${emailConfig.senderName} <${fromEmail}>`
+      : fromEmail;
+
     const mailOptions = {
-      from: emailConfig.fromAddress || `"Task Manager By Reardon" <${emailConfig.user}>`,
+      from: fromField,
       to,
       subject,
-      text: body, // You could also support HTML here if needed
+      text: body,
     };
 
     const info = await transporter.sendMail(mailOptions);

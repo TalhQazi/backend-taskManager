@@ -15,6 +15,7 @@ const emailConfigSchema = z.object({
   pass: z.string().default(""),
   secure: z.boolean().default(false),
   fromAddress: z.string().default(""),
+  senderName: z.string().default("Task Manager"),
 });
 
 const templateSchema = z.object({

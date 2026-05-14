@@ -9,7 +9,8 @@ const SystemSettingsSchema = new mongoose.Schema(
       user: { type: String, default: "" },
       pass: { type: String, default: "" },
       secure: { type: Boolean, default: false },
-      fromAddress: { type: String, default: "Task Manager By Reardon <noreply@reardon.com>" },
+      fromAddress: { type: String, default: "" },
+      senderName: { type: String, default: "Task Manager" },
     },
     templates: {
       userRegistration: {
