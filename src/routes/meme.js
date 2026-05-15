@@ -277,7 +277,8 @@ router.post(
         return res.status(500).json({ error: { message: `Upload failed: ${String(err?.message || err)}` } });
       }
 
-      const isActive = parsed.data.isActive === "false" ? false : Boolean(parsed.data.isActive);
+      // Properly convert string "false" or boolean false to false, everything else to true
+      const isActive = parsed.data.isActive === false || parsed.data.isActive === "false" ? false : true;
 
       const doc = await Meme.create({
         imageUrl: url,
