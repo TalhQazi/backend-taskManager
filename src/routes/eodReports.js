@@ -3,6 +3,7 @@ const express = require("express");
 const EODReport = require("../models/EODReport");
 const TimeEntry = require("../models/TimeEntry");
 const Employee = require("../models/Employee");
+const Settings = require("../models/Settings");
 const { requireAuth, requireRole } = require("../middleware/auth");
 const { cacheWrap, cacheDel } = require("../lib/cache");
 
@@ -31,7 +32,7 @@ router.get("/eod-status", requireAuth, requireRole(["manager", "admin", "super-a
     const targetDate = date ? new Date(date) : new Date();
     const { start, end } = getDayRange(targetDate);
 
-    // Get all active employees
+    // Get all active employees (same fields as Employee Directory)
     const employees = await Employee.find(
       { status: "active" },
       { name: 1, email: 1, _id: 1 }
@@ -46,6 +47,17 @@ router.get("/eod-status", requireAuth, requireRole(["manager", "admin", "super-a
     const eodReports = await EODReport.find({
       date: { $gte: start, $lte: end },
     }).lean();
+
+    // Bulk-fetch avatars from Settings keyed by Employee._id (same as Employee Directory)
+    const empIds = employees.map((e) => String(e._id));
+    const settingsList = empIds.length
+      ? await Settings.find({ userId: { $in: empIds } })
+          .select("userId avatarUrl avatarDataUrl")
+          .lean()
+      : [];
+    const avatarById = new Map(
+      settingsList.map((s) => [String(s.userId), String(s.avatarDataUrl || s.avatarUrl || "").trim()])
+    );
 
     // Create a map for quick lookup
     const timeEntryByEmployee = new Map();
@@ -63,11 +75,13 @@ router.get("/eod-status", requireAuth, requireRole(["manager", "admin", "super-a
       employees.map(async (emp) => {
         const timeEntry = timeEntryByEmployee.get(emp.name);
         const userId = await getUserIdByEmployeeEmail(emp.email);
+        const avatar = avatarById.get(String(emp._id)) || "";
 
         if (!timeEntry) {
           return {
             employeeId: String(emp._id),
             employeeName: emp.name,
+            avatar,
             status: "not_clocked_in",
             clockIn: undefined,
             clockOut: undefined,
@@ -78,22 +92,22 @@ router.get("/eod-status", requireAuth, requireRole(["manager", "admin", "super-a
         const eodReport = userId ? eodReportByUserId.get(userId) : null;
 
         if (!eodReport) {
-          // Employee clocked in/out but no EOD report
           const clockOutTime = timeEntry.clockOutAt || timeEntry.clockOut;
           if (clockOutTime) {
             return {
               employeeId: String(emp._id),
               employeeName: emp.name,
+              avatar,
               status: "missing",
               clockIn: timeEntry.clockIn || formatTime(timeEntry.clockInAt),
               clockOut: timeEntry.clockOut || formatTime(timeEntry.clockOutAt),
               reportSubmittedAt: undefined,
             };
           }
-          // Still clocked in
           return {
             employeeId: String(emp._id),
             employeeName: emp.name,
+            avatar,
             status: "not_clocked_in",
             clockIn: timeEntry.clockIn || formatTime(timeEntry.clockInAt),
             clockOut: undefined,
@@ -101,7 +115,6 @@ router.get("/eod-status", requireAuth, requireRole(["manager", "admin", "super-a
           };
         }
 
-        // Check if report was submitted late (after clock out)
         const clockOutTime = timeEntry.clockOutAt || timeEntry.clockOut;
         const reportTime = eodReport.createdAt;
         let status = "submitted";
@@ -110,8 +123,6 @@ router.get("/eod-status", requireAuth, requireRole(["manager", "admin", "super-a
           const clockOutDate = new Date(clockOutTime);
           const reportDate = new Date(reportTime);
           const diffMinutes = (reportDate.getTime() - clockOutDate.getTime()) / (1000 * 60);
-
-          // Consider late if submitted more than 30 minutes after clock out
           if (diffMinutes > 30) {
             status = "late";
           }
@@ -120,6 +131,7 @@ router.get("/eod-status", requireAuth, requireRole(["manager", "admin", "super-a
         return {
           employeeId: String(emp._id),
           employeeName: emp.name,
+          avatar,
           status,
           clockIn: timeEntry.clockIn || formatTime(timeEntry.clockInAt),
           clockOut: timeEntry.clockOut || formatTime(timeEntry.clockOutAt),
