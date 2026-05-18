@@ -71,6 +71,9 @@ const crmFilesRoutes = require("./routes/crmfiles");
 const crmCommunicationRoutes = require("./routes/crmcommunication");
 
 const memeRoutes = require("./routes/meme");
+
+const announcementsRoutes = require("./routes/announcements");
+
 const milestonesRoutes = require("./routes/milestones");
 const atlasbookRoutes = require("./routes/atlasbook");
 
@@ -365,8 +368,12 @@ app.use("/api/crm-dashboard", crmDashboardRoutes);
 app.use("/api/crm-files", crmFilesRoutes);
 app.use("/api/crm-communication", crmCommunicationRoutes);
 app.use("/api/meme", memeRoutes);
+
+app.use("/api/announcements", announcementsRoutes);
+
 app.use("/api/milestones", milestonesRoutes);
 app.use("/api/atlasbook", atlasbookRoutes);
+
 
 
 app.use(notFoundHandler);
@@ -386,6 +393,17 @@ connectDb()
     const { checkAnnualReportReminders } = require("./utils/reminders");
     checkAnnualReportReminders(); // Run once on startup
     setInterval(checkAnnualReportReminders, 24 * 60 * 60 * 1000); // Run every 24 hours
+
+    // Initialize announcement scheduler
+    const { runAllTasks: runAnnouncementScheduler } = require("./lib/announcementScheduler");
+    runAnnouncementScheduler().catch((err) => console.error("[Announcements] Startup scheduler error:", err));
+    // Run announcement scheduler every 5 minutes
+    setInterval(
+      () => {
+        runAnnouncementScheduler().catch((err) => console.error("[Announcements] Scheduler error:", err));
+      },
+      5 * 60 * 1000
+    );
     
     httpServer.listen(port, () => {
       console.log(`Backend listening on http://localhost:${port}`);
