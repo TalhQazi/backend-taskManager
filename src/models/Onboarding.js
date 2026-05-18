@@ -96,11 +96,9 @@ OnboardingSchema.pre("save", function (next) {
 
   this.progress = Math.round((completedSteps / 6) * 100);
 
-  // Auto-update overall status based on progress, but don't overwrite submitted or approved status
+  // Only auto-advance to in_progress — never auto-submit; submission requires explicit employee action
   if (this.overallStatus !== "submitted" && this.overallStatus !== "approved" && this.overallStatus !== "rejected") {
-    if (this.progress === 100) {
-      this.overallStatus = "submitted";
-    } else if (this.progress > 0) {
+    if (this.progress > 0) {
       this.overallStatus = "in_progress";
     }
   }

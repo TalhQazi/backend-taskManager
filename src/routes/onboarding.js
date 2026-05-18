@@ -570,13 +570,14 @@ router.post("/me/submit", requireAuth, async (req, res, next) => {
       return res.status(404).json({ error: { message: "Onboarding not found" } });
     }
 
-    // Check if all steps are submitted
-    if (!onboarding.basicInfo.completed ||
-        onboarding.identityVerification.primaryId.status !== "submitted" ||
-        onboarding.identityVerification.secondaryId.status !== "submitted" ||
-        onboarding.w4Form.status !== "submitted" ||
-        onboarding.employeeHandbook.status !== "submitted" ||
-        onboarding.digitalSignature.status !== "submitted") {
+    // Check if all steps are completed (submitted or verified)
+    const docReady = (s) => s === "submitted" || s === "verified";
+    if (!onboarding.basicInfo?.completed ||
+        !docReady(onboarding.identityVerification?.primaryId?.status) ||
+        !docReady(onboarding.identityVerification?.secondaryId?.status) ||
+        !docReady(onboarding.w4Form?.status) ||
+        !docReady(onboarding.employeeHandbook?.status) ||
+        !docReady(onboarding.digitalSignature?.status)) {
       return res.status(400).json({
         error: { message: "Complete all steps before submitting" },
       });
@@ -611,8 +612,8 @@ router.post("/me/submit", requireAuth, async (req, res, next) => {
 
 // ==================== ADMIN ENDPOINTS ====================
 
-// GET /api/onboarding/admin/all - Get all onboarding records (Admin)
-router.get("/admin/all", requireAuth, requireRole("admin"), async (req, res, next) => {
+// GET /api/onboarding/admin/all - Get all onboarding records (Admin + Manager)
+router.get("/admin/all", requireAuth, requireRole(["admin", "manager"]), async (req, res, next) => {
   try {
     const { status } = req.query;
     const filter = {};
@@ -634,6 +635,7 @@ router.get("/admin/all", requireAuth, requireRole("admin"), async (req, res, nex
       w4Form: o.w4Form,
       employeeHandbook: o.employeeHandbook,
       digitalSignature: o.digitalSignature,
+      workInfo: o.workInfo,
       overallStatus: o.overallStatus,
       progress: calculateProgress(o),
       adminReview: o.adminReview,
