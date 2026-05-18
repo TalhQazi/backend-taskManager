@@ -77,7 +77,7 @@ workInfo: {
   { timestamps: true }
 );
 
-OnboardingSchema.index({ userId: 1, unique: true });
+OnboardingSchema.index({ userId: 1 }, { unique: true });
 OnboardingSchema.index({ employeeId: 1 });
 OnboardingSchema.index({ overallStatus: 1 });
 

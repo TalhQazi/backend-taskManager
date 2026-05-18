@@ -6,7 +6,6 @@ const headerSettingsSchema = new mongoose.Schema(
       type: String,
       required: true,
       unique: true,
-      index: true,
     },
     // Background type: 'color' or 'image'
     backgroundType: {

@@ -2,7 +2,7 @@ const mongoose = require("mongoose");
 
 const TaskPermissionSchema = new mongoose.Schema(
   {
-    taskId: { type: mongoose.Schema.Types.ObjectId, ref: "Task", required: true, unique: true, index: true },
+    taskId: { type: mongoose.Schema.Types.ObjectId, ref: "Task", required: true, unique: true },
     canReassign: { type: Boolean, default: true },
   },
   { timestamps: true }
