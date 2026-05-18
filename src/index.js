@@ -81,6 +81,7 @@ const atlasbookRoutes = require("./routes/atlasbook");
 
 //going to express now
 const app = express();
+app.set("trust proxy", true);
 const httpServer = createServer(app);
 
 
