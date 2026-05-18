@@ -671,7 +671,10 @@ router.put("/:id", requireAuth, async (req, res, next) => {
       resourceId: String(req.params.id),
     });
 
-    return res.json({ item: withId(updated) });
+    const s = await Settings.findOne({ userId: String(updated._id) }).lean();
+    const avatarUrl = s?.avatarDataUrl || s?.avatarUrl || "";
+
+    return res.json({ item: { ...withId(updated), avatarUrl, avatarDataUrl: avatarUrl } });
   } catch (err) {
     return next(err);
   }

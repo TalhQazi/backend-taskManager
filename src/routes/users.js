@@ -173,7 +173,10 @@ router.put("/:id", requireAuth, requireRole(["super-admin", "admin"]), async (re
       resourceId: String(req.params.id),
     });
 
-    return res.json({ item: employeeToUser(updated) });
+    const s = await Settings.findOne({ userId: String(updated._id) }).lean();
+    const avatarUrl = s?.avatarDataUrl || s?.avatarUrl || "";
+
+    return res.json({ item: { ...employeeToUser(updated), avatarUrl, avatarDataUrl: avatarUrl } });
   } catch (err) {
     return next(err);
   }
