@@ -52,6 +52,10 @@ const ActivityLogSchema = new mongoose.Schema(
         "CLEARHIRE_RECHECK",
         "PROJECT_ASSIGN",
         "PROJECT_REASSIGN",
+        "PROJECT_CREATE",
+        "PROJECT_UPDATE",
+        "PROJECT_ARCHIVE",
+        "PROJECT_COMMENT_CREATE",
         "OTHER"
       ]
     },

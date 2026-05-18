@@ -64,6 +64,4 @@ const SystemSettingsSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-SystemSettingsSchema.index({ key: 1 });
-
 module.exports = mongoose.model("SystemSettings", SystemSettingsSchema);

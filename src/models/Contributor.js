@@ -2,7 +2,7 @@ const mongoose = require("mongoose");
 
 const ContributorSchema = new mongoose.Schema(
   {
-    userId: { type: String, required: true, unique: true, index: true },
+    userId: { type: String, required: true, unique: true },
     name: { type: String, required: true, index: true },
     email: { type: String, required: true, index: true },
     role: { type: String, enum: ["admin", "manager", "employee", "super-admin"], default: "employee" },
