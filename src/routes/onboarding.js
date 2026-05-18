@@ -613,7 +613,7 @@ router.post("/me/submit", requireAuth, async (req, res, next) => {
 // ==================== ADMIN ENDPOINTS ====================
 
 // GET /api/onboarding/admin/all - Get all onboarding records (Admin + Manager)
-router.get("/admin/all", requireAuth, requireRole(["admin", "manager"]), async (req, res, next) => {
+router.get("/admin/all", requireAuth, requireRole(["super-admin", "admin", "manager"]), async (req, res, next) => {
   try {
     const { status } = req.query;
     const filter = {};
@@ -650,7 +650,7 @@ router.get("/admin/all", requireAuth, requireRole(["admin", "manager"]), async (
 });
 
 // GET /api/onboarding/admin/:id - Get specific onboarding details (Admin)
-router.get("/admin/:id", requireAuth, requireRole("admin"), async (req, res, next) => {
+router.get("/admin/:id", requireAuth, requireRole(["super-admin", "admin"]), async (req, res, next) => {
   try {
     const onboarding = await Onboarding.findById(req.params.id).lean();
     if (!onboarding) {
@@ -681,7 +681,7 @@ router.get("/admin/:id", requireAuth, requireRole("admin"), async (req, res, nex
 });
 
 // PUT /api/onboarding/admin/:id/approve - Approve onboarding (Admin)
-router.put("/admin/:id/approve", requireAuth, requireRole("admin"), async (req, res, next) => {
+router.put("/admin/:id/approve", requireAuth, requireRole(["super-admin", "admin"]), async (req, res, next) => {
   try {
     const { comments } = req.body;
 
@@ -741,7 +741,7 @@ router.put("/admin/:id/approve", requireAuth, requireRole("admin"), async (req, 
 });
 
 // PUT /api/onboarding/admin/:id/reject - Reject onboarding (Admin)
-router.put("/admin/:id/reject", requireAuth, requireRole("admin"), async (req, res, next) => {
+router.put("/admin/:id/reject", requireAuth, requireRole(["super-admin", "admin"]), async (req, res, next) => {
   try {
     const { reason } = req.body;
 
