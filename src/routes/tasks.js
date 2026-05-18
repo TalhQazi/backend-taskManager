@@ -666,7 +666,7 @@ router.post("/", requireAuth, async (req, res, next) => {
         email: req.user?.email || "",
         role: req.user?.role || "employee",
       }),
-      ...(async () => {
+      (async () => {
         let projectName = "General";
         if (created.projectId) {
           const proj = await Project.findById(created.projectId).select("name").lean();
@@ -818,7 +818,7 @@ router.post("/upload", requireAuth, upload.array("files", 10), async (req, res, 
       }),
       cacheDel("tasks:list:*"),
       created.projectId ? cacheDel(`project:${created.projectId}`) : Promise.resolve(),
-      ...(async () => {
+      (async () => {
         let projectName = "General";
         if (created.projectId) {
           const proj = await Project.findById(created.projectId).select("name").lean();
