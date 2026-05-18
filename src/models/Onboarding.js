@@ -48,6 +48,15 @@ const OnboardingSchema = new mongoose.Schema(
       signature: { type: String }, // Base64 or URL
       status: { type: String, enum: ["missing", "submitted", "verified"], default: "missing" },
     },
+    // Step 6: Work Information
+   // Step 6: Work Information
+workInfo: {
+  completed: { type: Boolean, default: false },
+  department: { type: String },
+  jobTitle: { type: String },
+  manager: { type: String },
+  joinDate: { type: String }, // ← YEH ADD KARO
+},
 
     // Overall Status
     overallStatus: {
@@ -83,8 +92,9 @@ OnboardingSchema.pre("save", function (next) {
   if (this.w4Form.status === "submitted" || this.w4Form.status === "verified") completedSteps++;
   if (this.employeeHandbook.status === "submitted" || this.employeeHandbook.status === "verified") completedSteps++;
   if (this.digitalSignature.status === "submitted" || this.digitalSignature.status === "verified") completedSteps++;
+  if (this.workInfo?.completed) completedSteps++;
 
-  this.progress = Math.round((completedSteps / totalSteps) * 100);
+  this.progress = Math.round((completedSteps / 6) * 100);
 
   // Auto-update overall status based on progress, but don't overwrite submitted or approved status
   if (this.overallStatus !== "submitted" && this.overallStatus !== "approved" && this.overallStatus !== "rejected") {

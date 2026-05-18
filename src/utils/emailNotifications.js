@@ -10,10 +10,13 @@ const User = require("../models/User");
  */
 async function sendEmailNotification(usernameOrId, templateKey, variables = {}) {
   try {
-    // Find the user
+    // Find the user — try username first, then display name, then ObjectId
     let user = await User.findOne({ username: usernameOrId });
     if (!user) {
-      user = await User.findById(usernameOrId);
+      user = await User.findOne({ name: usernameOrId });
+    }
+    if (!user) {
+      try { user = await User.findById(usernameOrId); } catch (_) { /* not an ObjectId */ }
     }
     if (!user || !user.email) {
       console.warn(`Could not find email for user: ${usernameOrId}`);

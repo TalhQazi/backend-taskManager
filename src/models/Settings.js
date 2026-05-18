@@ -11,6 +11,10 @@ const SettingsSchema = new mongoose.Schema(
     email: { type: String, default: "" },
     phone: { type: String, default: "" },
     role: { type: String, default: "" },
+    // Work information fields
+    department: { type: String, default: "" },
+    jobTitle: { type: String, default: "" },
+    manager: { type: String, default: "" },
     notifications: {
       emailNotifications: { type: Boolean, default: true },
       taskAlerts: { type: Boolean, default: true },

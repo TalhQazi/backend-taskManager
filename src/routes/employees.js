@@ -62,8 +62,9 @@ function getDayRange(d = new Date()) {
 }
 
 async function requireEmployeeSelf(req, res) {
-  const role = String(req.user?.role || "").trim();
-  if (role !== "employee" && role !== "manager") {
+  const role = String(req.user?.role || "").trim().toLowerCase();
+  const allowedRoles = new Set(["employee", "manager", "team-lead"]);
+  if (!allowedRoles.has(role)) {
     res.status(403).json({ error: { message: "Forbidden" } });
     return null;
   }
@@ -74,13 +75,57 @@ async function requireEmployeeSelf(req, res) {
     return null;
   }
 
-  const employee = await Employee.findById(userId, { passwordHash: 0 }).lean();
+  const username = String(req.user?.username || "").trim();
+  const name = String(req.user?.name || "").trim();
+  const email = String(req.user?.email || "").trim();
+  const normalizedCandidates = [username, name, email].map((v) => v.toLowerCase()).filter(Boolean);
+
+  // Primary path: employee JWT uses Employee._id in `sub`.
+  let employee = await Employee.findById(userId, { passwordHash: 0 }).lean();
+
+  // Fallback path: if token `sub` points to another collection, resolve by email/name.
+  if (!employee && normalizedCandidates.length > 0) {
+    const candidateRegexes = normalizedCandidates.map((c) => new RegExp(`^${escapeRegExp(c)}$`, "i"));
+    employee = await Employee.findOne(
+      {
+        $or: [
+          { email: { $in: candidateRegexes } },
+          { name: { $in: candidateRegexes } },
+          { username: { $in: candidateRegexes } },
+        ],
+      },
+      { passwordHash: 0 }
+    ).lean();
+  }
+
+  // Last resort: search by any partial match for managers who might have been created manually
+  if (!employee && normalizedCandidates.length > 0) {
+    const anyCandidate = normalizedCandidates[0];
+    employee = await Employee.findOne(
+      {
+        $or: [
+          { email: new RegExp(escapeRegExp(anyCandidate), "i") },
+          { name: new RegExp(escapeRegExp(anyCandidate), "i") },
+        ],
+      },
+      { passwordHash: 0 }
+    ).lean();
+  }
+
   if (!employee) {
-    res.status(401).json({ error: { message: "Employee profile not found" } });
+    res.status(404).json({ error: { message: "Employee not found" } });
     return null;
   }
 
-  return { employee };
+  const user = {
+    _id: employee._id,
+    username: username || employee.email || employee.name || "",
+    email: email || employee.email || "",
+    name: name || employee.name || "",
+    role,
+  };
+
+  return { user, employee };
 }
 
 // Employee self endpoints
@@ -105,7 +150,7 @@ async function requireEmployeeSelf(req, res) {
         status: employee.status || "active",
         avatarUrl: avatarUrl || undefined,
         username: user.username || user.email || "",
-        role: "employee",
+        role: user.role || "employee",
         payType: employee.payType || "hourly",
         payRate: employee.payRate || "0",
       },
@@ -156,6 +201,79 @@ router.get("/me/tasks", requireAuth, async (req, res, next) => {
         attachment: t.attachment || null,
       })),
     });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get("/me/time-logs", requireAuth, async (req, res, next) => {
+  try {
+    const ctx = await requireEmployeeSelf(req, res);
+    if (!ctx) return;
+    const { employee } = ctx;
+
+    const entries = await TimeEntry.find({ employee: employee.name })
+      .sort({ date: -1 })
+      .limit(50)
+      .lean();
+
+    const items = entries.map((entry) => ({
+      id: String(entry._id),
+      date: entry.date,
+      clock_in: entry.clockInAt || entry.clockIn || "",
+      clock_out: entry.clockOutAt || entry.clockOut || "",
+      total_hours: Number(entry.totalHours || 0),
+      status: entry.clockOutAt || entry.clockOut ? "completed" : "active",
+    }));
+
+    res.json({ success: true, items });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get("/me/time-logs/summary", requireAuth, async (req, res, next) => {
+  try {
+    const ctx = await requireEmployeeSelf(req, res);
+    if (!ctx) return;
+    const { employee } = ctx;
+
+    const now = new Date();
+    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+    
+    // Calculate start of week without mutating 'now'
+    const startOfWeek = new Date(startOfToday);
+    const day = startOfWeek.getDay();
+    const diff = day === 0 ? -6 : 1 - day; // Adjust to Monday
+    startOfWeek.setDate(startOfWeek.getDate() + diff);
+
+    const allEntries = await TimeEntry.find({ employee: employee.name }).lean();
+
+    const summary = {
+      today: 0,
+      thisWeek: 0,
+      thisMonth: 0,
+      allTime: 0,
+    };
+
+    allEntries.forEach((entry) => {
+      const entryDate = new Date(entry.date);
+      const hours = Number(entry.totalHours || 0);
+
+      summary.allTime += hours;
+      if (entryDate >= startOfToday) {
+        summary.today += hours;
+      }
+      if (entryDate >= startOfWeek) {
+        summary.thisWeek += hours;
+      }
+      if (entryDate >= startOfMonth) {
+        summary.thisMonth += hours;
+      }
+    });
+
+    res.json({ success: true, item: summary });
   } catch (err) {
     next(err);
   }

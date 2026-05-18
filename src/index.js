@@ -56,11 +56,28 @@ const trademarksRoutes = require("./routes/trademarks");
 const travelCalendarRoutes = require("./routes/travelCalendar");
 const dropboxRoutes = require("./routes/dropbox");
 const shoppingListsRoutes = require("./routes/shoppingLists");
+const leaveRequestsRoutes = require("./routes/leaveRequests");
 const clearhireRoutes = require("./routes/clearhire");
 const systemSettingsRoutes = require("./routes/systemSettings");
 const assetLibraryHeaderSettingsRoutes = require("./routes/assetLibraryHeaderSettings");
+const emailRoutes = require("./routes/email");
+
+const crmCompanyRoutes = require("./routes/crmcompany");
+const crmContactsRoutes = require("./routes/crmcontacts");
+const crmDealsRoutes = require("./routes/crmdeals");
+const crmTasksRoutes = require("./routes/crmtasks");
+const crmDashboardRoutes = require("./routes/crmdashboard");
+const crmFilesRoutes = require("./routes/crmfiles");
+const crmCommunicationRoutes = require("./routes/crmcommunication");
+
 const memeRoutes = require("./routes/meme");
+
 const announcementsRoutes = require("./routes/announcements");
+
+const milestonesRoutes = require("./routes/milestones");
+const atlasbookRoutes = require("./routes/atlasbook");
+
+
 
 //going to express now
 const app = express();
@@ -336,12 +353,28 @@ app.use("/api/trademarks", trademarksRoutes);
 app.use("/api/travel-calendar", travelCalendarRoutes);
 app.use("/api/dropbox", dropboxRoutes);
 app.use("/api/shopping-lists", shoppingListsRoutes);
+app.use("/api/leave-requests", leaveRequestsRoutes);
 app.use("/api/email-accounts", emailAccountsRoutes);
 app.use("/api/clearhire", clearhireRoutes);
 app.use("/api/system-settings", systemSettingsRoutes);
 app.use("/api/asset-library-header-settings", assetLibraryHeaderSettingsRoutes);
+app.use("/api/email", emailRoutes);
+
+app.use("/api/crm-company", crmCompanyRoutes);
+app.use("/api/crm-contacts", crmContactsRoutes);
+app.use("/api/crm-deals", crmDealsRoutes);
+app.use("/api/crm-tasks", crmTasksRoutes);
+app.use("/api/crm-dashboard", crmDashboardRoutes);
+app.use("/api/crm-files", crmFilesRoutes);
+app.use("/api/crm-communication", crmCommunicationRoutes);
 app.use("/api/meme", memeRoutes);
+
 app.use("/api/announcements", announcementsRoutes);
+
+app.use("/api/milestones", milestonesRoutes);
+app.use("/api/atlasbook", atlasbookRoutes);
+
+
 
 app.use(notFoundHandler);
 app.use(errorHandler);
