@@ -77,7 +77,8 @@ async function requireEmployeeSelf(req, res) {
 
   const username = String(req.user?.username || "").trim();
   const name = String(req.user?.name || "").trim();
-  const normalizedCandidates = [username, name].map((v) => v.toLowerCase()).filter(Boolean);
+  const email = String(req.user?.email || "").trim();
+  const normalizedCandidates = [username, name, email].map((v) => v.toLowerCase()).filter(Boolean);
 
   // Primary path: employee JWT uses Employee._id in `sub`.
   let employee = await Employee.findById(userId, { passwordHash: 0 }).lean();
@@ -90,6 +91,21 @@ async function requireEmployeeSelf(req, res) {
         $or: [
           { email: { $in: candidateRegexes } },
           { name: { $in: candidateRegexes } },
+          { username: { $in: candidateRegexes } },
+        ],
+      },
+      { passwordHash: 0 }
+    ).lean();
+  }
+
+  // Last resort: search by any partial match for managers who might have been created manually
+  if (!employee && normalizedCandidates.length > 0) {
+    const anyCandidate = normalizedCandidates[0];
+    employee = await Employee.findOne(
+      {
+        $or: [
+          { email: new RegExp(escapeRegExp(anyCandidate), "i") },
+          { name: new RegExp(escapeRegExp(anyCandidate), "i") },
         ],
       },
       { passwordHash: 0 }
@@ -104,7 +120,7 @@ async function requireEmployeeSelf(req, res) {
   const user = {
     _id: employee._id,
     username: username || employee.email || employee.name || "",
-    email: employee.email || "",
+    email: email || employee.email || "",
     name: name || employee.name || "",
     role,
   };
@@ -134,7 +150,7 @@ async function requireEmployeeSelf(req, res) {
         status: employee.status || "active",
         avatarUrl: avatarUrl || undefined,
         username: user.username || user.email || "",
-        role: "employee",
+        role: user.role || "employee",
         payType: employee.payType || "hourly",
         payRate: employee.payRate || "0",
       },

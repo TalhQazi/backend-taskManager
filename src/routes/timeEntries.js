@@ -157,7 +157,7 @@ async function writeAuditLogs({ timeEntryId, before, after, editedByUserId, ipAd
   }
 }
 
-router.get("/", requireAuth, async (req, res, next) => {
+router.get("/", requireAuth, requireRole(["manager", "admin", "super-admin"]), async (req, res, next) => {
   try {
     const employeeQuery = String(req.query?.employee || "").trim();
     const { page, limit, skip } = parsePagination(req.query);
