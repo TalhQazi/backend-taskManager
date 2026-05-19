@@ -863,6 +863,51 @@ router.post("/me/clock-out-with-scrum", requireAuth, async (req, res, next) => {
 
     await entry.save();
 
+    // Automatically create or update EOD report
+    try {
+      const EODReport = require("../models/EODReport");
+      let eodData = null;
+      try {
+        eodData = JSON.parse(scrum);
+      } catch {
+        eodData = { tasksCompleted: scrum.trim(), issuesBlockers: "", notes: "" };
+      }
+
+      if (eodData) {
+        const start = new Date(entry.date);
+        start.setHours(0, 0, 0, 0);
+        const end = new Date(entry.date);
+        end.setHours(23, 59, 59, 999);
+
+        const existingReport = await EODReport.findOne({
+          userId: String(user._id),
+          date: { $gte: start, $lte: end },
+        });
+
+        if (existingReport) {
+          existingReport.rawInput = JSON.stringify(eodData);
+          existingReport.status = "submitted";
+          existingReport.timeEntryId = entry._id;
+          await existingReport.save();
+        } else {
+          await EODReport.create({
+            userId: String(user._id),
+            employeeId: String(employee._id),
+            employeeName: employee.name,
+            date: entry.date || new Date(),
+            rawInput: JSON.stringify(eodData),
+            inputType: "text",
+            status: "submitted",
+            timeEntryId: entry._id,
+          });
+        }
+        const { cacheDel } = require("../lib/cache");
+        cacheDel("eod-reports:*").catch(() => {});
+      }
+    } catch (err) {
+      console.error("Failed to sync EOD report on employee clock-out-with-scrum:", err);
+    }
+
     // Create notification for admin
     await createNotification({
       actor: employee.name,
