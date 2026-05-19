@@ -85,6 +85,8 @@ router.get("/eod-status", requireAuth, requireRole(["manager", "admin", "super-a
             status: "not_clocked_in",
             clockIn: undefined,
             clockOut: undefined,
+            clockInAt: undefined,
+            clockOutAt: undefined,
             reportSubmittedAt: undefined,
           };
         }
@@ -101,6 +103,8 @@ router.get("/eod-status", requireAuth, requireRole(["manager", "admin", "super-a
               status: "missing",
               clockIn: timeEntry.clockIn || formatTime(timeEntry.clockInAt),
               clockOut: timeEntry.clockOut || formatTime(timeEntry.clockOutAt),
+              clockInAt: timeEntry.clockInAt || null,
+              clockOutAt: timeEntry.clockOutAt || null,
               reportSubmittedAt: undefined,
             };
           }
@@ -111,6 +115,8 @@ router.get("/eod-status", requireAuth, requireRole(["manager", "admin", "super-a
             status: "not_clocked_in",
             clockIn: timeEntry.clockIn || formatTime(timeEntry.clockInAt),
             clockOut: undefined,
+            clockInAt: timeEntry.clockInAt || null,
+            clockOutAt: undefined,
             reportSubmittedAt: undefined,
           };
         }
@@ -135,6 +141,8 @@ router.get("/eod-status", requireAuth, requireRole(["manager", "admin", "super-a
           status,
           clockIn: timeEntry.clockIn || formatTime(timeEntry.clockInAt),
           clockOut: timeEntry.clockOut || formatTime(timeEntry.clockOutAt),
+          clockInAt: timeEntry.clockInAt || null,
+          clockOutAt: timeEntry.clockOutAt || null,
           reportSubmittedAt: eodReport.createdAt,
         };
       })
@@ -208,6 +216,8 @@ router.get("/eod-reports", requireAuth, requireRole(["manager", "admin", "super-
           createdAt: report.createdAt,
           clockIn: timeEntry?.clockIn || formatTime(timeEntry?.clockInAt),
           clockOut: timeEntry?.clockOut || formatTime(timeEntry?.clockOutAt),
+          clockInAt: timeEntry?.clockInAt || null,
+          clockOutAt: timeEntry?.clockOutAt || null,
           totalHours: timeEntry?.totalHours,
           aiSummary: report.aiSummary || "",
           productivityScore: report.productivityScore,
@@ -248,6 +258,8 @@ router.get("/eod-reports/:id", requireAuth, requireRole(["manager", "admin", "su
       createdAt: report.createdAt,
       clockIn: timeEntry?.clockIn || formatTime(timeEntry?.clockInAt),
       clockOut: timeEntry?.clockOut || formatTime(timeEntry?.clockOutAt),
+      clockInAt: timeEntry?.clockInAt || null,
+      clockOutAt: timeEntry?.clockOutAt || null,
       totalHours: timeEntry?.totalHours,
       aiSummary: report.aiSummary || "",
       productivityScore: report.productivityScore,
