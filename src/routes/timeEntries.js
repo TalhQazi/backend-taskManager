@@ -55,6 +55,8 @@ const adminUiSchema = z.object({
   date: z.string().min(1),
   clockIn: z.string().min(1),
   clockOut: z.string().nullable().optional(),
+  clockInAt: z.string().optional(),
+  clockOutAt: z.string().optional(),
   status: z.string().optional(),
 });
 
@@ -224,6 +226,8 @@ router.post("/", requireAuth, async (req, res, next) => {
         date: new Date(adminParsed.data.date),
         clockIn: adminParsed.data.clockIn,
         clockOut: adminParsed.data.clockOut || "",
+        clockInAt: adminParsed.data.clockInAt ? toDateSafe(adminParsed.data.clockInAt) : undefined,
+        clockOutAt: adminParsed.data.clockOutAt ? toDateSafe(adminParsed.data.clockOutAt) : undefined,
         breakTime: "",
         totalHours: 0,
         status: adminParsed.data.clockOut ? "complete" : "incomplete",
