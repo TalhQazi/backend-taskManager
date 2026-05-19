@@ -413,9 +413,19 @@ router.post("/:id/clock-out", requireAuth, async (req, res, next) => {
       return res.status(400).json({ error: { message: "Already clocked out" } });
     }
 
-    entry.clockOutAt = new Date();
+    const now = new Date();
+    entry.clockOutAt = now;
+    entry.clockOut = now.toTimeString().slice(0, 5);
     entry.status = "complete";
     entry.totalHours = calcTotalHours(entry);
+
+    // Accept optional EOD/scrum data from body
+    const body = req.body || {};
+    if (typeof body.eodReport === "object" && body.eodReport !== null) {
+      entry.scrum = JSON.stringify(body.eodReport);
+    } else if (typeof body.scrum === "string" && body.scrum.trim()) {
+      entry.scrum = body.scrum.trim();
+    }
 
     const check = await evaluateMealBreakCompliance({ timeEntry: entry.toObject(), now: new Date() });
     if (check?.hardStop) {
