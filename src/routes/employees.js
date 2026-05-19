@@ -1085,7 +1085,7 @@ router.get("/me/eod-reports", requireAuth, async (req, res, next) => {
       rawInput: report.rawInput,
       inputType: report.inputType,
       status: report.status,
-      createdAt: report.createdAt,
+      createdAt: report.updatedAt || report.createdAt,
     }));
 
     return res.json({ items, total, page: Number(page), limit: Number(limit) });

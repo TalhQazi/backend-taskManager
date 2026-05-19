@@ -122,7 +122,7 @@ router.get("/eod-status", requireAuth, requireRole(["manager", "admin", "super-a
         }
 
         const clockOutTime = timeEntry.clockOutAt || timeEntry.clockOut;
-        const reportTime = eodReport.createdAt;
+        const reportTime = eodReport.updatedAt || eodReport.createdAt;
         let status = "submitted";
 
         if (clockOutTime && reportTime) {
@@ -143,7 +143,7 @@ router.get("/eod-status", requireAuth, requireRole(["manager", "admin", "super-a
           clockOut: timeEntry.clockOut || formatTime(timeEntry.clockOutAt),
           clockInAt: timeEntry.clockInAt || null,
           clockOutAt: timeEntry.clockOutAt || null,
-          reportSubmittedAt: eodReport.createdAt,
+          reportSubmittedAt: eodReport.updatedAt || eodReport.createdAt,
         };
       })
     );
@@ -213,7 +213,7 @@ router.get("/eod-reports", requireAuth, requireRole(["manager", "admin", "super-
           rawInput: report.rawInput,
           inputType: report.inputType,
           status: report.status,
-          createdAt: report.createdAt,
+          createdAt: report.updatedAt || report.createdAt,
           clockIn: timeEntry?.clockIn || formatTime(timeEntry?.clockInAt),
           clockOut: timeEntry?.clockOut || formatTime(timeEntry?.clockOutAt),
           clockInAt: timeEntry?.clockInAt || null,
@@ -255,7 +255,7 @@ router.get("/eod-reports/:id", requireAuth, requireRole(["manager", "admin", "su
       rawInput: report.rawInput,
       inputType: report.inputType,
       status: report.status,
-      createdAt: report.createdAt,
+      createdAt: report.updatedAt || report.createdAt,
       clockIn: timeEntry?.clockIn || formatTime(timeEntry?.clockInAt),
       clockOut: timeEntry?.clockOut || formatTime(timeEntry?.clockOutAt),
       clockInAt: timeEntry?.clockInAt || null,
