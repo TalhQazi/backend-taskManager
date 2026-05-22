@@ -35,6 +35,26 @@ router.post("/status/start-lunch", requireAuth, async (req, res, next) => {
     }
 
     const now = new Date();
+
+    // Check if lunch was already started today
+    const startOfToday = new Date(now);
+    startOfToday.setHours(0, 0, 0, 0);
+    const endOfToday = new Date(now);
+    endOfToday.setHours(23, 59, 59, 999);
+
+    const existingLunch = await ActivityLog.findOne({
+      $or: [
+        { actorUserId: String(req.user.id) },
+        { resourceId: String(req.user.id) }
+      ],
+      action: "start_lunch",
+      createdAt: { $gte: startOfToday, $lte: endOfToday }
+    });
+
+    if (existingLunch) {
+      return res.status(400).json({ error: { message: "You have already taken your lunch break today." } });
+    }
+
     const expectedEnd = new Date(now.getTime() + 30 * 60 * 1000); // 30 minutes
 
     employee.current_status = "LUNCH";
@@ -143,8 +163,27 @@ router.post("/status/start-break", requireAuth, async (req, res, next) => {
       return res.status(404).json({ error: { message: "Employee not found" } });
     }
 
+    const now = new Date();
+    const startOfToday = new Date(now);
+    startOfToday.setHours(0, 0, 0, 0);
+    const endOfToday = new Date(now);
+    endOfToday.setHours(23, 59, 59, 999);
+
+    const existingBreak = await ActivityLog.findOne({
+      $or: [
+        { actorUserId: String(req.user.id) },
+        { resourceId: String(req.user.id) }
+      ],
+      action: "start_break",
+      createdAt: { $gte: startOfToday, $lte: endOfToday }
+    });
+
+    if (existingBreak) {
+      return res.status(400).json({ error: { message: "You have already taken your short break today." } });
+    }
+
     employee.current_status = "BREAK";
-    employee.break_start_time = new Date();
+    employee.break_start_time = now;
     employee.lunch_start_time = null;
     employee.lunch_expected_end = null;
 
