@@ -153,6 +153,10 @@ async function requireEmployeeSelf(req, res) {
         role: user.role || "employee",
         payType: employee.payType || "hourly",
         payRate: employee.payRate || "0",
+        current_status: employee.current_status || "AVAILABLE",
+        lunch_start_time: employee.lunch_start_time || null,
+        lunch_expected_end: employee.lunch_expected_end || null,
+        break_start_time: employee.break_start_time || null,
       },
     });
   } catch (err) {

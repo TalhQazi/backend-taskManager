@@ -278,7 +278,11 @@ router.get("/conversations/:user", requireAuth, async (req, res, next) => {
             email: emp.email,
             department: emp.department || "",
             status: emp.status || "active",
-            initials: emp.initials || emp.name.split(" ").map(n => n[0]).slice(0, 2).join("").toUpperCase()
+            initials: emp.initials || emp.name.split(" ").map(n => n[0]).slice(0, 2).join("").toUpperCase(),
+            current_status: emp.current_status || "AVAILABLE",
+            lunch_start_time: emp.lunch_start_time || null,
+            lunch_expected_end: emp.lunch_expected_end || null,
+            break_start_time: emp.break_start_time || null
           },
           lastMessage: null,
           unreadCount: 0

@@ -56,6 +56,12 @@ const ActivityLogSchema = new mongoose.Schema(
         "PROJECT_UPDATE",
         "PROJECT_ARCHIVE",
         "PROJECT_COMMENT_CREATE",
+        "start_lunch",
+        "end_lunch",
+        "start_break",
+        "end_break",
+        "late_return",
+        "auto_expire",
         "OTHER"
       ]
     },

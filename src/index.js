@@ -61,6 +61,7 @@ const clearhireRoutes = require("./routes/clearhire");
 const systemSettingsRoutes = require("./routes/systemSettings");
 const assetLibraryHeaderSettingsRoutes = require("./routes/assetLibraryHeaderSettings");
 const emailRoutes = require("./routes/email");
+const userStatusRoutes = require("./routes/userStatus");
 
 const crmCompanyRoutes = require("./routes/crmcompany");
 const crmContactsRoutes = require("./routes/crmcontacts");
@@ -360,6 +361,8 @@ app.use("/api/clearhire", clearhireRoutes);
 app.use("/api/system-settings", systemSettingsRoutes);
 app.use("/api/asset-library-header-settings", assetLibraryHeaderSettingsRoutes);
 app.use("/api/email", emailRoutes);
+app.use("/api/user", userStatusRoutes);
+app.use("/api/team", userStatusRoutes);
 
 app.use("/api/crm-company", crmCompanyRoutes);
 app.use("/api/crm-contacts", crmContactsRoutes);
@@ -404,6 +407,16 @@ connectDb()
         runAnnouncementScheduler().catch((err) => console.error("[Announcements] Scheduler error:", err));
       },
       5 * 60 * 1000
+    );
+    // Start background status expiry scheduler
+    const { checkStatusExpiry } = require("./jobs/statusExpiryJob");
+    checkStatusExpiry().catch((err) => console.error("[Status Expiry] Startup check error:", err));
+    // Run status expiry check every 30 seconds
+    setInterval(
+      () => {
+        checkStatusExpiry().catch((err) => console.error("[Status Expiry] Interval check error:", err));
+      },
+      30 * 1000
     );
     
     httpServer.listen(port, () => {
