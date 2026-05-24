@@ -62,6 +62,7 @@ const systemSettingsRoutes = require("./routes/systemSettings");
 const assetLibraryHeaderSettingsRoutes = require("./routes/assetLibraryHeaderSettings");
 const emailRoutes = require("./routes/email");
 const userStatusRoutes = require("./routes/userStatus");
+const itinerariesRoutes = require("./routes/itineraries");
 
 const crmCompanyRoutes = require("./routes/crmcompany");
 const crmContactsRoutes = require("./routes/crmcontacts");
@@ -363,6 +364,7 @@ app.use("/api/asset-library-header-settings", assetLibraryHeaderSettingsRoutes);
 app.use("/api/email", emailRoutes);
 app.use("/api/user", userStatusRoutes);
 app.use("/api/team", userStatusRoutes);
+app.use("/api/itineraries", itinerariesRoutes);
 
 app.use("/api/crm-company", crmCompanyRoutes);
 app.use("/api/crm-contacts", crmContactsRoutes);
