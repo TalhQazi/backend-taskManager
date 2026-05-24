@@ -63,6 +63,7 @@ const assetLibraryHeaderSettingsRoutes = require("./routes/assetLibraryHeaderSet
 const emailRoutes = require("./routes/email");
 const userStatusRoutes = require("./routes/userStatus");
 const itinerariesRoutes = require("./routes/itineraries");
+const followUpsRoutes = require("./routes/followUps");
 
 const crmCompanyRoutes = require("./routes/crmcompany");
 const crmContactsRoutes = require("./routes/crmcontacts");
@@ -365,6 +366,7 @@ app.use("/api/email", emailRoutes);
 app.use("/api/user", userStatusRoutes);
 app.use("/api/team", userStatusRoutes);
 app.use("/api/itineraries", itinerariesRoutes);
+app.use("/api/tasks", followUpsRoutes);
 
 app.use("/api/crm-company", crmCompanyRoutes);
 app.use("/api/crm-contacts", crmContactsRoutes);
@@ -399,6 +401,13 @@ connectDb()
     const { checkAnnualReportReminders } = require("./utils/reminders");
     checkAnnualReportReminders(); // Run once on startup
     setInterval(checkAnnualReportReminders, 24 * 60 * 60 * 1000); // Run every 24 hours
+
+    // Start background follow-up timers cron worker
+    const { processFollowUpTimers } = require("./jobs/followUpJob");
+    processFollowUpTimers().catch((err) => console.error("[Follow-Up Job] Startup run failed:", err));
+    setInterval(() => {
+      processFollowUpTimers().catch((err) => console.error("[Follow-Up Job] Interval run failed:", err));
+    }, 60 * 1000);
 
     // Initialize announcement scheduler
     const { runAllTasks: runAnnouncementScheduler } = require("./lib/announcementScheduler");
