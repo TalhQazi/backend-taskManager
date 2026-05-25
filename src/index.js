@@ -64,6 +64,7 @@ const emailRoutes = require("./routes/email");
 const userStatusRoutes = require("./routes/userStatus");
 const itinerariesRoutes = require("./routes/itineraries");
 const followUpsRoutes = require("./routes/followUps");
+const newHireReportsRoutes = require("./routes/newHireReports");
 
 const crmCompanyRoutes = require("./routes/crmcompany");
 const crmContactsRoutes = require("./routes/crmcontacts");
@@ -367,6 +368,7 @@ app.use("/api/user", userStatusRoutes);
 app.use("/api/team", userStatusRoutes);
 app.use("/api/itineraries", itinerariesRoutes);
 app.use("/api/tasks", followUpsRoutes);
+app.use("/api/new-hire-reports", newHireReportsRoutes);
 
 app.use("/api/crm-company", crmCompanyRoutes);
 app.use("/api/crm-contacts", crmContactsRoutes);
@@ -407,6 +409,13 @@ connectDb()
     processFollowUpTimers().catch((err) => console.error("[Follow-Up Job] Startup run failed:", err));
     setInterval(() => {
       processFollowUpTimers().catch((err) => console.error("[Follow-Up Job] Interval run failed:", err));
+    }, 60 * 1000);
+
+    // Start background New Hire submissions cron worker
+    const { processNewHireSubmissions } = require("./jobs/newHireJob");
+    processNewHireSubmissions().catch((err) => console.error("[New Hire Job] Startup run failed:", err));
+    setInterval(() => {
+      processNewHireSubmissions().catch((err) => console.error("[New Hire Job] Interval run failed:", err));
     }, 60 * 1000);
 
     // Initialize announcement scheduler

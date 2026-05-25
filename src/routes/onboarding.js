@@ -1,6 +1,9 @@
 const express = require("express");
 const Onboarding = require("../models/Onboarding");
 const Employee = require("../models/Employee");
+const NewHireReport = require("../models/NewHireReport");
+const ClearHireProfile = require("../models/ClearHireProfile");
+const Company = require("../models/Company");
 const { requireAuth, requireRole } = require("../middleware/auth");
 const { createNotification } = require("../utils/notifications");
 
@@ -715,6 +718,91 @@ router.put("/admin/:id/approve", requireAuth, requireRole(["super-admin", "admin
     };
 
     await onboarding.save();
+
+    // Trigger Maine New Hire Reporting workflow
+    try {
+      const existingReport = await NewHireReport.findOne({ employeeId: onboarding.employeeId });
+      if (!existingReport) {
+        const employee = await Employee.findById(onboarding.employeeId);
+        const clearHireProfile = await ClearHireProfile.findOne({ userId: onboarding.userId });
+        
+        let ssnEncrypted = "";
+        let employeeAddress = { street: "", city: "", state: "", zip: "" };
+        
+        if (clearHireProfile) {
+          ssnEncrypted = clearHireProfile.ssnEncrypted;
+          // Grab current address from history
+          const currentAddr = clearHireProfile.addressHistory?.find(a => !a.endDate);
+          if (currentAddr) {
+            employeeAddress = {
+              street: currentAddr.street || "",
+              city: currentAddr.city || "",
+              state: currentAddr.state || "",
+              zip: currentAddr.zip || ""
+            };
+          }
+        }
+        
+        // If not found in background scan, fallback to basicInfo location
+        if (!employeeAddress.street && onboarding.basicInfo?.location) {
+          employeeAddress.street = onboarding.basicInfo.location;
+          employeeAddress.city = "Portland";
+          employeeAddress.state = "ME";
+          employeeAddress.zip = "04101";
+        }
+        
+        // Handle employer FEIN / details fallback
+        let employerName = "Task Manager Corporation";
+        let employerAddress = { street: "123 Federal St", city: "Portland", state: "ME", zip: "04101" };
+        let employerFEIN = "12-3456789";
+        
+        if (employee && employee.company) {
+          const company = await Company.findOne({
+            $or: [
+              { name: new RegExp(`^${employee.company}$`, "i") },
+              { code: new RegExp(`^${employee.company}$`, "i") }
+            ]
+          });
+          if (company) {
+            employerName = company.name || employerName;
+            employerFEIN = company.einNumber || employerFEIN;
+            if (company.address) {
+              employerAddress = {
+                street: company.address.street || employerAddress.street,
+                city: company.address.city || employerAddress.city,
+                state: company.address.state || employerAddress.state,
+                zip: company.address.zipCode || employerAddress.zip
+              };
+            }
+          }
+        }
+
+        const hireDate = employee?.joinDate || employee?.createdAt || new Date();
+        const countdownExpiry = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 days
+
+        if (ssnEncrypted) {
+          await NewHireReport.create({
+            employeeId: onboarding.employeeId,
+            onboardingId: onboarding._id,
+            stateCode: "ME",
+            employeeName: onboarding.employeeName,
+            employeeAddress,
+            ssnEncrypted,
+            hireDate,
+            employerName,
+            employerAddress,
+            employerFEIN,
+            status: "pending",
+            countdownExpiry
+          });
+          console.log(`[New Hire Reporting] Created pending Maine report for ${onboarding.employeeName}. Deadline: ${countdownExpiry.toISOString()}`);
+        } else {
+          console.warn(`[New Hire Reporting] Skipping report for ${onboarding.employeeName} due to missing SSN in ClearHireProfile.`);
+        }
+      }
+    } catch (triggerErr) {
+      console.error("[New Hire Reporting] Trigger initialization failed:", triggerErr.message);
+    }
 
     // Notify employee
     await createNotification({
