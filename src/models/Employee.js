@@ -15,6 +15,7 @@ const EmployeeSchema = new mongoose.Schema(
     payRate: { type: String, default: "" },
     shift: { type: String, default: "" },
     hireDate: { type: String, default: "" },
+    birthDate: { type: String, default: "" },
     joinDate: { type: Date },
     department: { type: String, default: "" },
     userRole: { type: String, default: "" },

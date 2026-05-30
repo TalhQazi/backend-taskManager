@@ -51,6 +51,7 @@ const contributorsRoutes = require("./routes/contributors");
 const eodReportsRoutes = require("./routes/eodReports");
 const emailAccountsRoutes = require("./routes/emailAccounts");
 const uiPreferencesRoutes = require("./routes/uiPreferences");
+const { router: videoMessagesRoutes, historyRouter: videoUserHistoryRoutes } = require("./routes/videoMessages");
 const vendorCategoriesRoutes = require("./routes/vendorCategories");
 const trademarksRoutes = require("./routes/trademarks");
 const travelCalendarRoutes = require("./routes/travelCalendar");
@@ -384,6 +385,8 @@ app.use("/api/meme", memeRoutes);
 app.use("/api/announcements", announcementsRoutes);
 
 app.use("/api/milestones", milestonesRoutes);
+app.use("/api/video", videoMessagesRoutes);
+app.use("/api/user", videoUserHistoryRoutes);
 app.use("/api/atlasbook", atlasbookRoutes);
 
 
