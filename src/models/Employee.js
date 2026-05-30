@@ -27,6 +27,11 @@ const EmployeeSchema = new mongoose.Schema(
     milestoneLevel: { type: String, enum: ["30d", "90d", "6m", "1y", "2y", "3y", "4y", "5y", "6y", "7y", "8y", "9y", "10y"], default: null },
     milestoneOverlayActive: { type: Boolean, default: false },
     milestoneOverlayExpires: { type: Date, default: null },
+    // Lunch/Break status fields
+    current_status: { type: String, enum: ["AVAILABLE", "LUNCH", "BREAK"], default: "AVAILABLE" },
+    lunch_start_time: { type: Date, default: null },
+    lunch_expected_end: { type: Date, default: null },
+    break_start_time: { type: Date, default: null },
     // Email notification preferences
     emailPreferences: {
       userRegistration: { type: Boolean, default: true },

@@ -61,6 +61,10 @@ const clearhireRoutes = require("./routes/clearhire");
 const systemSettingsRoutes = require("./routes/systemSettings");
 const assetLibraryHeaderSettingsRoutes = require("./routes/assetLibraryHeaderSettings");
 const emailRoutes = require("./routes/email");
+const userStatusRoutes = require("./routes/userStatus");
+const itinerariesRoutes = require("./routes/itineraries");
+const followUpsRoutes = require("./routes/followUps");
+const newHireReportsRoutes = require("./routes/newHireReports");
 
 const crmCompanyRoutes = require("./routes/crmcompany");
 const crmContactsRoutes = require("./routes/crmcontacts");
@@ -361,6 +365,11 @@ app.use("/api/clearhire", clearhireRoutes);
 app.use("/api/system-settings", systemSettingsRoutes);
 app.use("/api/asset-library-header-settings", assetLibraryHeaderSettingsRoutes);
 app.use("/api/email", emailRoutes);
+app.use("/api/user", userStatusRoutes);
+app.use("/api/team", userStatusRoutes);
+app.use("/api/itineraries", itinerariesRoutes);
+app.use("/api/tasks", followUpsRoutes);
+app.use("/api/new-hire-reports", newHireReportsRoutes);
 
 app.use("/api/crm-company", crmCompanyRoutes);
 app.use("/api/crm-contacts", crmContactsRoutes);
@@ -397,6 +406,20 @@ connectDb()
     checkAnnualReportReminders(); // Run once on startup
     setInterval(checkAnnualReportReminders, 24 * 60 * 60 * 1000); // Run every 24 hours
 
+    // Start background follow-up timers cron worker
+    const { processFollowUpTimers } = require("./jobs/followUpJob");
+    processFollowUpTimers().catch((err) => console.error("[Follow-Up Job] Startup run failed:", err));
+    setInterval(() => {
+      processFollowUpTimers().catch((err) => console.error("[Follow-Up Job] Interval run failed:", err));
+    }, 60 * 1000);
+
+    // Start background New Hire submissions cron worker
+    const { processNewHireSubmissions } = require("./jobs/newHireJob");
+    processNewHireSubmissions().catch((err) => console.error("[New Hire Job] Startup run failed:", err));
+    setInterval(() => {
+      processNewHireSubmissions().catch((err) => console.error("[New Hire Job] Interval run failed:", err));
+    }, 60 * 1000);
+
     // Initialize announcement scheduler
     const { runAllTasks: runAnnouncementScheduler } = require("./lib/announcementScheduler");
     runAnnouncementScheduler().catch((err) => console.error("[Announcements] Startup scheduler error:", err));
@@ -406,6 +429,16 @@ connectDb()
         runAnnouncementScheduler().catch((err) => console.error("[Announcements] Scheduler error:", err));
       },
       5 * 60 * 1000
+    );
+    // Start background status expiry scheduler
+    const { checkStatusExpiry } = require("./jobs/statusExpiryJob");
+    checkStatusExpiry().catch((err) => console.error("[Status Expiry] Startup check error:", err));
+    // Run status expiry check every 30 seconds
+    setInterval(
+      () => {
+        checkStatusExpiry().catch((err) => console.error("[Status Expiry] Interval check error:", err));
+      },
+      30 * 1000
     );
     
     httpServer.listen(port, () => {
