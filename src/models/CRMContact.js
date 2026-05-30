@@ -28,6 +28,45 @@ const crmContactSchema = new mongoose.Schema(
       enum: ["Active", "Pending", "Inactive"],
       default: "Active",
     },
+    tags: {
+      type: [String],
+      default: [],
+    },
+    relationshipType: {
+      type: String,
+      enum: ["Client", "Lead", "Partner"],
+      default: "Lead",
+    },
+    address: {
+      type: String,
+      trim: true,
+    },
+    notes: {
+      type: String,
+      trim: true,
+    },
+    continuityScore: {
+      type: Number,
+      default: 100,
+      min: 0,
+      max: 100,
+      index: true,
+    },
+    revenueGravityScore: {
+      type: Number,
+      default: 0,
+      min: 0,
+      max: 100,
+      index: true,
+    },
+    accountValue: {
+      type: Number,
+      default: 0,
+    },
+    lastInteractionDate: {
+      type: Date,
+      default: Date.now,
+    },
     createdBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
