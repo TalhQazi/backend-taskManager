@@ -240,7 +240,7 @@ router.get("/conversation/:user1/:user2", requireAuth, async (req, res, next) =>
         { sender: user1, recipient: user2 },
         { sender: user2, recipient: user1 }
       ]
-    }).sort({ timestamp: 1 }).lean();
+    }).sort({ _id: 1 }).lean();
 
     res.json({ items: items.map((x) => withId(decryptOut(x))) });
   } catch (err) {
