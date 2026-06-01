@@ -25,6 +25,23 @@ const { cacheWrap, cacheDel } = require("../lib/cache");
 const { uploadToS3, base64ToBuffer, getFromS3, extractS3Key } = require("../lib/s3");
 const contributionTracker = require("../utils/contributionTracker");
 const { sendEmailNotification } = require("../utils/emailNotifications");
+const Website = require("../models/Website");
+
+async function handleTaskCompletion(task) {
+  try {
+    if (task.status === "completed" && task.websiteId) {
+      const website = await Website.findById(task.websiteId);
+      if (website && (website.websiteType === "in-development" || website.websiteType === "future")) {
+        website.websiteType = "active";
+        website.status = "Live";
+        await website.save();
+        console.log(`[handleTaskCompletion] Website ${website.siteName} promoted to active.`);
+      }
+    }
+  } catch (err) {
+    console.error("[handleTaskCompletion] Error:", err);
+  }
+}
 
 const router = express.Router();
 // Middleware to skip body parsing for multipart/form-data (must be before other middleware)
@@ -1403,6 +1420,10 @@ router.patch("/:id/status", requireAuth, async (req, res, next) => {
       return res.status(404).json({ error: { message: "Task not found" } });
     }
 
+    if (updated.status === "completed") {
+      void handleTaskCompletion(updated);
+    }
+
     // Fire-and-forget
     Promise.allSettled([
       logActivity(req, "TASK_STATUS_UPDATE", "task", req.params.id, updated.title, `Updated task status: ${updated.title} -> ${status}`),
@@ -1524,6 +1545,10 @@ router.put("/:id", requireAuth, async (req, res, next) => {
 
     if (!updated) {
       return res.status(404).json({ error: { message: "Task not found" } });
+    }
+
+    if (updated.status === "completed") {
+      void handleTaskCompletion(updated);
     }
 
     // Fire-and-forget

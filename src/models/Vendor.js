@@ -11,7 +11,7 @@ const vendorSchema = new mongoose.Schema(
     zip: { type: String, default: "" },
     website: { type: String, default: "" },
     serviceType: { type: String, required: true },
-    location: { type: String, required: true },
+    location: { type: String, required: false },
     status: { 
       type: String, 
       enum: ["approved", "not-approved"], 

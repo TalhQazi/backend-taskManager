@@ -4,6 +4,7 @@ const multer = require("multer");
 
 const Message = require("../models/Message");
 const Employee = require("../models/Employee");
+const Settings = require("../models/Settings");
 const { requireAuth } = require("../middleware/auth");
 const { encrypt, decrypt } = require("../lib/encryption");
 const { checkAndFlagOffTheClock } = require("../lib/offTheClockWork");
@@ -265,12 +266,24 @@ router.get("/conversations/:user", requireAuth, async (req, res, next) => {
     // Get all employees for reference
     const employees = await Employee.find().lean();
 
+    // Resolve profile picture URLs from Settings keyed by Employee._id
+    const empIds = employees.map((e) => String(e._id));
+    const settingsList = empIds.length
+      ? await Settings.find({ userId: { $in: empIds } })
+          .select("userId avatarUrl avatarDataUrl")
+          .lean()
+      : [];
+    const idToAvatar = new Map(
+      settingsList.map((s) => [String(s.userId), String(s.avatarDataUrl || s.avatarUrl || "").trim()])
+    );
+
     // Group by conversation partner
     const conversationMap = new Map();
 
     // Initialize with all active employees
     employees.forEach((emp) => {
       if (emp.name !== user) {
+        const avatarUrl = idToAvatar.get(String(emp._id)) || "";
         conversationMap.set(emp.name, {
           employee: {
             id: String(emp._id),
@@ -279,6 +292,7 @@ router.get("/conversations/:user", requireAuth, async (req, res, next) => {
             department: emp.department || "",
             status: emp.status || "active",
             initials: emp.initials || emp.name.split(" ").map(n => n[0]).slice(0, 2).join("").toUpperCase(),
+            avatarUrl: avatarUrl || undefined,
             current_status: emp.current_status || "AVAILABLE",
             lunch_start_time: emp.lunch_start_time || null,
             lunch_expected_end: emp.lunch_expected_end || null,

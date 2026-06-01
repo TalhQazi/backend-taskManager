@@ -46,12 +46,13 @@ const shoppingListSchema = z.object({
 const shoppingListItemSchema = z.object({
   name: z.string().min(1, "Item name is required"),
   quantity: z.string().optional().default("1"),
-  vendorId: z.string().optional(),
+  vendorId: z.string().optional().nullable(),
   category: z.string().optional().default("General"),
   priority: z.enum(["low", "medium", "high"]).optional().default("medium"),
   notes: z.string().optional().default(""),
   isPurchased: z.boolean().optional().default(false),
   aisle: z.string().optional().default(""),
+  assignedEmployeeId: z.string().optional().nullable(),
 });
 
 // GET /api/shopping-lists
@@ -138,6 +139,7 @@ router.get("/:id", requireAuth, async (req, res, next) => {
 
     const items = await ShoppingListItem.find({ shoppingListId: list._id })
       .populate("vendorId", "name")
+      .populate("assignedEmployeeId", "name username")
       .sort({ isPurchased: 1, createdAt: -1 })
       .lean();
 
@@ -220,6 +222,7 @@ router.put("/items/:itemId", requireAuth, async (req, res, next) => {
 
     const updateData = { ...parsed.data };
     if (updateData.vendorId === "") updateData.vendorId = null;
+    if (updateData.assignedEmployeeId === "") updateData.assignedEmployeeId = null;
     
     if (updateData.isPurchased === true) {
       updateData.purchasedAt = new Date();

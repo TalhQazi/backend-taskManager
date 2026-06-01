@@ -84,6 +84,12 @@ router.get("/:id", requireAuth, async (req, res, next) => {
 
 router.put("/:id", requireAuth, async (req, res, next) => {
   try {
+    const bug = await BugReport.findById(req.params.id);
+    if (!bug) return res.status(404).json({ error: { message: "Bug not found" } });
+
+    const role = String(req.user?.role || "").toLowerCase();
+    const isAdmin = role === "admin" || role === "super-admin";
+
     const patch = {};
     if (typeof req.body?.status === "string") {
       const status = String(req.body.status).trim();
@@ -91,6 +97,22 @@ router.put("/:id", requireAuth, async (req, res, next) => {
         return res.status(400).json({ error: { message: "Invalid status" } });
       }
       patch.status = status;
+    }
+
+    // Title and description update (only if open and user is admin/super-admin)
+    if (req.body?.title !== undefined || req.body?.description !== undefined) {
+      if (!isAdmin) {
+        return res.status(403).json({ error: { message: "Forbidden: Only admins can edit bug details" } });
+      }
+      if (bug.status !== "open") {
+        return res.status(400).json({ error: { message: "Cannot edit bug details when status is not open" } });
+      }
+      if (typeof req.body.title === "string") {
+        patch.title = req.body.title.trim();
+      }
+      if (typeof req.body.description === "string") {
+        patch.description = req.body.description.trim();
+      }
     }
 
     const updated = await BugReport.findByIdAndUpdate(req.params.id, patch, { new: false }).lean();

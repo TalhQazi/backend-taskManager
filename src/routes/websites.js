@@ -1,5 +1,6 @@
 const express = require("express");
 const Website = require("../models/Website");
+const Task = require("../models/Task");
 const { requireAuth } = require("../middleware/auth");
 
 const router = express.Router();
@@ -96,6 +97,61 @@ router.delete("/:id", requireAuth, async (req, res, next) => {
       return res.status(404).json({ error: { message: "Website not found" } });
     }
     res.json({ message: "Website deleted successfully" });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Convert future website to project task (requires auth)
+router.post("/:id/convert-to-task", requireAuth, async (req, res, next) => {
+  try {
+    const { projectId, title, description, priority, assignees } = req.body;
+    if (!projectId) {
+      return res.status(400).json({ error: { message: "projectId is required" } });
+    }
+
+    const website = await Website.findById(req.params.id);
+    if (!website) {
+      return res.status(404).json({ error: { message: "Website not found" } });
+    }
+
+    if (website.websiteType !== "future") {
+      return res.status(400).json({ error: { message: "Only future websites can be launched as tasks" } });
+    }
+
+    // Get the current max task number to assign a taskNumber
+    const maxTask = await Task.findOne().sort({ taskNumber: -1 }).select("taskNumber").lean();
+    const taskNumber = (maxTask?.taskNumber || 0) + 1;
+
+    // Create a new task linked to this website
+    const taskTitle = title || `Launch website: ${website.siteName}`;
+    const taskDescription = description || `Concept: ${website.concept || "N/A"}\nNotes: ${website.notes || "N/A"}\nDomain: ${website.url}`;
+    
+    const newTask = new Task({
+      title: taskTitle,
+      description: taskDescription,
+      projectId,
+      priority: priority || "medium",
+      assignees: Array.isArray(assignees) ? assignees : [],
+      status: "pending",
+      category: "task",
+      websiteId: website._id,
+      taskNumber,
+      createdBy: {
+        userId: String(req.user?.sub || req.user?.id || ""),
+        name: String(req.user?.username || req.user?.name || "System"),
+        role: String(req.user?.role || ""),
+      }
+    });
+
+    await newTask.save();
+
+    // Move website type to "in-development"
+    website.websiteType = "in-development";
+    website.developmentStage = "Development";
+    await website.save();
+
+    res.status(201).json({ item: website, task: newTask });
   } catch (err) {
     next(err);
   }
