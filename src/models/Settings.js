@@ -23,6 +23,7 @@ const SettingsSchema = new mongoose.Schema(
     },
     language: { type: String, default: "en" },
     timezone: { type: String, default: "UTC" },
+    countryCode: { type: String, default: "US" },
     avatarUrl: { type: String, default: "" },
     avatarDataUrl: { type: String, default: "" },
   },

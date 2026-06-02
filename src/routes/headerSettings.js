@@ -1,6 +1,7 @@
 const express = require("express");
 const HeaderSettings = require("../models/HeaderSettings");
 const { requireAuth } = require("../middleware/auth");
+const { getResolvedHolidayTheme } = require("../utils/holidayEngine");
 
 const router = express.Router();
 
@@ -20,8 +21,14 @@ router.get("/", requireAuth, async (req, res, next) => {
     let settings = await HeaderSettings.findOne({ userId }).lean();
     if (!settings) {
       // Create default settings if none exist
-      settings = await HeaderSettings.create({ userId });
+      const doc = await HeaderSettings.create({ userId });
+      settings = doc.toObject();
     }
+
+    // Resolve dynamic active holiday theme
+    const holidayTheme = await getResolvedHolidayTheme(userId);
+    settings.holidayTheme = holidayTheme;
+
     res.json({ item: settings });
   } catch (err) {
     next(err);
