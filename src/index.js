@@ -283,7 +283,7 @@ app.get("/health", (_req, res) => {
 
 // S3 Proxy endpoint — serves S3 files through the backend to avoid CORS/OpaqueResponseBlocking issues
 const { getFromS3 } = require("./lib/s3");
-const { requireAuth } = require("./middleware/auth");
+const { requireAuth, requireClearHire } = require("./middleware/auth");
 
 app.get("/api/s3-proxy/*", requireAuth, async (req, res) => {
   try {
@@ -315,79 +315,80 @@ app.get("/api/s3-proxy/*", requireAuth, async (req, res) => {
 });
 
 app.use("/api/auth", authRoutes);
-app.use("/api/tasks", tasksRoutes);
-app.use("/api/employees", employeesRoutes);
-app.use("/api/manager", eodReportsRoutes);
-app.use("/api/admin", eodReportsRoutes);
-app.use("/api/vehicles", vehiclesRoutes);
-app.use("/api/time-entries", timeEntriesRoutes);
-app.use("/api/appliances", appliancesRoutes);
-app.use("/api/locations", locationsRoutes);
-app.use("/api/do-not-hire", doNotHireRoutes);
-app.use("/api/events", eventsRoutes);
-app.use("/api/schedules", eventsRoutes);
-app.use("/api/messages", messagesRoutes);
-app.use("/api/notifications", messagesRoutes);
-app.use("/api/onboarding", onboardingRoutes);
-app.use("/api/settings", settingsRoutes);
-app.use("/api/reports", reportsRoutes);
-app.use("/api/users", usersRoutes);
-app.use("/api/dashboard", dashboardRoutes);
-app.use("/api/vendors", vendorsRoutes);
-app.use("/api/company-registry", companyRegistryRoutes);
-app.use("/api/compliance", complianceRoutes);
-app.use("/api/activity-logs", activityLogsRoutes);
-app.use("/api/companies", companiesRoutes);
-app.use("/api/asana-import", asanaImportRoutes);
-app.use("/api/bugs", bugsRoutes);
-app.use("/api/projects", projectsRoutes);
-app.use("/api/header-settings", headerSettingsRoutes);
-app.use("/api/admin-info", adminInfoRoutes);
-app.use("/api/websites", websitesRoutes);
-app.use("/api/social-media", socialMediaRoutes);
-app.use("/api/patents", patentsRoutes);
-app.use("/api/credentials", credentialsRoutes);
-app.use("/api/archive", archiveRoutes);
-app.use("/api/team-lead-mappings", teamLeadMappingsRoutes);
-app.use("/api/task-permissions", taskPermissionsRoutes);
-app.use("/api/founder-messages", founderMessagesRoutes);
-app.use("/api/notes", notesRoutes);
-app.use("/api/asset-library", assetLibraryRoutes);
-app.use("/api/contributors", contributorsRoutes);
-app.use("/api/ui-preferences", uiPreferencesRoutes);
-app.use("/api/vendor-categories", vendorCategoriesRoutes);
-app.use("/api/trademarks", trademarksRoutes);
-app.use("/api/travel-calendar", travelCalendarRoutes);
-app.use("/api/dropbox", dropboxRoutes);
-app.use("/api/shopping-lists", shoppingListsRoutes);
-app.use("/api/leave-requests", leaveRequestsRoutes);
-app.use("/api/email-accounts", emailAccountsRoutes);
 app.use("/api/clearhire", clearhireRoutes);
-app.use("/api/system-settings", systemSettingsRoutes);
-app.use("/api/asset-library-header-settings", assetLibraryHeaderSettingsRoutes);
-app.use("/api/email", emailRoutes);
-app.use("/api/user", userStatusRoutes);
-app.use("/api/team", userStatusRoutes);
-app.use("/api/itineraries", itinerariesRoutes);
-app.use("/api/tasks", followUpsRoutes);
-app.use("/api/new-hire-reports", newHireReportsRoutes);
+app.use("/api/onboarding", onboardingRoutes);
+app.use("/api/employees", employeesRoutes); // left open to allow profile checks during onboarding
 
-app.use("/api/crm-company", crmCompanyRoutes);
-app.use("/api/crm-contacts", crmContactsRoutes);
-app.use("/api/crm-deals", crmDealsRoutes);
-app.use("/api/crm-tasks", crmTasksRoutes);
-app.use("/api/crm-dashboard", crmDashboardRoutes);
-app.use("/api/crm-commandcore", crmCommandCoreRoutes);
-app.use("/api/crm-files", crmFilesRoutes);
-app.use("/api/crm-communication", crmCommunicationRoutes);
-app.use("/api/meme", memeRoutes);
+app.use("/api/tasks", requireClearHire, tasksRoutes);
+app.use("/api/manager", requireClearHire, eodReportsRoutes);
+app.use("/api/admin", requireClearHire, eodReportsRoutes);
+app.use("/api/vehicles", requireClearHire, vehiclesRoutes);
+app.use("/api/time-entries", requireClearHire, timeEntriesRoutes);
+app.use("/api/appliances", requireClearHire, appliancesRoutes);
+app.use("/api/locations", requireClearHire, locationsRoutes);
+app.use("/api/do-not-hire", requireClearHire, doNotHireRoutes);
+app.use("/api/events", requireClearHire, eventsRoutes);
+app.use("/api/schedules", requireClearHire, eventsRoutes);
+app.use("/api/messages", requireClearHire, messagesRoutes);
+app.use("/api/notifications", requireClearHire, messagesRoutes);
+app.use("/api/settings", requireClearHire, settingsRoutes);
+app.use("/api/reports", requireClearHire, reportsRoutes);
+app.use("/api/users", requireClearHire, usersRoutes);
+app.use("/api/dashboard", requireClearHire, dashboardRoutes);
+app.use("/api/vendors", requireClearHire, vendorsRoutes);
+app.use("/api/company-registry", requireClearHire, companyRegistryRoutes);
+app.use("/api/compliance", requireClearHire, complianceRoutes);
+app.use("/api/activity-logs", requireClearHire, activityLogsRoutes);
+app.use("/api/companies", requireClearHire, companiesRoutes);
+app.use("/api/asana-import", requireClearHire, asanaImportRoutes);
+app.use("/api/bugs", requireClearHire, bugsRoutes);
+app.use("/api/projects", requireClearHire, projectsRoutes);
+app.use("/api/header-settings", requireClearHire, headerSettingsRoutes);
+app.use("/api/admin-info", requireClearHire, adminInfoRoutes);
+app.use("/api/websites", requireClearHire, websitesRoutes);
+app.use("/api/social-media", requireClearHire, socialMediaRoutes);
+app.use("/api/patents", requireClearHire, patentsRoutes);
+app.use("/api/credentials", requireClearHire, credentialsRoutes);
+app.use("/api/archive", requireClearHire, archiveRoutes);
+app.use("/api/team-lead-mappings", requireClearHire, teamLeadMappingsRoutes);
+app.use("/api/task-permissions", requireClearHire, taskPermissionsRoutes);
+app.use("/api/founder-messages", requireClearHire, founderMessagesRoutes);
+app.use("/api/notes", requireClearHire, notesRoutes);
+app.use("/api/asset-library", requireClearHire, assetLibraryRoutes);
+app.use("/api/contributors", requireClearHire, contributorsRoutes);
+app.use("/api/ui-preferences", requireClearHire, uiPreferencesRoutes);
+app.use("/api/vendor-categories", requireClearHire, vendorCategoriesRoutes);
+app.use("/api/trademarks", requireClearHire, trademarksRoutes);
+app.use("/api/travel-calendar", requireClearHire, travelCalendarRoutes);
+app.use("/api/dropbox", requireClearHire, dropboxRoutes);
+app.use("/api/shopping-lists", requireClearHire, shoppingListsRoutes);
+app.use("/api/leave-requests", requireClearHire, leaveRequestsRoutes);
+app.use("/api/email-accounts", requireClearHire, emailAccountsRoutes);
+app.use("/api/system-settings", requireClearHire, systemSettingsRoutes);
+app.use("/api/asset-library-header-settings", requireClearHire, assetLibraryHeaderSettingsRoutes);
+app.use("/api/email", requireClearHire, emailRoutes);
+app.use("/api/user", requireClearHire, userStatusRoutes);
+app.use("/api/team", requireClearHire, userStatusRoutes);
+app.use("/api/itineraries", requireClearHire, itinerariesRoutes);
+app.use("/api/tasks", requireClearHire, followUpsRoutes);
+app.use("/api/new-hire-reports", requireClearHire, newHireReportsRoutes);
 
-app.use("/api/announcements", announcementsRoutes);
+app.use("/api/crm-company", requireClearHire, crmCompanyRoutes);
+app.use("/api/crm-contacts", requireClearHire, crmContactsRoutes);
+app.use("/api/crm-deals", requireClearHire, crmDealsRoutes);
+app.use("/api/crm-tasks", requireClearHire, crmTasksRoutes);
+app.use("/api/crm-dashboard", requireClearHire, crmDashboardRoutes);
+app.use("/api/crm-commandcore", requireClearHire, crmCommandCoreRoutes);
+app.use("/api/crm-files", requireClearHire, crmFilesRoutes);
+app.use("/api/crm-communication", requireClearHire, crmCommunicationRoutes);
+app.use("/api/meme", requireClearHire, memeRoutes);
 
-app.use("/api/milestones", milestonesRoutes);
-app.use("/api/video", videoMessagesRoutes);
-app.use("/api/user", videoUserHistoryRoutes);
-app.use("/api/atlasbook", atlasbookRoutes);
+app.use("/api/announcements", requireClearHire, announcementsRoutes);
+
+app.use("/api/milestones", requireClearHire, milestonesRoutes);
+app.use("/api/video", requireClearHire, videoMessagesRoutes);
+app.use("/api/user", requireClearHire, videoUserHistoryRoutes);
+app.use("/api/atlasbook", requireClearHire, atlasbookRoutes);
 
 
 

@@ -45,9 +45,8 @@ async function requireEmployeeSelf(req, res) {
 }
 
 // Helper function to calculate onboarding progress
-function calculateProgress(onboarding) {
+function calculateProgress(onboarding, clearHireStatus = "PENDING") {
   let completed = 0;
-  const total = 5; // 5 sections total
 
   // Basic Information
   if (onboarding.basicInfo?.completed) completed++;
@@ -81,7 +80,24 @@ function calculateProgress(onboarding) {
     completed++;
   }
 
-  return Math.round((completed / 6) * 100);
+  // ClearHire Background Check (requires GREEN status)
+  if (clearHireStatus === "GREEN") {
+    completed++;
+  }
+
+  return Math.round((completed / 7) * 100);
+}
+
+// Asynchronous helper to resolve user's ClearHire status and get progress
+async function getProgress(onboarding) {
+  if (!onboarding) return 0;
+  try {
+    const clearHire = await ClearHireProfile.findOne({ userId: onboarding.userId }).select("status").lean();
+    return calculateProgress(onboarding, clearHire ? clearHire.status : "PENDING");
+  } catch (err) {
+    console.error("[onboarding getProgress] ClearHire status lookup error:", err.message);
+    return calculateProgress(onboarding, "PENDING");
+  }
 }
 
 // GET /api/onboarding/me - Get employee's onboarding status
@@ -115,7 +131,7 @@ router.get("/me", requireAuth, async (req, res, next) => {
         digitalSignature: onboarding.digitalSignature,
         workInfo: onboarding.workInfo,
         overallStatus: onboarding.overallStatus,
-        progress: calculateProgress(onboarding),
+        progress: await getProgress(onboarding),
         adminReview: onboarding.adminReview,
         createdAt: onboarding.createdAt,
         updatedAt: onboarding.updatedAt,
@@ -248,7 +264,7 @@ router.post("/me", requireAuth, async (req, res, next) => {
       item: {
         id: String(onboarding._id),
         overallStatus: onboarding.overallStatus,
-        progress: calculateProgress(onboarding),
+        progress: await getProgress(onboarding),
       },
       message: onboarding.overallStatus === "submitted" 
         ? "Onboarding submitted for review" 
@@ -295,7 +311,7 @@ router.put("/me/basic-info", requireAuth, async (req, res, next) => {
         id: String(onboarding._id),
         basicInfo: onboarding.basicInfo,
         overallStatus: onboarding.overallStatus,
-        progress: calculateProgress(onboarding),
+        progress: await getProgress(onboarding),
       },
     });
   } catch (err) {
@@ -372,7 +388,7 @@ router.put("/me/identity", requireAuth, async (req, res, next) => {
         id: String(onboarding._id),
         identityVerification: onboarding.identityVerification,
         overallStatus: onboarding.overallStatus,
-        progress: calculateProgress(onboarding),
+        progress: await getProgress(onboarding),
       },
     });
   } catch (err) {
@@ -414,7 +430,7 @@ router.put("/me/w4", requireAuth, async (req, res, next) => {
         id: String(onboarding._id),
         w4Form: onboarding.w4Form,
         overallStatus: onboarding.overallStatus,
-        progress: calculateProgress(onboarding),
+        progress: await getProgress(onboarding),
       },
     });
   } catch (err) {
@@ -458,7 +474,7 @@ router.put("/me/handbook", requireAuth, async (req, res, next) => {
         id: String(onboarding._id),
         employeeHandbook: onboarding.employeeHandbook,
         overallStatus: onboarding.overallStatus,
-        progress: calculateProgress(onboarding),
+        progress: await getProgress(onboarding),
       },
     });
   } catch (err) {
@@ -500,7 +516,7 @@ router.put("/me/signature", requireAuth, async (req, res, next) => {
         id: String(onboarding._id),
         digitalSignature: onboarding.digitalSignature,
         overallStatus: onboarding.overallStatus,
-        progress: calculateProgress(onboarding),
+        progress: await getProgress(onboarding),
       },
     });
   } catch (err) {
@@ -553,7 +569,7 @@ router.put("/me/work-info", requireAuth, async (req, res, next) => {
         id: String(onboarding._id),
         workInfo: onboarding.workInfo,
         overallStatus: onboarding.overallStatus,
-        progress: calculateProgress(onboarding),
+        progress: await getProgress(onboarding),
       },
     });
   } catch (err) {
@@ -604,7 +620,7 @@ router.post("/me/submit", requireAuth, async (req, res, next) => {
       item: {
         id: String(onboarding._id),
         overallStatus: onboarding.overallStatus,
-        progress: calculateProgress(onboarding),
+        progress: await getProgress(onboarding),
       },
       message: "Onboarding submitted for review",
     });
@@ -628,6 +644,12 @@ router.get("/admin/all", requireAuth, requireRole(["super-admin", "admin", "mana
       .sort({ createdAt: -1 })
       .lean();
 
+    const clearHires = await ClearHireProfile.find({}).select("userId status").lean();
+    const chMap = {};
+    clearHires.forEach((ch) => {
+      chMap[ch.userId.toString()] = ch.status;
+    });
+
     const items = onboardings.map((o) => ({
       id: String(o._id),
       userId: String(o.userId),
@@ -640,7 +662,7 @@ router.get("/admin/all", requireAuth, requireRole(["super-admin", "admin", "mana
       digitalSignature: o.digitalSignature,
       workInfo: o.workInfo,
       overallStatus: o.overallStatus,
-      progress: calculateProgress(o),
+      progress: calculateProgress(o, chMap[o.userId.toString()]),
       adminReview: o.adminReview,
       createdAt: o.createdAt,
       updatedAt: o.updatedAt,
@@ -672,7 +694,7 @@ router.get("/admin/:id", requireAuth, requireRole(["super-admin", "admin"]), asy
         employeeHandbook: onboarding.employeeHandbook,
         digitalSignature: onboarding.digitalSignature,
         overallStatus: onboarding.overallStatus,
-        progress: calculateProgress(onboarding),
+        progress: await getProgress(onboarding),
         adminReview: onboarding.adminReview,
         createdAt: onboarding.createdAt,
         updatedAt: onboarding.updatedAt,
@@ -819,7 +841,7 @@ router.put("/admin/:id/approve", requireAuth, requireRole(["super-admin", "admin
       item: {
         id: String(onboarding._id),
         overallStatus: onboarding.overallStatus,
-        progress: calculateProgress(onboarding),
+        progress: await getProgress(onboarding),
       },
       message: "Onboarding approved successfully",
     });
@@ -867,7 +889,7 @@ router.put("/admin/:id/reject", requireAuth, requireRole(["super-admin", "admin"
       item: {
         id: String(onboarding._id),
         overallStatus: onboarding.overallStatus,
-        progress: calculateProgress(onboarding),
+        progress: await getProgress(onboarding),
       },
       message: "Onboarding rejected",
     });
