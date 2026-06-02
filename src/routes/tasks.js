@@ -377,6 +377,17 @@ router.get("/", requireAuth, async (req, res, next) => {
       conditions.push({ assignees: { $size: 0 } });
     } else if (assignment === "assigned") {
       conditions.push({ assignees: { $not: { $size: 0 } } });
+    } else if (assignment === "me") {
+      if (candidates.length > 0) {
+        conditions.push({
+          $or: candidates.flatMap((c) => [
+            { assignees: { $elemMatch: { $regex: new RegExp(`^${escapeRegExp(c)}$`, "i") } } },
+            { assignee: { $regex: new RegExp(`^${escapeRegExp(c)}$`, "i") } }
+          ])
+        });
+      } else {
+        conditions.push({ _id: null });
+      }
     }
 
     // 5. Priority Filter
