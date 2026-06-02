@@ -472,7 +472,7 @@ router.post("/:id/mark-read", requireAuth, async (req, res, next) => {
 });
 
 // Mark all unread broadcast notifications as read for the current user
-router.post("/mark-all-read", requireAuth, async (req, res, next) => {
+router.post("/mark-all-read_", requireAuth, async (req, res, next) => {
   try {
     const role = String(req.user?.role || "").trim();
     const currentUser = String(req.user?.username || req.user?.name || "").trim();
@@ -521,6 +521,44 @@ router.post("/mark-all-read", requireAuth, async (req, res, next) => {
 
     return res.json({ success: true });
   } catch (err) {
+    next(err);
+  }
+});
+
+router.post("/mark-all-read", requireAuth, async (req, res, next) => {
+  try {
+    const currentUser = String(
+      req.user?.username || req.user?.email || req.user?.name || ""
+    ).trim();
+
+    if (!currentUser) {
+      return res
+        .status(400)
+        .json({ error: { message: "Cannot identify user" } });
+    }
+
+    console.log("CURRENT USER:", currentUser);
+
+    // mark all unread notifications
+    const result = await Message.updateMany(
+      {
+        readBy: { $ne: currentUser },
+      },
+      {
+        $addToSet: {
+          readBy: currentUser,
+        },
+      }
+    );
+
+    console.log("UPDATED:", result);
+
+    return res.json({
+      success: true,
+      modifiedCount: result.modifiedCount,
+    });
+  } catch (err) {
+    console.log(err);
     next(err);
   }
 });

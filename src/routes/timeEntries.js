@@ -157,14 +157,31 @@ async function writeAuditLogs({ timeEntryId, before, after, editedByUserId, ipAd
   }
 }
 
-router.get("/", requireAuth, async (req, res, next) => {
+router.get("/", requireAuth, requireRole(["employee", "manager", "admin", "super-admin"]), async (req, res, next) => {
   try {
     const employeeQuery = String(req.query?.employee || "").trim();
     const { page, limit, skip } = parsePagination(req.query);
-    const filter = {};
+   /* const filter = {};
     if (employeeQuery) {
       filter.employee = new RegExp(`^${escapeRegex(employeeQuery)}$`, "i");
-    }
+    }*/
+   const filter = {};
+
+const userRole = String(req.user?.role || "").toLowerCase();
+const userId = String(req.user?.sub || "").trim();
+
+if (userRole === "employee") {
+  // Employee can only access own entries
+  filter.userId = userId;
+} else {
+  // Admin/manager can filter any employee
+  if (employeeQuery) {
+    filter.employee = new RegExp(
+      `^${escapeRegex(employeeQuery)}$`,
+      "i"
+    );
+  }
+}
 
     const cacheKey = `time-entries:list:${employeeQuery || 'all'}:p${page}:l${limit}:${req.user?.sub || ''}`;
     

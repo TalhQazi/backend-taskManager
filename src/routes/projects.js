@@ -11,6 +11,7 @@ const Archive = require("../models/Archive");
 const ActivityLog = require("../models/ActivityLog");
 const { requireAuth } = require("../middleware/auth");
 const { createNotification } = require("../utils/notifications");
+const { sendEmailNotification } = require("../utils/emailNotifications");
 const { extractMentions } = require("../utils/mentions");
 const { parsePagination, paginatedResponse } = require("../lib/pagination");
 const { cacheWrap, cacheDel } = require("../lib/cache");
@@ -248,6 +249,19 @@ router.post("/", requireAuth, async (req, res, next) => {
       resourceId: String(createdProject._id),
       category: "PROJECT_ASSIGNED",
     });
+
+    // Send project assignment emails directly — not tied to activity log
+    if (Array.isArray(createdProject.assignees) && createdProject.assignees.length > 0) {
+      void Promise.all(
+        createdProject.assignees.map(assignee =>
+          sendEmailNotification(assignee, "projectAssignment", { 
+            projectName: createdProject.name,
+            description: createdProject.description || "No description provided."
+          })
+            .catch(e => console.error(`[email] projectAssignment to ${assignee}:`, e.message))
+        )
+      );
+    }
 
     // Extract mentions from description
     const mentionedUsers = await extractMentions(data.description);
@@ -857,6 +871,14 @@ router.put("/:id/reassign", requireAuth, async (req, res, next) => {
       resourceId: String(req.params.id),
       category: "PROJECT_ASSIGNED",
     });
+
+    // Send project reassignment emails directly — not tied to activity log
+    void Promise.all(
+      assignees.map(assignee =>
+        sendEmailNotification(assignee, "projectReassignment", { projectName: project.name })
+          .catch(e => console.error(`[email] projectReassignment to ${assignee}:`, e.message))
+      )
+    );
 
     return res.json({ item: withId(project.toObject()) });
   } catch (err) {

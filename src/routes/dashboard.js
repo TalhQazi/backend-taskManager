@@ -98,7 +98,7 @@ router.get("/summary", requireAuth, async (_req, res, next) => {
       return due < start;
     }).length;
 
-    const pendingBugs = tasks.filter((t) => 
+    const pendingBugs = tasks.filter((t) =>
       t.category === "bug" && !isCompletedTask(t)
     ).length + openBugReports;
 

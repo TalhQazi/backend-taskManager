@@ -31,15 +31,22 @@ async function sendSystemEmail({ to, templateKey, variables = {} }) {
       return false;
     }
 
+    let decryptedPass;
+    try {
+      decryptedPass = decrypt(emailConfig.pass);
+    } catch (e) {
+      decryptedPass = emailConfig.pass; // fallback if password was stored unencrypted
+    }
+
     const transporter = nodemailer.createTransport({
       host: emailConfig.host,
       port: emailConfig.port,
-      secure: emailConfig.secure, // true for 465, false for other ports
+      secure: emailConfig.secure,
       auth: {
         user: emailConfig.user,
-        pass: decrypt(emailConfig.pass),
+        pass: decryptedPass,
       },
-
+      tls: { rejectUnauthorized: false },
     });
 
     let subject = template.subject;
@@ -52,11 +59,16 @@ async function sendSystemEmail({ to, templateKey, variables = {} }) {
       body = body.replace(placeholder, variables[key]);
     });
 
+    const fromEmail = emailConfig.fromAddress || emailConfig.user;
+    const fromField = emailConfig.senderName
+      ? `${emailConfig.senderName} <${fromEmail}>`
+      : fromEmail;
+
     const mailOptions = {
-      from: emailConfig.fromAddress || emailConfig.user,
+      from: fromField,
       to,
       subject,
-      text: body, // You could also support HTML here if needed
+      text: body,
     };
 
     const info = await transporter.sendMail(mailOptions);

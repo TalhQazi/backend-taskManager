@@ -4,7 +4,7 @@ const mongoose = require("mongoose");
 // Tokens are encrypted at rest (AES-256-CBC).
 const DropboxTokenSchema = new mongoose.Schema(
   {
-    userId: { type: String, required: true, unique: true, index: true, maxlength: 200 },
+    userId: { type: String, required: true, unique: true, maxlength: 200 },
     accessToken: { type: String, required: true, maxlength: 5000 },
     refreshToken: { type: String, required: true, maxlength: 5000 },
     expiresAt: { type: Date, required: true },

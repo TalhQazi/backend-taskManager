@@ -9,12 +9,32 @@ const router = express.Router();
 // Helper function to get employee context
 async function requireEmployeeSelf(req, res) {
   try {
-    const employee = await Employee.findById(req.user.sub);
+    const userId = String(req.user?.sub || "").trim();
+    const username = String(req.user?.username || "").trim();
+    const name = String(req.user?.name || "").trim();
+
+    let employee = await Employee.findById(userId);
+
+    if (!employee && (username || name)) {
+      const candidates = [username, name].filter(Boolean);
+      const regexes = candidates.map((c) => new RegExp(`^${String(c).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i"));
+      employee = await Employee.findOne({
+        $or: [{ email: { $in: regexes } }, { name: { $in: regexes } }],
+      });
+    }
+
     if (!employee) {
       res.status(404).json({ error: { message: "Employee not found" } });
       return null;
     }
-    return { employee };
+    const user = {
+      _id: employee._id,
+      email: employee.email || "",
+      name: employee.name || "",
+      username: username || employee.email || "",
+      role: req.user?.role || "employee",
+    };
+    return { user, employee };
   } catch (err) {
     res.status(500).json({ error: { message: "Server error" } });
     return null;
@@ -53,7 +73,12 @@ function calculateProgress(onboarding) {
     completed++;
   }
 
-  return Math.round((completed / total) * 100);
+  // Work Information
+  if (onboarding.workInfo?.completed) {
+    completed++;
+  }
+
+  return Math.round((completed / 6) * 100);
 }
 
 // GET /api/onboarding/me - Get employee's onboarding status
@@ -85,6 +110,7 @@ router.get("/me", requireAuth, async (req, res, next) => {
         w4Form: onboarding.w4Form,
         employeeHandbook: onboarding.employeeHandbook,
         digitalSignature: onboarding.digitalSignature,
+        workInfo: onboarding.workInfo,
         overallStatus: onboarding.overallStatus,
         progress: calculateProgress(onboarding),
         adminReview: onboarding.adminReview,
@@ -479,6 +505,59 @@ router.put("/me/signature", requireAuth, async (req, res, next) => {
   }
 });
 
+// PUT /api/onboarding/me/work-info - Update work information
+router.put("/me/work-info", requireAuth, async (req, res, next) => {
+  try {
+    const ctx = await requireEmployeeSelf(req, res);
+    if (!ctx) return;
+    const { user, employee } = ctx;
+
+    const { department, jobTitle, manager, joinDate } = req.body; // ← joinDate add
+
+    if (!department || !jobTitle) {
+      return res.status(400).json({ error: { message: "Department and Job Title are required" } });
+    }
+
+    let onboarding = await Onboarding.findOne({ userId: user._id });
+    if (!onboarding) {
+      onboarding = new Onboarding({
+        userId: user._id,
+        employeeId: employee._id,
+        employeeName: employee.name,
+      });
+    }
+
+    onboarding.workInfo = {
+      completed: true,
+      department,
+      jobTitle,
+      manager: manager || "",
+      joinDate: joinDate || "",  // ← ADD
+    };
+
+    // Employee record sync
+    await Employee.findByIdAndUpdate(employee._id, {
+      department,
+      jobTitle,
+      manager,
+      joinDate, // ← ADD (agar Employee model mein hai)
+    });
+
+    await onboarding.save();
+
+    return res.json({
+      item: {
+        id: String(onboarding._id),
+        workInfo: onboarding.workInfo,
+        overallStatus: onboarding.overallStatus,
+        progress: calculateProgress(onboarding),
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // POST /api/onboarding/me/submit - Submit onboarding for review
 router.post("/me/submit", requireAuth, async (req, res, next) => {
   try {
@@ -491,13 +570,14 @@ router.post("/me/submit", requireAuth, async (req, res, next) => {
       return res.status(404).json({ error: { message: "Onboarding not found" } });
     }
 
-    // Check if all steps are submitted
-    if (!onboarding.basicInfo.completed ||
-        onboarding.identityVerification.primaryId.status !== "submitted" ||
-        onboarding.identityVerification.secondaryId.status !== "submitted" ||
-        onboarding.w4Form.status !== "submitted" ||
-        onboarding.employeeHandbook.status !== "submitted" ||
-        onboarding.digitalSignature.status !== "submitted") {
+    // Check if all steps are completed (submitted or verified)
+    const docReady = (s) => s === "submitted" || s === "verified";
+    if (!onboarding.basicInfo?.completed ||
+        !docReady(onboarding.identityVerification?.primaryId?.status) ||
+        !docReady(onboarding.identityVerification?.secondaryId?.status) ||
+        !docReady(onboarding.w4Form?.status) ||
+        !docReady(onboarding.employeeHandbook?.status) ||
+        !docReady(onboarding.digitalSignature?.status)) {
       return res.status(400).json({
         error: { message: "Complete all steps before submitting" },
       });
@@ -532,8 +612,8 @@ router.post("/me/submit", requireAuth, async (req, res, next) => {
 
 // ==================== ADMIN ENDPOINTS ====================
 
-// GET /api/onboarding/admin/all - Get all onboarding records (Admin)
-router.get("/admin/all", requireAuth, requireRole("admin"), async (req, res, next) => {
+// GET /api/onboarding/admin/all - Get all onboarding records (Admin + Manager)
+router.get("/admin/all", requireAuth, requireRole(["super-admin", "admin", "manager"]), async (req, res, next) => {
   try {
     const { status } = req.query;
     const filter = {};
@@ -555,6 +635,7 @@ router.get("/admin/all", requireAuth, requireRole("admin"), async (req, res, nex
       w4Form: o.w4Form,
       employeeHandbook: o.employeeHandbook,
       digitalSignature: o.digitalSignature,
+      workInfo: o.workInfo,
       overallStatus: o.overallStatus,
       progress: calculateProgress(o),
       adminReview: o.adminReview,
@@ -569,7 +650,7 @@ router.get("/admin/all", requireAuth, requireRole("admin"), async (req, res, nex
 });
 
 // GET /api/onboarding/admin/:id - Get specific onboarding details (Admin)
-router.get("/admin/:id", requireAuth, requireRole("admin"), async (req, res, next) => {
+router.get("/admin/:id", requireAuth, requireRole(["super-admin", "admin"]), async (req, res, next) => {
   try {
     const onboarding = await Onboarding.findById(req.params.id).lean();
     if (!onboarding) {
@@ -600,7 +681,7 @@ router.get("/admin/:id", requireAuth, requireRole("admin"), async (req, res, nex
 });
 
 // PUT /api/onboarding/admin/:id/approve - Approve onboarding (Admin)
-router.put("/admin/:id/approve", requireAuth, requireRole("admin"), async (req, res, next) => {
+router.put("/admin/:id/approve", requireAuth, requireRole(["super-admin", "admin"]), async (req, res, next) => {
   try {
     const { comments } = req.body;
 
@@ -660,7 +741,7 @@ router.put("/admin/:id/approve", requireAuth, requireRole("admin"), async (req, 
 });
 
 // PUT /api/onboarding/admin/:id/reject - Reject onboarding (Admin)
-router.put("/admin/:id/reject", requireAuth, requireRole("admin"), async (req, res, next) => {
+router.put("/admin/:id/reject", requireAuth, requireRole(["super-admin", "admin"]), async (req, res, next) => {
   try {
     const { reason } = req.body;
 

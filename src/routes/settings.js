@@ -98,6 +98,24 @@ router.put("/", requireAuth, async (req, res, next) => {
       { new: true, upsert: true }
     ).lean();
 
+    // Sync to Employee record as well
+    const Employee = require("../models/Employee");
+    const employeeUpdate = {};
+    if (patch.fullName) {
+      employeeUpdate.name = patch.fullName;
+      employeeUpdate.initials = patch.fullName
+        .split(" ")
+        .map((n) => n[0])
+        .slice(0, 2)
+        .join("")
+        .toUpperCase();
+    }
+    if (patch.email) employeeUpdate.email = patch.email;
+    if (patch.phone) employeeUpdate.phone = patch.phone;
+    if (Object.keys(employeeUpdate).length > 0) {
+      await Employee.findByIdAndUpdate(userId, employeeUpdate);
+    }
+
     res.json({ item: updated });
   } catch (err) {
     next(err);
