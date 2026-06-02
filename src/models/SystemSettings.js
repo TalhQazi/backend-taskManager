@@ -70,6 +70,11 @@ const SystemSettingsSchema = new mongoose.Schema(
       },
     },
     taskRewardSystemEnabled: { type: Boolean, default: true },
+    scheConfig: {
+      enableReligiousHolidays: { type: Boolean, default: true },
+      switchNeutralSeasonal: { type: Boolean, default: false },
+      forceCompanyUnifiedTheme: { type: String, default: "" },
+    },
   },
   { timestamps: true }
 );
