@@ -57,53 +57,60 @@ function requireRole(roles) {
  *   No profile → 403 "Background check not completed"
  */
 function requireClearHire(req, res, next) {
-  // Exempt admin roles — they manage the system
-  const role = req.user?.role;
-  if (["super-admin", "admin"].includes(role)) {
-    return next();
-  }
+  const proceed = () => {
+    // Exempt admin roles — they manage the system
+    const role = req.user?.role;
+    if (["super-admin", "admin"].includes(role)) {
+      return next();
+    }
 
-  const userId = req.user?.sub;
-  if (!userId) {
-    return res.status(401).json({ error: { message: "Unauthorized" } });
-  }
+    const userId = req.user?.sub || req.user?.id || req.user?._id;
+    if (!userId) {
+      return res.status(401).json({ error: { message: "Unauthorized" } });
+    }
 
-  ClearHireProfile.findOne({ userId })
-    .select("status")
-    .lean()
-    .then((profile) => {
-      if (!profile) {
+    ClearHireProfile.findOne({ userId })
+      .select("status")
+      .lean()
+      .then((profile) => {
+        if (!profile) {
+          return res.status(403).json({
+            error: {
+              message: "Background check not completed. Please contact your administrator.",
+              code: "CLEARHIRE_NOT_FOUND",
+            },
+          });
+        }
+
+        if (profile.status === "GREEN") {
+          return next();
+        }
+
+        const messages = {
+          PENDING: "Background check is in progress. Please wait.",
+          YELLOW: "Your account is under review. Awaiting admin approval.",
+          RED: "Access denied. Background check failed.",
+        };
+
         return res.status(403).json({
           error: {
-            message: "Background check not completed. Please contact your administrator.",
-            code: "CLEARHIRE_NOT_FOUND",
+            message: messages[profile.status] || "Access denied.",
+            code: `CLEARHIRE_${profile.status}`,
+            clearHireStatus: profile.status,
           },
         });
-      }
-
-      if (profile.status === "GREEN") {
+      })
+      .catch((err) => {
+        console.error("[ClearHire Middleware] Error:", err.message);
+        // Fail open for DB errors — don't lock everyone out if DB hiccups
         return next();
-      }
-
-      const messages = {
-        PENDING: "Background check is in progress. Please wait.",
-        YELLOW: "Your account is under review. Awaiting admin approval.",
-        RED: "Access denied. Background check failed.",
-      };
-
-      return res.status(403).json({
-        error: {
-          message: messages[profile.status] || "Access denied.",
-          code: `CLEARHIRE_${profile.status}`,
-          clearHireStatus: profile.status,
-        },
       });
-    })
-    .catch((err) => {
-      console.error("[ClearHire Middleware] Error:", err.message);
-      // Fail open for DB errors — don't lock everyone out if DB hiccups
-      return next();
-    });
+  };
+
+  if (!req.user) {
+    return requireAuth(req, res, proceed);
+  }
+  return proceed();
 }
 
 module.exports = { requireAuth, requireRole, requireClearHire };
