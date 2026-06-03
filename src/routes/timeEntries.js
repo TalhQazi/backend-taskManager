@@ -55,6 +55,8 @@ const adminUiSchema = z.object({
   date: z.string().min(1),
   clockIn: z.string().min(1),
   clockOut: z.string().nullable().optional(),
+  clockInAt: z.string().optional(),
+  clockOutAt: z.string().optional(),
   status: z.string().optional(),
 });
 
@@ -241,6 +243,8 @@ router.post("/", requireAuth, async (req, res, next) => {
         date: new Date(adminParsed.data.date),
         clockIn: adminParsed.data.clockIn,
         clockOut: adminParsed.data.clockOut || "",
+        clockInAt: adminParsed.data.clockInAt ? toDateSafe(adminParsed.data.clockInAt) : undefined,
+        clockOutAt: adminParsed.data.clockOutAt ? toDateSafe(adminParsed.data.clockOutAt) : undefined,
         breakTime: "",
         totalHours: 0,
         status: adminParsed.data.clockOut ? "complete" : "incomplete",
@@ -430,9 +434,66 @@ router.post("/:id/clock-out", requireAuth, async (req, res, next) => {
       return res.status(400).json({ error: { message: "Already clocked out" } });
     }
 
-    entry.clockOutAt = new Date();
+    const now = new Date();
+    entry.clockOutAt = now;
+    entry.clockOut = now.toTimeString().slice(0, 5);
     entry.status = "complete";
     entry.totalHours = calcTotalHours(entry);
+
+    // Accept optional EOD/scrum data from body
+    const body = req.body || {};
+    let eodData = null;
+    if (typeof body.eodReport === "object" && body.eodReport !== null) {
+      entry.scrum = JSON.stringify(body.eodReport);
+      eodData = body.eodReport;
+    } else if (typeof body.scrum === "string" && body.scrum.trim()) {
+      entry.scrum = body.scrum.trim();
+      try {
+        eodData = JSON.parse(body.scrum);
+      } catch {
+        eodData = { tasksCompleted: body.scrum.trim(), issuesBlockers: "", notes: "" };
+      }
+    }
+
+    if (eodData) {
+      try {
+        const EODReport = require("../models/EODReport");
+        const emp = await Employee.findOne({ $or: [{ _id: entry.userId }, { name: entry.employee }] }).lean();
+        if (emp) {
+          const start = new Date(entry.date);
+          start.setHours(0, 0, 0, 0);
+          const end = new Date(entry.date);
+          end.setHours(23, 59, 59, 999);
+
+          const existingReport = await EODReport.findOne({
+            userId: String(emp._id),
+            date: { $gte: start, $lte: end },
+          });
+
+          if (existingReport) {
+            existingReport.rawInput = JSON.stringify(eodData);
+            existingReport.status = "submitted";
+            existingReport.timeEntryId = entry._id;
+            await existingReport.save();
+          } else {
+            await EODReport.create({
+              userId: String(emp._id),
+              employeeId: String(emp._id),
+              employeeName: emp.name,
+              date: entry.date || new Date(),
+              rawInput: JSON.stringify(eodData),
+              inputType: "text",
+              status: "submitted",
+              timeEntryId: entry._id,
+            });
+          }
+          const { cacheDel } = require("../lib/cache");
+          cacheDel("eod-reports:*").catch(() => {});
+        }
+      } catch (err) {
+        console.error("Failed to automatically sync EOD report on clock-out:", err);
+      }
+    }
 
     const check = await evaluateMealBreakCompliance({ timeEntry: entry.toObject(), now: new Date() });
     if (check?.hardStop) {

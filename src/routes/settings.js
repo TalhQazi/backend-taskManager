@@ -44,6 +44,7 @@ const settingsSchema = z.object({
     .optional(),
   language: z.string().optional(),
   timezone: z.string().optional(),
+  countryCode: z.string().optional(),
   avatarUrl: z.string().optional(),
   avatarDataUrl: z.string().optional(),
 });

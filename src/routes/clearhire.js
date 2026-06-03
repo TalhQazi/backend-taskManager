@@ -13,6 +13,7 @@ const { requireAuth, requireRole } = require("../middleware/auth");
 const ClearHireProfile = require("../models/ClearHireProfile");
 const ActivityLog = require("../models/ActivityLog");
 const { encryptField, maskSSN } = require("../utils/encryption");
+const { sendEmailNotification } = require("../utils/emailNotifications");
 
 const router = express.Router();
 
@@ -346,6 +347,8 @@ router.get("/status/:userId", requireAuth, async (req, res, next) => {
               reason: profile.adminOverride.reason,
             }
           : null,
+        preAdverseActionSentAt: profile.preAdverseActionSentAt,
+        finalAdverseActionSentAt: profile.finalAdverseActionSentAt,
         createdAt: profile.createdAt,
         updatedAt: profile.updatedAt,
       },
@@ -500,6 +503,102 @@ router.post(
 );
 
 /**
+ * POST /api/clearhire/:userId/pre-adverse
+ * Send Pre-Adverse Action Notice
+ */
+router.post(
+  "/:userId/pre-adverse",
+  requireAuth,
+  requireRole(["super-admin", "admin"]),
+  async (req, res, next) => {
+    try {
+      const targetUserId = req.params.userId;
+      const profile = await ClearHireProfile.findOne({ userId: targetUserId });
+      if (!profile) {
+        return res.status(404).json({ error: { message: "No ClearHire profile found for this user" } });
+      }
+
+      profile.preAdverseActionSentAt = new Date();
+      await profile.save();
+
+      // Log activity
+      await logClearHireActivity(
+        "CLEARHIRE_PRE_ADVERSE",
+        req,
+        profile,
+        `${req.user.username} triggered Pre-Adverse Action Notice for "${profile.fullName}"`
+      );
+
+      // Send the email notice using the preAdverseAction template
+      await sendEmailNotification(profile.userId, "preAdverseAction").catch((e) => {
+        console.error(`[ClearHire Email] Pre-Adverse to ${profile.fullName} failed:`, e.message);
+      });
+
+      return res.json({
+        item: {
+          id: String(profile._id),
+          userId: String(profile.userId),
+          fullName: profile.fullName,
+          status: profile.status,
+          preAdverseActionSentAt: profile.preAdverseActionSentAt,
+        },
+        message: "Pre-Adverse Action Notice sent successfully.",
+      });
+    } catch (err) {
+      return next(err);
+    }
+  }
+);
+
+/**
+ * POST /api/clearhire/:userId/final-adverse
+ * Send Final Adverse Action Notice
+ */
+router.post(
+  "/:userId/final-adverse",
+  requireAuth,
+  requireRole(["super-admin", "admin"]),
+  async (req, res, next) => {
+    try {
+      const targetUserId = req.params.userId;
+      const profile = await ClearHireProfile.findOne({ userId: targetUserId });
+      if (!profile) {
+        return res.status(404).json({ error: { message: "No ClearHire profile found for this user" } });
+      }
+
+      profile.finalAdverseActionSentAt = new Date();
+      await profile.save();
+
+      // Log activity
+      await logClearHireActivity(
+        "CLEARHIRE_FINAL_ADVERSE",
+        req,
+        profile,
+        `${req.user.username} triggered Final Adverse Action Notice for "${profile.fullName}"`
+      );
+
+      // Send the email notice using the finalAdverseAction template
+      await sendEmailNotification(profile.userId, "finalAdverseAction").catch((e) => {
+        console.error(`[ClearHire Email] Final Adverse to ${profile.fullName} failed:`, e.message);
+      });
+
+      return res.json({
+        item: {
+          id: String(profile._id),
+          userId: String(profile.userId),
+          fullName: profile.fullName,
+          status: profile.status,
+          finalAdverseActionSentAt: profile.finalAdverseActionSentAt,
+        },
+        message: "Final Adverse Action Notice sent successfully.",
+      });
+    } catch (err) {
+      return next(err);
+    }
+  }
+);
+
+/**
  * GET /api/clearhire/all
  * Admin-only: list all ClearHire profiles with optional status filter.
  */
@@ -536,6 +635,8 @@ router.get(
                 reason: p.adminOverride.reason,
               }
             : null,
+          preAdverseActionSentAt: p.preAdverseActionSentAt,
+          finalAdverseActionSentAt: p.finalAdverseActionSentAt,
           createdAt: p.createdAt,
           updatedAt: p.updatedAt,
         })),

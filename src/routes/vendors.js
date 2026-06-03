@@ -16,7 +16,7 @@ const vendorSchema = z.object({
   zip: z.string().optional().default(""),
   website: z.string().optional().default(""),
   serviceType: z.string().min(1, "Service type is required"),
-  location: z.string().min(1, "Location is required"),
+  location: z.string().optional().default(""),
   status: z.enum(["approved", "not-approved"]).optional().default("approved"),
   notes: z.string().optional().default(""),
 });

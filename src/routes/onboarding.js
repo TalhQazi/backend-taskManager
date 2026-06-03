@@ -1,6 +1,9 @@
 const express = require("express");
 const Onboarding = require("../models/Onboarding");
 const Employee = require("../models/Employee");
+const NewHireReport = require("../models/NewHireReport");
+const ClearHireProfile = require("../models/ClearHireProfile");
+const Company = require("../models/Company");
 const { requireAuth, requireRole } = require("../middleware/auth");
 const { createNotification } = require("../utils/notifications");
 
@@ -42,9 +45,8 @@ async function requireEmployeeSelf(req, res) {
 }
 
 // Helper function to calculate onboarding progress
-function calculateProgress(onboarding) {
+function calculateProgress(onboarding, clearHireStatus = "PENDING") {
   let completed = 0;
-  const total = 5; // 5 sections total
 
   // Basic Information
   if (onboarding.basicInfo?.completed) completed++;
@@ -78,7 +80,24 @@ function calculateProgress(onboarding) {
     completed++;
   }
 
-  return Math.round((completed / 6) * 100);
+  // ClearHire Background Check (requires GREEN status)
+  if (clearHireStatus === "GREEN") {
+    completed++;
+  }
+
+  return Math.round((completed / 7) * 100);
+}
+
+// Asynchronous helper to resolve user's ClearHire status and get progress
+async function getProgress(onboarding) {
+  if (!onboarding) return 0;
+  try {
+    const clearHire = await ClearHireProfile.findOne({ userId: onboarding.userId }).select("status").lean();
+    return calculateProgress(onboarding, clearHire ? clearHire.status : "PENDING");
+  } catch (err) {
+    console.error("[onboarding getProgress] ClearHire status lookup error:", err.message);
+    return calculateProgress(onboarding, "PENDING");
+  }
 }
 
 // GET /api/onboarding/me - Get employee's onboarding status
@@ -112,7 +131,7 @@ router.get("/me", requireAuth, async (req, res, next) => {
         digitalSignature: onboarding.digitalSignature,
         workInfo: onboarding.workInfo,
         overallStatus: onboarding.overallStatus,
-        progress: calculateProgress(onboarding),
+        progress: await getProgress(onboarding),
         adminReview: onboarding.adminReview,
         createdAt: onboarding.createdAt,
         updatedAt: onboarding.updatedAt,
@@ -245,7 +264,7 @@ router.post("/me", requireAuth, async (req, res, next) => {
       item: {
         id: String(onboarding._id),
         overallStatus: onboarding.overallStatus,
-        progress: calculateProgress(onboarding),
+        progress: await getProgress(onboarding),
       },
       message: onboarding.overallStatus === "submitted" 
         ? "Onboarding submitted for review" 
@@ -292,7 +311,7 @@ router.put("/me/basic-info", requireAuth, async (req, res, next) => {
         id: String(onboarding._id),
         basicInfo: onboarding.basicInfo,
         overallStatus: onboarding.overallStatus,
-        progress: calculateProgress(onboarding),
+        progress: await getProgress(onboarding),
       },
     });
   } catch (err) {
@@ -369,7 +388,7 @@ router.put("/me/identity", requireAuth, async (req, res, next) => {
         id: String(onboarding._id),
         identityVerification: onboarding.identityVerification,
         overallStatus: onboarding.overallStatus,
-        progress: calculateProgress(onboarding),
+        progress: await getProgress(onboarding),
       },
     });
   } catch (err) {
@@ -411,7 +430,7 @@ router.put("/me/w4", requireAuth, async (req, res, next) => {
         id: String(onboarding._id),
         w4Form: onboarding.w4Form,
         overallStatus: onboarding.overallStatus,
-        progress: calculateProgress(onboarding),
+        progress: await getProgress(onboarding),
       },
     });
   } catch (err) {
@@ -455,7 +474,7 @@ router.put("/me/handbook", requireAuth, async (req, res, next) => {
         id: String(onboarding._id),
         employeeHandbook: onboarding.employeeHandbook,
         overallStatus: onboarding.overallStatus,
-        progress: calculateProgress(onboarding),
+        progress: await getProgress(onboarding),
       },
     });
   } catch (err) {
@@ -497,7 +516,7 @@ router.put("/me/signature", requireAuth, async (req, res, next) => {
         id: String(onboarding._id),
         digitalSignature: onboarding.digitalSignature,
         overallStatus: onboarding.overallStatus,
-        progress: calculateProgress(onboarding),
+        progress: await getProgress(onboarding),
       },
     });
   } catch (err) {
@@ -550,7 +569,7 @@ router.put("/me/work-info", requireAuth, async (req, res, next) => {
         id: String(onboarding._id),
         workInfo: onboarding.workInfo,
         overallStatus: onboarding.overallStatus,
-        progress: calculateProgress(onboarding),
+        progress: await getProgress(onboarding),
       },
     });
   } catch (err) {
@@ -601,7 +620,7 @@ router.post("/me/submit", requireAuth, async (req, res, next) => {
       item: {
         id: String(onboarding._id),
         overallStatus: onboarding.overallStatus,
-        progress: calculateProgress(onboarding),
+        progress: await getProgress(onboarding),
       },
       message: "Onboarding submitted for review",
     });
@@ -625,6 +644,12 @@ router.get("/admin/all", requireAuth, requireRole(["super-admin", "admin", "mana
       .sort({ createdAt: -1 })
       .lean();
 
+    const clearHires = await ClearHireProfile.find({}).select("userId status").lean();
+    const chMap = {};
+    clearHires.forEach((ch) => {
+      chMap[ch.userId.toString()] = ch.status;
+    });
+
     const items = onboardings.map((o) => ({
       id: String(o._id),
       userId: String(o.userId),
@@ -637,7 +662,7 @@ router.get("/admin/all", requireAuth, requireRole(["super-admin", "admin", "mana
       digitalSignature: o.digitalSignature,
       workInfo: o.workInfo,
       overallStatus: o.overallStatus,
-      progress: calculateProgress(o),
+      progress: calculateProgress(o, chMap[o.userId.toString()]),
       adminReview: o.adminReview,
       createdAt: o.createdAt,
       updatedAt: o.updatedAt,
@@ -669,7 +694,7 @@ router.get("/admin/:id", requireAuth, requireRole(["super-admin", "admin"]), asy
         employeeHandbook: onboarding.employeeHandbook,
         digitalSignature: onboarding.digitalSignature,
         overallStatus: onboarding.overallStatus,
-        progress: calculateProgress(onboarding),
+        progress: await getProgress(onboarding),
         adminReview: onboarding.adminReview,
         createdAt: onboarding.createdAt,
         updatedAt: onboarding.updatedAt,
@@ -716,6 +741,91 @@ router.put("/admin/:id/approve", requireAuth, requireRole(["super-admin", "admin
 
     await onboarding.save();
 
+    // Trigger Maine New Hire Reporting workflow
+    try {
+      const existingReport = await NewHireReport.findOne({ employeeId: onboarding.employeeId });
+      if (!existingReport) {
+        const employee = await Employee.findById(onboarding.employeeId);
+        const clearHireProfile = await ClearHireProfile.findOne({ userId: onboarding.userId });
+        
+        let ssnEncrypted = "";
+        let employeeAddress = { street: "", city: "", state: "", zip: "" };
+        
+        if (clearHireProfile) {
+          ssnEncrypted = clearHireProfile.ssnEncrypted;
+          // Grab current address from history
+          const currentAddr = clearHireProfile.addressHistory?.find(a => !a.endDate);
+          if (currentAddr) {
+            employeeAddress = {
+              street: currentAddr.street || "",
+              city: currentAddr.city || "",
+              state: currentAddr.state || "",
+              zip: currentAddr.zip || ""
+            };
+          }
+        }
+        
+        // If not found in background scan, fallback to basicInfo location
+        if (!employeeAddress.street && onboarding.basicInfo?.location) {
+          employeeAddress.street = onboarding.basicInfo.location;
+          employeeAddress.city = "Portland";
+          employeeAddress.state = "ME";
+          employeeAddress.zip = "04101";
+        }
+        
+        // Handle employer FEIN / details fallback
+        let employerName = "Task Manager Corporation";
+        let employerAddress = { street: "123 Federal St", city: "Portland", state: "ME", zip: "04101" };
+        let employerFEIN = "12-3456789";
+        
+        if (employee && employee.company) {
+          const company = await Company.findOne({
+            $or: [
+              { name: new RegExp(`^${employee.company}$`, "i") },
+              { code: new RegExp(`^${employee.company}$`, "i") }
+            ]
+          });
+          if (company) {
+            employerName = company.name || employerName;
+            employerFEIN = company.einNumber || employerFEIN;
+            if (company.address) {
+              employerAddress = {
+                street: company.address.street || employerAddress.street,
+                city: company.address.city || employerAddress.city,
+                state: company.address.state || employerAddress.state,
+                zip: company.address.zipCode || employerAddress.zip
+              };
+            }
+          }
+        }
+
+        const hireDate = employee?.joinDate || employee?.createdAt || new Date();
+        const countdownExpiry = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 days
+
+        if (ssnEncrypted) {
+          await NewHireReport.create({
+            employeeId: onboarding.employeeId,
+            onboardingId: onboarding._id,
+            stateCode: "ME",
+            employeeName: onboarding.employeeName,
+            employeeAddress,
+            ssnEncrypted,
+            hireDate,
+            employerName,
+            employerAddress,
+            employerFEIN,
+            status: "pending",
+            countdownExpiry
+          });
+          console.log(`[New Hire Reporting] Created pending Maine report for ${onboarding.employeeName}. Deadline: ${countdownExpiry.toISOString()}`);
+        } else {
+          console.warn(`[New Hire Reporting] Skipping report for ${onboarding.employeeName} due to missing SSN in ClearHireProfile.`);
+        }
+      }
+    } catch (triggerErr) {
+      console.error("[New Hire Reporting] Trigger initialization failed:", triggerErr.message);
+    }
+
     // Notify employee
     await createNotification({
       actor: req.user.username || req.user.name || "Admin",
@@ -731,7 +841,7 @@ router.put("/admin/:id/approve", requireAuth, requireRole(["super-admin", "admin
       item: {
         id: String(onboarding._id),
         overallStatus: onboarding.overallStatus,
-        progress: calculateProgress(onboarding),
+        progress: await getProgress(onboarding),
       },
       message: "Onboarding approved successfully",
     });
@@ -779,7 +889,7 @@ router.put("/admin/:id/reject", requireAuth, requireRole(["super-admin", "admin"
       item: {
         id: String(onboarding._id),
         overallStatus: onboarding.overallStatus,
-        progress: calculateProgress(onboarding),
+        progress: await getProgress(onboarding),
       },
       message: "Onboarding rejected",
     });

@@ -25,6 +25,23 @@ const { cacheWrap, cacheDel } = require("../lib/cache");
 const { uploadToS3, base64ToBuffer, getFromS3, extractS3Key } = require("../lib/s3");
 const contributionTracker = require("../utils/contributionTracker");
 const { sendEmailNotification } = require("../utils/emailNotifications");
+const Website = require("../models/Website");
+
+async function handleTaskCompletion(task) {
+  try {
+    if (task.status === "completed" && task.websiteId) {
+      const website = await Website.findById(task.websiteId);
+      if (website && (website.websiteType === "in-development" || website.websiteType === "future")) {
+        website.websiteType = "active";
+        website.status = "Live";
+        await website.save();
+        console.log(`[handleTaskCompletion] Website ${website.siteName} promoted to active.`);
+      }
+    }
+  } catch (err) {
+    console.error("[handleTaskCompletion] Error:", err);
+  }
+}
 
 
 const router = express.Router();
@@ -361,6 +378,17 @@ router.get("/", requireAuth, async (req, res, next) => {
       conditions.push({ assignees: { $size: 0 } });
     } else if (assignment === "assigned") {
       conditions.push({ assignees: { $not: { $size: 0 } } });
+    } else if (assignment === "me") {
+      if (candidates.length > 0) {
+        conditions.push({
+          $or: candidates.flatMap((c) => [
+            { assignees: { $elemMatch: { $regex: new RegExp(`^${escapeRegExp(c)}$`, "i") } } },
+            { assignee: { $regex: new RegExp(`^${escapeRegExp(c)}$`, "i") } }
+          ])
+        });
+      } else {
+        conditions.push({ _id: null });
+      }
     }
 
     // 5. Priority Filter
@@ -1406,6 +1434,10 @@ router.patch("/:id/status", requireAuth, async (req, res, next) => {
       return res.status(404).json({ error: { message: "Task not found" } });
     }
 
+    if (updated.status === "completed") {
+      void handleTaskCompletion(updated);
+    }
+
     // Fire-and-forget
     Promise.allSettled([
       logActivity(req, "TASK_STATUS_UPDATE", "task", req.params.id, updated.title, `Updated task status: ${updated.title} -> ${status}`),
@@ -1527,6 +1559,10 @@ router.put("/:id", requireAuth, async (req, res, next) => {
 
     if (!updated) {
       return res.status(404).json({ error: { message: "Task not found" } });
+    }
+
+    if (updated.status === "completed") {
+      void handleTaskCompletion(updated);
     }
 
     // Fire-and-forget

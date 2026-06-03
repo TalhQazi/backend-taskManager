@@ -20,6 +20,7 @@ const shoppingListItemSchema = new mongoose.Schema(
     isPurchased: { type: Boolean, default: false },
     purchasedAt: { type: Date },
     aisle: { type: String, default: "" },
+    assignedEmployeeId: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: false, index: true },
   },
   { timestamps: true }
 );

@@ -36,8 +36,15 @@ const systemSettingsSchema = z.object({
     replyAdded: templateSchema.optional(),
     projectAssignment: templateSchema.optional(),
     projectReassignment: templateSchema.optional(),
+    preAdverseAction: templateSchema.optional(),
+    finalAdverseAction: templateSchema.optional(),
   }).optional(),
   taskRewardSystemEnabled: z.boolean().optional(),
+  scheConfig: z.object({
+    enableReligiousHolidays: z.boolean().optional(),
+    switchNeutralSeasonal: z.boolean().optional(),
+    forceCompanyUnifiedTheme: z.string().optional(),
+  }).optional(),
 });
 
 
@@ -83,7 +90,12 @@ router.get("/public", requireAuth, async (req, res, next) => {
     // Only return non-sensitive fields
     res.json({ 
       item: {
-        taskRewardSystemEnabled: settings.taskRewardSystemEnabled ?? true
+        taskRewardSystemEnabled: settings.taskRewardSystemEnabled ?? true,
+        scheConfig: settings.scheConfig || {
+          enableReligiousHolidays: true,
+          switchNeutralSeasonal: false,
+          forceCompanyUnifiedTheme: ""
+        }
       }
     });
 

@@ -58,8 +58,23 @@ const SystemSettingsSchema = new mongoose.Schema(
         subject: { type: String, default: "Project Reassigned: {projectName}" },
         body: { type: String, default: "Hello {name},\n\nThe project '{projectName}' has been reassigned to you.\n\nPlease login to review your updated assignments." },
       },
+      preAdverseAction: {
+        enabled: { type: Boolean, default: true },
+        subject: { type: String, default: "Pre-Adverse Action Notice — Background Screening Update" },
+        body: { type: String, default: "Hello {name},\n\nWe are writing to inform you that a background check report has been received in connection with your application. Based in whole or in part on information in this report, we are considering taking adverse action.\n\nYou have the right to dispute the accuracy or completeness of any information in the report.\n\nBest regards,\nHuman Resources" },
+      },
+      finalAdverseAction: {
+        enabled: { type: Boolean, default: true },
+        subject: { type: String, default: "Final Adverse Action Notice — Application Status" },
+        body: { type: String, default: "Hello {name},\n\nWe regret to inform you that we are unable to proceed with your application. This decision is based in whole or in part on information contained in your background check report.\n\nBest regards,\nHuman Resources" },
+      },
     },
     taskRewardSystemEnabled: { type: Boolean, default: true },
+    scheConfig: {
+      enableReligiousHolidays: { type: Boolean, default: true },
+      switchNeutralSeasonal: { type: Boolean, default: false },
+      forceCompanyUnifiedTheme: { type: String, default: "" },
+    },
   },
   { timestamps: true }
 );

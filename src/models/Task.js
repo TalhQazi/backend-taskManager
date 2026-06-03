@@ -77,6 +77,7 @@ const TaskSchema = new mongoose.Schema(
     ],
     taskNumber: { type: Number, index: true },
     executionPriority: { type: Number, default: null, index: true }, // Admin-only execution order priority
+    websiteId: { type: mongoose.Schema.Types.ObjectId, ref: "Website", required: false, index: true },
   },
   { timestamps: true }
 );

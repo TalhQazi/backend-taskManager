@@ -207,6 +207,10 @@ async function requireEmployeeSelf(req, res) {
 
         payType: employee.payType || "hourly",
         payRate: employee.payRate || "0",
+ current_status: employee.current_status || "AVAILABLE",
+        lunch_start_time: employee.lunch_start_time || null,
+        lunch_expected_end: employee.lunch_expected_end || null,
+        break_start_time: employee.break_start_time || null,
           bankInfo: employee.bankInfo || {
           accountName: "",
           accountNumber: "",
@@ -220,12 +224,14 @@ async function requireEmployeeSelf(req, res) {
           tds: "",
           regime: "",
         },
+
        },
      });
    } catch (err) {
      next(err);
    }
  });
+
 
 
 router.get("/me/tasks", requireAuth, async (req, res, next) => {
@@ -1302,6 +1308,51 @@ router.post("/me/clock-out-with-scrum", requireAuth, async (req, res, next) => {
 
     await entry.save();
 
+    // Automatically create or update EOD report
+    try {
+      const EODReport = require("../models/EODReport");
+      let eodData = null;
+      try {
+        eodData = JSON.parse(scrum);
+      } catch {
+        eodData = { tasksCompleted: scrum.trim(), issuesBlockers: "", notes: "" };
+      }
+
+      if (eodData) {
+        const start = new Date(entry.date);
+        start.setHours(0, 0, 0, 0);
+        const end = new Date(entry.date);
+        end.setHours(23, 59, 59, 999);
+
+        const existingReport = await EODReport.findOne({
+          userId: String(user._id),
+          date: { $gte: start, $lte: end },
+        });
+
+        if (existingReport) {
+          existingReport.rawInput = JSON.stringify(eodData);
+          existingReport.status = "submitted";
+          existingReport.timeEntryId = entry._id;
+          await existingReport.save();
+        } else {
+          await EODReport.create({
+            userId: String(user._id),
+            employeeId: String(employee._id),
+            employeeName: employee.name,
+            date: entry.date || new Date(),
+            rawInput: JSON.stringify(eodData),
+            inputType: "text",
+            status: "submitted",
+            timeEntryId: entry._id,
+          });
+        }
+        const { cacheDel } = require("../lib/cache");
+        cacheDel("eod-reports:*").catch(() => {});
+      }
+    } catch (err) {
+      console.error("Failed to sync EOD report on employee clock-out-with-scrum:", err);
+    }
+
     // Create notification for admin
     await createNotification({
       actor: employee.name,
@@ -1533,7 +1584,7 @@ router.get("/me/eod-reports", requireAuth, async (req, res, next) => {
       rawInput: report.rawInput,
       inputType: report.inputType,
       status: report.status,
-      createdAt: report.createdAt,
+      createdAt: report.updatedAt || report.createdAt,
     }));
 
     return res.json({ items, total, page: Number(page), limit: Number(limit) });
