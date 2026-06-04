@@ -784,6 +784,17 @@ router.put("/admin/:id/approve", requireAuth, requireRole(["super-admin", "admin
 
     await onboarding.save();
 
+    // Auto-approve ClearHire background check profile if it exists
+    try {
+      const clearHireProfile = await ClearHireProfile.findOne({ userId: onboarding.userId });
+      if (clearHireProfile) {
+        clearHireProfile.status = "GREEN";
+        await clearHireProfile.save();
+      }
+    } catch (err) {
+      console.error("[onboarding approve] ClearHire status auto-approval failed:", err.message);
+    }
+
     // Trigger Maine New Hire Reporting workflow
     try {
       const existingReport = await NewHireReport.findOne({ employeeId: onboarding.employeeId });
