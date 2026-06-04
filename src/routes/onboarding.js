@@ -650,7 +650,7 @@ router.get("/admin/all", requireAuth, requireRole(["super-admin", "admin", "mana
       chMap[ch.userId.toString()] = ch.status;
     });
 
-    const items = onboardings.map((o) => ({
+    const mappedItems = onboardings.map((o) => ({
       id: String(o._id),
       userId: String(o.userId),
       employeeId: String(o.employeeId),
@@ -667,6 +667,49 @@ router.get("/admin/all", requireAuth, requireRole(["super-admin", "admin", "mana
       createdAt: o.createdAt,
       updatedAt: o.updatedAt,
     }));
+
+    // Fetch all active/existing employees to check links
+    const employees = await Employee.find({}).select("_id").lean();
+    const employeeIdSet = new Set(employees.map((e) => String(e._id)));
+
+    // Group items by employeeName (case-insensitive)
+    const groups = {};
+    mappedItems.forEach((item) => {
+      const nameKey = String(item.employeeName || "").toLowerCase().trim();
+      if (!groups[nameKey]) {
+        groups[nameKey] = [];
+      }
+      groups[nameKey].push(item);
+    });
+
+    const items = [];
+    for (const nameKey of Object.keys(groups)) {
+      const groupItems = groups[nameKey];
+      if (groupItems.length === 1) {
+        items.push(groupItems[0]);
+      } else {
+        // Multiple records for the same employee name
+        // 1. Separate records that map to an actual Employee ID
+        const linkedRecords = groupItems.filter(
+          (r) => employeeIdSet.has(r.employeeId) || employeeIdSet.has(r.userId)
+        );
+        const candidates = linkedRecords.length > 0 ? linkedRecords : groupItems;
+
+        // 2. Choose the best record among candidates
+        // Sort by progress desc, then by createdAt desc
+        candidates.sort((a, b) => {
+          if (a.progress !== b.progress) {
+            return b.progress - a.progress; // highest progress first
+          }
+          return new Date(b.createdAt) - new Date(a.createdAt); // newest first
+        });
+
+        items.push(candidates[0]);
+      }
+    }
+
+    // Sort items by createdAt desc to match the original sort order
+    items.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 
     res.json({ items });
   } catch (err) {
