@@ -407,6 +407,10 @@ connectDb()
     // Initialize default founder messages
     await initializeMessages();
 
+    // Initialize default compliance templates
+    const { initializeComplianceTemplates } = require("./utils/complianceSeeder");
+    await initializeComplianceTemplates();
+
     // Start background reminders (Annual Reports)
     const { checkAnnualReportReminders } = require("./utils/reminders");
     checkAnnualReportReminders(); // Run once on startup

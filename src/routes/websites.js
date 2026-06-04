@@ -1,6 +1,9 @@
 const express = require("express");
 const Website = require("../models/Website");
 const Task = require("../models/Task");
+const ChecklistTemplate = require("../models/ChecklistTemplate");
+const ChecklistItem = require("../models/ChecklistItem");
+const ChecklistHistory = require("../models/ChecklistHistory");
 const { requireAuth } = require("../middleware/auth");
 
 const router = express.Router();
@@ -29,6 +32,85 @@ router.get("/future", async (req, res, next) => {
   }
 });
 
+// Get all compliance templates - MUST come before /:id
+router.get("/templates", requireAuth, async (req, res, next) => {
+  try {
+    const templates = await ChecklistTemplate.find().lean();
+    res.json({ items: templates });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Get compliance leaderboard - MUST come before /:id
+router.get("/compliance/leaderboard", requireAuth, async (req, res, next) => {
+  try {
+    const completions = await ChecklistItem.aggregate([
+      { $match: { status: "completed" } },
+      { $group: { _id: "$completedBy", count: { $sum: 1 } } },
+      { $sort: { count: -1 } }
+    ]);
+    const items = completions
+      .filter(c => c._id) // Filter out empty/system completions
+      .map(c => ({ username: c._id, count: c.count }));
+    res.json({ items });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Get overall compliance reports - MUST come before /:id
+router.get("/compliance/reports", requireAuth, async (req, res, next) => {
+  try {
+    const websites = await Website.find().lean();
+    const totalWebsites = websites.length;
+    
+    // Average readiness score
+    const avgScore = totalWebsites > 0
+      ? Math.round(websites.reduce((sum, w) => sum + (w.readinessScore || 0), 0) / totalWebsites)
+      : 0;
+
+    // Status breakdown (Red: 0-79%, Yellow: 80-99%, Green: 100%)
+    let red = 0;
+    let yellow = 0;
+    let green = 0;
+    websites.forEach(w => {
+      const score = w.readinessScore || 0;
+      if (score >= 100) green++;
+      else if (score >= 80) yellow++;
+      else red++;
+    });
+
+    // Business unit performance aggregation
+    const buGroups = {};
+    websites.forEach(w => {
+      const bu = w.businessUnit || "Marketing";
+      if (!buGroups[bu]) {
+        buGroups[bu] = { name: bu, totalScore: 0, count: 0 };
+      }
+      buGroups[bu].totalScore += w.readinessScore || 0;
+      buGroups[bu].count++;
+    });
+
+    const buPerformance = Object.values(buGroups).map(g => ({
+      name: g.name,
+      avgScore: Math.round(g.totalScore / g.count),
+      count: g.count
+    }));
+
+    res.json({
+      item: {
+        totalWebsites,
+        avgScore,
+        statusBreakdown: { red, yellow, green },
+        buPerformance
+      }
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // Get single website by ID
 router.get("/:id", async (req, res, next) => {
   try {
@@ -37,6 +119,190 @@ router.get("/:id", async (req, res, next) => {
       return res.status(404).json({ error: { message: "Website not found" } });
     }
     res.json({ item: website });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Get or lazy-initialize compliance checklist for a website
+router.get("/:id/compliance", requireAuth, async (req, res, next) => {
+  try {
+    const website = await Website.findById(req.params.id);
+    if (!website) {
+      return res.status(404).json({ error: { message: "Website not found" } });
+    }
+
+    let items = await ChecklistItem.find({ websiteId: website._id }).sort({ createdAt: 1 }).lean();
+
+    // If no items exist, but the website has a complianceTemplate, initialize them!
+    if (items.length === 0 && website.complianceTemplate) {
+      const template = await ChecklistTemplate.findOne({ key: website.complianceTemplate });
+      if (template) {
+        const itemsToCreate = [];
+        template.categories.forEach(cat => {
+          cat.items.forEach(it => {
+            itemsToCreate.push({
+              websiteId: website._id,
+              category: cat.name,
+              title: it.title,
+              description: it.description,
+              requiresEvidence: it.requiresEvidence,
+              status: "pending"
+            });
+          });
+        });
+
+        if (itemsToCreate.length > 0) {
+          const created = await ChecklistItem.insertMany(itemsToCreate);
+          items = created.map(i => i.toObject());
+          
+          // Log initial creation history
+          const initialHistory = new ChecklistHistory({
+            websiteId: website._id,
+            action: "checklist_initialized",
+            notes: `Checklist initialized from template: ${template.name}`,
+            userId: req.user?.sub || req.user?.id || "System",
+            username: req.user?.username || "System",
+            ipAddress: req.ip || req.headers["x-forwarded-for"] || req.socket.remoteAddress || "",
+            deviceInfo: req.headers["user-agent"] || ""
+          });
+          await initialHistory.save();
+        }
+      }
+    }
+
+    res.json({ items, website });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Update a specific checklist item
+router.put("/:id/compliance/:itemId", requireAuth, async (req, res, next) => {
+  try {
+    const { status, notes, evidenceUrl, evidenceFile, blockedReason } = req.body;
+    
+    const item = await ChecklistItem.findById(req.params.itemId);
+    if (!item) {
+      return res.status(404).json({ error: { message: "Checklist item not found" } });
+    }
+
+    // Role verification: Super Admin, Admin, Manager, Team Lead, Developer
+    const userRole = req.user?.role || "";
+    const authorizedRoles = ["super-admin", "admin", "manager", "team-lead", "developer"];
+    if (!authorizedRoles.includes(userRole)) {
+      return res.status(403).json({ error: { message: "Unauthorized: only managers, developers, and admins can mark items." } });
+    }
+
+    const previousStatus = item.status;
+    
+    // Check if evidence is required before completing
+    if (status === "completed" && item.requiresEvidence && !evidenceUrl && !evidenceFile && !item.evidenceUrl && !item.evidenceFile) {
+      return res.status(400).json({ error: { message: "Evidence (Screenshot, log file or URL) is required to complete this item." } });
+    }
+
+    // Update item
+    if (status !== undefined) {
+      item.status = status;
+      if (status === "completed") {
+        item.completedBy = req.user?.username || "System";
+        item.completedAt = new Date();
+      } else {
+        item.completedBy = "";
+        item.completedAt = undefined;
+      }
+    }
+    if (notes !== undefined) item.notes = notes;
+    if (evidenceUrl !== undefined) item.evidenceUrl = evidenceUrl;
+    if (evidenceFile !== undefined) item.evidenceFile = evidenceFile;
+    if (blockedReason !== undefined) item.blockedReason = blockedReason;
+
+    await item.save();
+
+    // Create Audit Log
+    const historyLog = new ChecklistHistory({
+      websiteId: item.websiteId,
+      itemId: item._id,
+      action: "item_updated",
+      previousState: previousStatus,
+      newState: item.status,
+      notes: notes || `Checklist item status changed from ${previousStatus} to ${item.status}`,
+      userId: req.user?.sub || req.user?.id || "System",
+      username: req.user?.username || "System",
+      ipAddress: req.ip || req.headers["x-forwarded-for"] || req.socket.remoteAddress || "",
+      deviceInfo: req.headers["user-agent"] || ""
+    });
+    await historyLog.save();
+
+    // Recalculate Website Readiness Score
+    const totalItems = await ChecklistItem.countDocuments({ websiteId: item.websiteId });
+    const completedItems = await ChecklistItem.countDocuments({ websiteId: item.websiteId, status: "completed" });
+    const readinessScore = totalItems > 0 ? Math.round((completedItems / totalItems) * 100) : 0;
+    
+    await Website.findByIdAndUpdate(item.websiteId, { readinessScore });
+
+    res.json({ item, readinessScore });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Admin override of score or status
+router.put("/:id/override", requireAuth, async (req, res, next) => {
+  try {
+    const { overrideReason, readinessScore, status } = req.body;
+    
+    // Verify admin role
+    const userRole = req.user?.role || "";
+    if (userRole !== "admin" && userRole !== "super-admin") {
+      return res.status(403).json({ error: { message: "Only administrators can override website parameters." } });
+    }
+
+    if (!overrideReason) {
+      return res.status(400).json({ error: { message: "Override reason is required." } });
+    }
+
+    const website = await Website.findById(req.params.id);
+    if (!website) {
+      return res.status(404).json({ error: { message: "Website not found" } });
+    }
+
+    const previousScore = website.readinessScore;
+    const previousStatus = website.status;
+
+    if (readinessScore !== undefined) website.readinessScore = Number(readinessScore);
+    if (status !== undefined) website.status = status;
+    website.overrideReason = overrideReason;
+
+    await website.save();
+
+    // Create Audit Log
+    const historyLog = new ChecklistHistory({
+      websiteId: website._id,
+      action: "admin_override",
+      previousState: `Score: ${previousScore}%, Status: ${previousStatus}`,
+      newState: `Score: ${website.readinessScore}%, Status: ${website.status}`,
+      notes: `Admin Override: ${overrideReason}`,
+      userId: req.user?.sub || req.user?.id || "System",
+      username: req.user?.username || "System",
+      ipAddress: req.ip || req.headers["x-forwarded-for"] || req.socket.remoteAddress || "",
+      deviceInfo: req.headers["user-agent"] || ""
+    });
+    await historyLog.save();
+
+    res.json({ item: website });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Get website audit history
+router.get("/:id/history", requireAuth, async (req, res, next) => {
+  try {
+    const history = await ChecklistHistory.find({ websiteId: req.params.id })
+      .sort({ createdAt: -1 })
+      .lean();
+    res.json({ items: history });
   } catch (err) {
     next(err);
   }
@@ -96,6 +362,10 @@ router.delete("/:id", requireAuth, async (req, res, next) => {
     if (!website) {
       return res.status(404).json({ error: { message: "Website not found" } });
     }
+    // Delete checklist items and history linked to this website
+    await ChecklistItem.deleteMany({ websiteId: website._id });
+    await ChecklistHistory.deleteMany({ websiteId: website._id });
+
     res.json({ message: "Website deleted successfully" });
   } catch (err) {
     next(err);
