@@ -92,6 +92,7 @@ const announcementsRoutes = require("./routes/announcements");
 
 const milestonesRoutes = require("./routes/milestones");
 const atlasbookRoutes = require("./routes/atlasbook");
+const personalBudgetRoutes = require("./routes/personalBudget");
 
 
 
@@ -420,6 +421,7 @@ app.use("/api/milestones", requireClearHire, milestonesRoutes);
 app.use("/api/video", requireClearHire, videoMessagesRoutes);
 app.use("/api/user", requireClearHire, videoUserHistoryRoutes);
 app.use("/api/atlasbook", requireClearHire, atlasbookRoutes);
+app.use("/api/personal-budget", requireClearHire, personalBudgetRoutes);
 
 
 
@@ -436,6 +438,10 @@ connectDb()
     
     // Initialize default founder messages
     await initializeMessages();
+
+    // Initialize default compliance templates
+    const { initializeComplianceTemplates } = require("./utils/complianceSeeder");
+    await initializeComplianceTemplates();
 
     // Start background reminders (Annual Reports)
     const { checkAnnualReportReminders } = require("./utils/reminders");

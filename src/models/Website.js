@@ -85,6 +85,13 @@ const websiteSchema = new mongoose.Schema(
       type: String,
       default: "System",
     },
+    launchDate: { type: Date },
+    businessUnit: { type: String, default: "Marketing" }, // e.g. 'Marketing', 'SaaS', 'E-Commerce', 'Operations'
+    environment: { type: String, default: "Production" }, // e.g. 'Production', 'Staging', 'Development'
+    leadDeveloper: { type: String, default: "" }, // username
+    complianceTemplate: { type: String, default: "" }, // template key
+    readinessScore: { type: Number, default: 0 },
+    overrideReason: { type: String, default: "" },
   },
   { timestamps: true }
 );

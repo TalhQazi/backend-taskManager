@@ -4,5 +4,6 @@ uploads/
 
 .DS_Store
 
-queryDb.js
+scratch/
+scratch_query.js
 
