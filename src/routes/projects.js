@@ -1120,7 +1120,7 @@ router.post("/:id/comments", requireAuth, async (req, res, next) => {
 router.delete("/:id/priorities", requireAuth, async (req, res, next) => {
   try {
     // Check admin role
-    if (req.user?.role !== "admin") {
+    if (!['admin', 'super-admin'].includes(String(req.user?.role || '').trim().toLowerCase())) {
       return res.status(403).json({ error: { message: "Only admins can manage execution priorities" } });
     }
 
