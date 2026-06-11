@@ -5,7 +5,7 @@ const ContributionSchema = new mongoose.Schema(
     // Who made the contribution
     contributorId: { type: String, required: true, index: true },
     contributorName: { type: String, required: true, index: true },
-    contributorEmail: { type: String, required: true },
+    contributorEmail: { type: String, default: "" },
     contributorRole: { type: String, required: true },
 
     // What was the contribution
