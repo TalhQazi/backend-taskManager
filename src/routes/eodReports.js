@@ -157,15 +157,28 @@ router.get("/eod-status", requireAuth, requireRole(["manager", "admin", "super-a
 // GET /api/manager/eod-reports - Get EOD reports with filters
 router.get("/eod-reports", requireAuth, requireRole(["manager", "admin", "super-admin"]), async (req, res, next) => {
   try {
-    const { date, employeeId, employee, status, page = 1, limit = 50 } = req.query;
+    const { date, from, to, location, employeeId, employee, status, page = 1, limit = 50 } = req.query;
     const skip = (Number(page) - 1) * Number(limit);
 
     const matchStage = {};
 
-    // Date filter
-    if (date) {
+    // Date/Range filter
+    if (from) {
+      const start = new Date(from);
+      start.setHours(0, 0, 0, 0);
+      const end = to ? new Date(to) : new Date();
+      end.setHours(23, 59, 59, 999);
+      matchStage.date = { $gte: start, $lte: end };
+    } else if (date) {
       const { start, end } = getDayRange(new Date(date));
       matchStage.date = { $gte: start, $lte: end };
+    }
+
+    // Location filter
+    if (location && location !== "all") {
+      const employeesInLocation = await Employee.find({ location }).select("_id").lean();
+      const empIds = employeesInLocation.map(e => e._id);
+      matchStage.employeeId = { $in: empIds };
     }
 
     // Employee filter - support both employeeId and employee (name) parameters
@@ -181,7 +194,7 @@ router.get("/eod-reports", requireAuth, requireRole(["manager", "admin", "super-
       matchStage.status = status;
     }
 
-    const cacheKey = `eod-reports:list:${date || 'all'}:${employeeId || employee || 'all'}:${status || 'all'}:p${page}:l${limit}`;
+    const cacheKey = `eod-reports:list:${date || 'all'}:${from || 'none'}:${to || 'none'}:${location || 'all'}:${employeeId || employee || 'all'}:${status || 'all'}:p${page}:l${limit}`;
 
     const result = await cacheWrap(cacheKey, async () => {
       const [reports, total] = await Promise.all([
@@ -203,6 +216,13 @@ router.get("/eod-reports", requireAuth, requireRole(["manager", "admin", "super-
         timeEntries.map((te) => [String(te._id), te])
       );
 
+      // Fetch employee locations
+      const reportEmployeeIds = reports.map(r => r.employeeId).filter(Boolean);
+      const employeesList = await Employee.find({ _id: { $in: reportEmployeeIds } }).select("_id location").lean();
+      const employeeLocationMap = new Map(
+        employeesList.map(e => [String(e._id), e.location || ""])
+      );
+
       const items = reports.map((report) => {
         const timeEntry = report.timeEntryId ? timeEntryById.get(String(report.timeEntryId)) : null;
         return {
@@ -222,6 +242,7 @@ router.get("/eod-reports", requireAuth, requireRole(["manager", "admin", "super-
           aiSummary: report.aiSummary || "",
           productivityScore: report.productivityScore,
           flags: report.flags || [],
+          employeeLocation: employeeLocationMap.get(String(report.employeeId)) || "",
         };
       });
 
