@@ -81,6 +81,10 @@ const patentSchema = new mongoose.Schema(
       type: Number,
       default: null,
     },
+    notifiedDays: {
+      type: [Number],
+      default: [],
+    },
     createdBy: {
       type: String,
       default: "System",

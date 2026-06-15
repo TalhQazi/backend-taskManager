@@ -416,6 +416,13 @@ connectDb()
     checkAnnualReportReminders(); // Run once on startup
     setInterval(checkAnnualReportReminders, 24 * 60 * 60 * 1000); // Run every 24 hours
 
+    // Start background reminders (Patent Expirations)
+    const { checkPatentExpirations } = require("./jobs/expiryJob");
+    checkPatentExpirations().catch((err) => console.error("[Expiry Job] Startup run failed:", err));
+    setInterval(() => {
+      checkPatentExpirations().catch((err) => console.error("[Expiry Job] Interval run failed:", err));
+    }, 24 * 60 * 60 * 1000); // Run every 24 hours
+
     // Start background follow-up timers cron worker
     const { processFollowUpTimers } = require("./jobs/followUpJob");
     processFollowUpTimers().catch((err) => console.error("[Follow-Up Job] Startup run failed:", err));

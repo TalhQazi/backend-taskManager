@@ -323,6 +323,14 @@ router.post("/transfer-project", requireAuth, requireRole(["admin", "super-admin
       return res.status(404).json({ error: { message: "Asana project not found" } });
     }
 
+    // Check if duplicate import
+    const existingProject = await Project.findOne({
+      description: `Imported from Asana (ID: ${asanaProject.asanaId})`
+    });
+    if (existingProject) {
+      return res.status(400).json({ error: { message: "This project has already been transferred." } });
+    }
+
     // 2. Fetch all Asana Tasks for this project
     const asanaTasks = await AsanaTask.find({ projectAsanaId }).lean();
     
