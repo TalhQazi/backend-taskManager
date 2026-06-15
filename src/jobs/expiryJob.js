@@ -29,8 +29,15 @@ async function checkPatentExpirations() {
       const timeDiff = expiration.getTime() - today.getTime();
       const daysUntilExpiration = Math.ceil(timeDiff / (1000 * 60 * 60 * 24));
 
-      // Thresholds we want to alert on
-      const thresholds = [0, 30, 60, 90, 120, 180];
+      // Auto-expire patents that have passed their expiration date
+      if (daysUntilExpiration <= 0 && patent.status !== "Expired") {
+        patent.status = "Expired";
+        await patent.save();
+        console.log(`[Expiry Job] Patent '${patent.patentName}' marked as Expired.`);
+      }
+
+      // Only send email alerts at 7 days and 1 day before expiry
+      const thresholds = [1, 7];
       let triggeredThreshold = null;
 
       for (const t of thresholds) {
@@ -43,12 +50,7 @@ async function checkPatentExpirations() {
       if (triggeredThreshold !== null) {
         console.log(`[Expiry Job] Triggered threshold ${triggeredThreshold} for patent: ${patent.patentName} (${daysUntilExpiration} days remaining)`);
 
-        // Update status if expired
-        if (triggeredThreshold === 0) {
-          patent.status = "Expired";
-        }
-
-        // Add this threshold and all larger ones (which are now in the past) to notifiedDays
+        // Add this threshold and all larger ones to notifiedDays
         thresholds.forEach((t) => {
           if (t >= triggeredThreshold && !patent.notifiedDays.includes(t)) {
             patent.notifiedDays.push(t);
@@ -58,17 +60,15 @@ async function checkPatentExpirations() {
         await patent.save();
 
         // Send Push Notification
-        const detailMessage = triggeredThreshold === 0 
-          ? `Patent '${patent.patentName}' has expired.` 
-          : `Patent '${patent.patentName}' is expiring in ${daysUntilExpiration} days (Expiration Date: ${expiration.toLocaleDateString()}).`;
+        const detailMessage = `Patent '${patent.patentName}' is expiring in ${daysUntilExpiration} day(s) (Expiration Date: ${expiration.toLocaleDateString()}).`;
 
         await createNotification({
           actor: "System",
           actorRole: "system",
-          action: triggeredThreshold === 0 ? "expired" : "expiring soon",
+          action: "expiring soon",
           resourceType: "patent",
           resourceName: patent.patentName,
-          category: "TASK_ASSIGNED", // Broadcasts to super-admin, admin, manager
+          category: "TASK_ASSIGNED",
           details: detailMessage,
           resourceId: String(patent._id),
           link: "/admin/intellectual-property"
