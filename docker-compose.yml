@@ -31,7 +31,7 @@ services:
       - JWT_SECRET=your_jwt_secret_here
       - NODE_ENV=production
     volumes:
-      - backend-uploads:/usr/src/app/uploads
+      - ./uploads:/usr/src/app/uploads
     ports:
       - "5000:5000"
     networks:
@@ -40,27 +40,12 @@ services:
   # 3. React/Vite Frontend
   frontend:
     build:
-      context: ../frontend
+      context: ../Task-Manager-website
       dockerfile: Dockerfile
     container_name: taskmanager-frontend
     restart: always
-    networks:
-      - taskmanager-network
-
-  # 4. Nginx Reverse Proxy (Traffic Router)
-  nginx:
-    image: nginx:alpine
-    container_name: taskmanager-nginx
-    restart: always
     ports:
-      - "80:80"
-      - "443:443"
-    volumes:
-      - ./nginx.conf:/etc/nginx/nginx.conf:ro
-      - /etc/letsencrypt:/etc/letsencrypt:ro
-    depends_on:
-      - frontend
-      - backend
+      - "127.0.0.1:3000:80" # Expose to localhost only so Host Nginx can proxy it
     networks:
       - taskmanager-network
 
@@ -70,4 +55,3 @@ networks:
 
 volumes:
   mongo-data:
-  backend-uploads:
