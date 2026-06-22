@@ -92,6 +92,15 @@ const websiteSchema = new mongoose.Schema(
     complianceTemplate: { type: String, default: "" }, // template key
     readinessScore: { type: Number, default: 0 },
     overrideReason: { type: String, default: "" },
+    // System Health Monitoring fields
+    healthStatus: { type: String, enum: ["LIVE", "DEGRADED", "DOWN", "UNKNOWN"], default: "UNKNOWN" },
+    lastCheckedAt: { type: Date },
+    sslExpiryDate: { type: Date },
+    sslIssuer: { type: String, default: "" },
+    sslStatus: { type: String, enum: ["VALID", "EXPIRING_SOON", "EXPIRED", "INVALID", "UNKNOWN"], default: "UNKNOWN" },
+    responseTimeMs: { type: Number, default: 0 },
+    uptimePercentage: { type: Number, default: 100 },
+    isMonitoringEnabled: { type: Boolean, default: true },
   },
   { timestamps: true }
 );

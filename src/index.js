@@ -83,6 +83,7 @@ const announcementsRoutes = require("./routes/announcements");
 const milestonesRoutes = require("./routes/milestones");
 const atlasbookRoutes = require("./routes/atlasbook");
 const personalBudgetRoutes = require("./routes/personalBudget");
+const healthRoutes = require("./routes/health");
 
 
 
@@ -391,6 +392,7 @@ app.use("/api/video", requireClearHire, videoMessagesRoutes);
 app.use("/api/user", requireClearHire, videoUserHistoryRoutes);
 app.use("/api/atlasbook", requireClearHire, atlasbookRoutes);
 app.use("/api/personal-budget", requireClearHire, personalBudgetRoutes);
+app.use("/api/health", healthRoutes);
 
 
 
@@ -457,6 +459,10 @@ connectDb()
       },
       30 * 1000
     );
+
+    // Start Website Monitor cron job
+    const { startWebsiteMonitor } = require("./jobs/websiteMonitor");
+    startWebsiteMonitor();
     
     httpServer.listen(port, () => {
       console.log(`Backend listening on http://localhost:${port}`);

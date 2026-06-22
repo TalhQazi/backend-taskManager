@@ -80,4 +80,38 @@ async function sendSystemEmail({ to, templateKey, variables = {} }) {
   }
 }
 
-module.exports = { sendSystemEmail };
+/**
+ * Sends a raw email using the global system settings without requiring a DB template.
+ */
+async function sendRawEmail({ to, subject, body }) {
+  try {
+    const settings = await SystemSettings.findOne({ key: "global" });
+    if (!settings) return false;
+
+    const { emailConfig } = settings;
+    if (!emailConfig.host || !emailConfig.user || !emailConfig.pass) return false;
+
+    let decryptedPass;
+    try { decryptedPass = decrypt(emailConfig.pass); } 
+    catch (e) { decryptedPass = emailConfig.pass; }
+
+    const transporter = nodemailer.createTransport({
+      host: emailConfig.host,
+      port: emailConfig.port,
+      secure: emailConfig.secure,
+      auth: { user: emailConfig.user, pass: decryptedPass },
+      tls: { rejectUnauthorized: false },
+    });
+
+    const fromEmail = emailConfig.fromAddress || emailConfig.user;
+    const fromField = emailConfig.senderName ? `${emailConfig.senderName} <${fromEmail}>` : fromEmail;
+
+    const info = await transporter.sendMail({ from: fromField, to, subject, text: body });
+    return true;
+  } catch (err) {
+    console.error("Error sending raw email:", err);
+    return false;
+  }
+}
+
+module.exports = { sendSystemEmail, sendRawEmail };
