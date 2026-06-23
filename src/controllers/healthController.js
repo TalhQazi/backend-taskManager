@@ -91,16 +91,33 @@ exports.ingestMetrics = async (req, res) => {
       return res.status(400).json({ error: { message: "serverId is required" } });
     }
 
+    // 1. Find or create the Server
+    let server = await Server.findOne({ name: serverId });
+    if (!server) {
+      server = new Server({
+        name: serverId,
+        ipAddress: req.ip || req.connection.remoteAddress || 'Unknown'
+      });
+    }
+
+    // 2. Update Server status and last seen
+    server.lastSeenAt = new Date();
+    if (cpu > 90 || memory > 90 || disk > 90) {
+      server.status = 'DEGRADED';
+    } else {
+      server.status = 'LIVE';
+    }
+    await server.save();
+
+    // 3. Create the Metric using the Server's ObjectId
     const metric = await ServerMetric.create({
-      serverId,
+      serverId: server._id,
       cpuUsagePercent: cpu,
       memoryUsagePercent: memory,
       diskUsagePercent: disk,
-      networkInKBps: networkIn,
-      networkOutKBps: networkOut
+      networkInKBps: networkIn || 0,
+      networkOutKBps: networkOut || 0
     });
-
-    // We can evaluate alerts here if needed (e.g. HIGH_CPU)
 
     res.json({ success: true, metric });
   } catch (err) {
