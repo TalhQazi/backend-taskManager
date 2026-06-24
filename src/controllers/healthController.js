@@ -8,7 +8,7 @@ const { dispatchAlert } = require("../utils/alertManager");
 exports.getOverview = async (req, res) => {
   try {
     const servers = await Server.find({ isMonitoringEnabled: true });
-    const websites = await Website.find({ isMonitoringEnabled: true, url: { $exists: true, $ne: "" }, status: { $in: ["Live", "Maintenance"] } });
+    const websites = await Website.find({ websiteType: "active", isMonitoringEnabled: { $ne: false }, url: { $exists: true, $ne: "" } });
     
     const liveServers = servers.filter(s => s.status === "LIVE").length;
     const downServers = servers.filter(s => s.status === "DOWN" || s.status === "DEGRADED").length;
@@ -31,7 +31,7 @@ exports.getOverview = async (req, res) => {
 
 exports.getWebsitesStatus = async (req, res) => {
   try {
-    const websites = await Website.find({ isMonitoringEnabled: true, url: { $exists: true, $ne: "" }, status: { $in: ["Live", "Maintenance"] } })
+    const websites = await Website.find({ websiteType: "active", isMonitoringEnabled: { $ne: false }, url: { $exists: true, $ne: "" } })
       .select("siteName url healthStatus lastCheckedAt sslStatus sslExpiryDate responseTimeMs uptimePercentage")
       .sort({ healthStatus: 1, siteName: 1 });
       

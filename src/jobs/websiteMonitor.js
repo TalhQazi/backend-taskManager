@@ -88,9 +88,9 @@ async function runMonitor() {
   console.log("[WebsiteMonitor] Starting check cycle...");
   
   const websites = await Website.find({
-    isMonitoringEnabled: true,
-    url: { $exists: true, $ne: "" },
-    status: { $in: ["Live", "Maintenance"] } // Only check Live or Maintenance sites
+    websiteType: "active",
+    isMonitoringEnabled: { $ne: false },
+    url: { $exists: true, $ne: "" }
   });
 
   if (!websites.length) {
