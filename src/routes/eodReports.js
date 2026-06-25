@@ -207,14 +207,37 @@ router.get("/eod-reports", requireAuth, requireRole(["manager", "admin", "super-
       ]);
 
       // Get time entries for additional data
-      const reportIds = reports.map((r) => String(r._id));
-      const timeEntries = await TimeEntry.find({
-        _id: { $in: reports.map((r) => r.timeEntryId).filter(Boolean) },
-      }).lean();
+      const timeEntryIds = reports.map((r) => r.timeEntryId).filter(Boolean);
+      const orConditions = [];
+      if (timeEntryIds.length > 0) {
+        orConditions.push({ _id: { $in: timeEntryIds } });
+      }
+      reports.forEach((report) => {
+        if (report.employeeName && report.date) {
+          const { start, end } = getDayRange(report.date);
+          orConditions.push({
+            employee: report.employeeName,
+            date: { $gte: start, $lte: end }
+          });
+        }
+      });
+
+      const timeEntries = orConditions.length > 0
+        ? await TimeEntry.find({ $or: orConditions }).lean()
+        : [];
 
       const timeEntryById = new Map(
         timeEntries.map((te) => [String(te._id), te])
       );
+
+      const timeEntryByEmployeeAndDate = new Map();
+      timeEntries.forEach((te) => {
+        if (te.employee && te.date) {
+          const dateKey = new Date(te.date).toISOString().slice(0, 10);
+          const key = `${te.employee.toLowerCase()}_${dateKey}`;
+          timeEntryByEmployeeAndDate.set(key, te);
+        }
+      });
 
       // Fetch employee locations
       const reportEmployeeIds = reports.map(r => r.employeeId).filter(Boolean);
@@ -224,7 +247,12 @@ router.get("/eod-reports", requireAuth, requireRole(["manager", "admin", "super-
       );
 
       const items = reports.map((report) => {
-        const timeEntry = report.timeEntryId ? timeEntryById.get(String(report.timeEntryId)) : null;
+        let timeEntry = report.timeEntryId ? timeEntryById.get(String(report.timeEntryId)) : null;
+        if (!timeEntry && report.employeeName && report.date) {
+          const dateKey = new Date(report.date).toISOString().slice(0, 10);
+          const key = `${report.employeeName.toLowerCase()}_${dateKey}`;
+          timeEntry = timeEntryByEmployeeAndDate.get(key);
+        }
         return {
           id: String(report._id),
           userId: report.userId,
@@ -264,9 +292,17 @@ router.get("/eod-reports/:id", requireAuth, requireRole(["manager", "admin", "su
       return res.status(404).json({ error: "EOD report not found" });
     }
 
-    const timeEntry = report.timeEntryId
+    let timeEntry = report.timeEntryId
       ? await TimeEntry.findById(report.timeEntryId).lean()
       : null;
+
+    if (!timeEntry && report.employeeName && report.date) {
+      const { start, end } = getDayRange(report.date);
+      timeEntry = await TimeEntry.findOne({
+        employee: report.employeeName,
+        date: { $gte: start, $lte: end }
+      }).lean();
+    }
 
     const item = {
       id: String(report._id),
