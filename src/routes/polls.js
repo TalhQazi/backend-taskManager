@@ -331,6 +331,26 @@ router.get("/:id/comments", requireAuth, async (req, res, next) => {
 });
 
 /**
+ * GET /api/polls/:id/votes
+ * Fetch all votes cast for a poll. Admin/Manager access only.
+ */
+router.get("/:id/votes", requireAuth, async (req, res, next) => {
+  try {
+    if (!["super-admin", "admin", "manager"].includes(req.user.role)) {
+      return res.status(403).json({ error: { message: "Forbidden" } });
+    }
+    const votes = await PollVote.find({ pollId: req.params.id }).lean();
+    const formatted = votes.map(v => ({
+      ...v,
+      id: String(v._id)
+    }));
+    return res.json({ items: formatted, votes: formatted, total: formatted.length });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+/**
  * POST /api/polls/:id/comments
  * Create a new comment/feedback.
  */
