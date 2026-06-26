@@ -763,4 +763,24 @@ router.get("/:id/ai-summary", requireAuth, async (req, res, next) => {
   }
 });
 
+/**
+ * GET /api/polls/:id/audit-logs
+ * Fetch audit trail logs for a poll. Admin/Manager access only.
+ */
+router.get("/:id/audit-logs", requireAuth, async (req, res, next) => {
+  try {
+    if (!["super-admin", "admin", "manager"].includes(req.user.role)) {
+      return res.status(403).json({ error: { message: "Forbidden" } });
+    }
+    const logs = await PollAuditLog.find({ pollId: req.params.id }).sort({ timestamp: -1 }).lean();
+    const formatted = logs.map(l => ({
+      ...l,
+      id: String(l._id)
+    }));
+    return res.json({ items: formatted, auditLogs: formatted, total: formatted.length });
+  } catch (err) {
+    return next(err);
+  }
+});
+
 module.exports = router;

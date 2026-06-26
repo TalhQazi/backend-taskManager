@@ -213,12 +213,15 @@ async function runTests() {
     console.log("✓ Executive Decision successfully recorded. Poll status updated to:", testPoll.status);
 
     // 10. Audit Log Trail insertion
-    const auditCount = await PollAuditLog.create({
+    await PollAuditLog.create({
       pollId: testPoll._id,
       pollTitle: testPoll.title,
       action: "Create Poll",
       performedBy: testEmployee.name
     });
+    
+    const logs = await PollAuditLog.find({ pollId: testPoll._id }).lean();
+    if (logs.length === 0) throw new Error("FAIL: Audit logs query returned empty list");
     console.log("✓ Audit log trail verified successfully");
 
   } finally {
