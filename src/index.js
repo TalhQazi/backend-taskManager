@@ -84,6 +84,7 @@ const milestonesRoutes = require("./routes/milestones");
 const atlasbookRoutes = require("./routes/atlasbook");
 const personalBudgetRoutes = require("./routes/personalBudget");
 const healthRoutes = require("./routes/health");
+const pollsRoutes = require("./routes/polls");
 
 
 
@@ -374,6 +375,7 @@ app.use("/api/team", requireClearHire, userStatusRoutes);
 app.use("/api/itineraries", requireClearHire, itinerariesRoutes);
 app.use("/api/tasks", requireClearHire, followUpsRoutes);
 app.use("/api/new-hire-reports", requireClearHire, newHireReportsRoutes);
+app.use("/api/polls", requireClearHire, pollsRoutes);
 
 app.use("/api/crm-company", requireClearHire, crmCompanyRoutes);
 app.use("/api/crm-contacts", requireClearHire, crmContactsRoutes);
