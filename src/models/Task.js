@@ -13,6 +13,7 @@ const TaskSchema = new mongoose.Schema(
     dueDate: { type: Date, index: true },
     dueTime: { type: String, default: "" },
     createdAt: { type: String, default: "", index: true },
+    introVideoUrl: { type: String, default: "" },
     attachmentFileName: { type: String, default: "" },
     attachmentNote: { type: String, default: "" },
     attachment: {
