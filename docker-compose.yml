@@ -1,0 +1,68 @@
+version: '3.8'
+
+services:
+  # 1. Self-Hosted MongoDB
+  mongodb:
+    image: mongo:6.0
+    container_name: taskmanager-mongodb
+    restart: always
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: admin
+      MONGO_INITDB_ROOT_PASSWORD: secure_mongodb_password_here
+    ports:
+      - "127.0.0.1:27017:27017" # Exposes to localhost only (secure)
+    volumes:
+      - mongo-data:/data/db
+    networks:
+      - taskmanager-network
+
+  # 2. Redis Cache
+  redis:
+    image: redis:7-alpine
+    container_name: taskmanager-redis
+    restart: always
+    networks:
+      - taskmanager-network
+
+  # 3. Node.js Backend API
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: taskmanager-backend
+    restart: always
+    depends_on:
+      - mongodb
+      - redis
+    env_file: .env
+    environment:
+      - PORT=5000
+      - MONGODB_URI=mongodb://admin:secure_mongodb_password_here@mongodb:27017/test?authSource=admin
+      - REDIS_URL=redis://redis:6379
+      - JWT_SECRET=your_jwt_secret_here
+      - NODE_ENV=production
+    volumes:
+      - ./uploads:/usr/src/app/uploads
+    ports:
+      - "5000:5000"
+    networks:
+      - taskmanager-network
+
+  # 3. React/Vite Frontend
+  frontend:
+    build:
+      context: ../Task-Manager-website
+      dockerfile: Dockerfile
+    container_name: taskmanager-frontend
+    restart: always
+    ports:
+      - "127.0.0.1:3000:80" # Expose to localhost only so Host Nginx can proxy it
+    networks:
+      - taskmanager-network
+
+networks:
+  taskmanager-network:
+    driver: bridge
+
+volumes:
+  mongo-data:

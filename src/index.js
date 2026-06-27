@@ -67,6 +67,18 @@ const itinerariesRoutes = require("./routes/itineraries");
 const followUpsRoutes = require("./routes/followUps");
 const newHireReportsRoutes = require("./routes/newHireReports");
 
+const legalCaseRoutes = require("./routes/LegalCase");
+const legalDocumentRoutes = require("./routes/LegalDocument");
+const legalEvidenceRoutes = require("./routes/LegalEvidence");
+const legalDeadlineRoutes = require("./routes/LegalDeadline");
+const legalCalendarRoutes = require("./routes/LegalCalendar");
+const legalContactRoutes = require("./routes/LegalContact");
+const legalTaskRoutes = require("./routes/LegalTask");
+const legalNoteRoutes = require("./routes/LegalNote");
+const legalReportRoutes = require("./routes/LegalReport");
+const legalFilingRoutes = require("./routes/LegalFiling");
+const legalNotificationRoutes = require("./routes/LegalNotification");
+
 const crmCompanyRoutes = require("./routes/crmcompany");
 const crmContactsRoutes = require("./routes/crmcontacts");
 const crmDealsRoutes = require("./routes/crmdeals");
@@ -384,6 +396,18 @@ app.use("/api/crm-commandcore", requireClearHire, crmCommandCoreRoutes);
 app.use("/api/crm-files", requireClearHire, crmFilesRoutes);
 app.use("/api/crm-communication", requireClearHire, crmCommunicationRoutes);
 app.use("/api/meme", requireClearHire, memeRoutes);
+
+app.use("/api/legal/cases", requireClearHire, legalCaseRoutes);
+app.use("/api/legal/documents", requireClearHire, legalDocumentRoutes);
+app.use("/api/legal/evidence", requireClearHire, legalEvidenceRoutes);
+app.use("/api/legal/deadlines", requireClearHire, legalDeadlineRoutes);
+app.use("/api/legal/calendar", requireClearHire, legalCalendarRoutes);
+app.use("/api/legal/contacts", requireClearHire, legalContactRoutes);
+app.use("/api/legal/tasks", requireClearHire, legalTaskRoutes);
+app.use("/api/legal/notes", requireClearHire, legalNoteRoutes);
+app.use("/api/legal/reports", requireClearHire, legalReportRoutes);
+app.use("/api/legal/filings", requireClearHire, legalFilingRoutes);
+app.use("/api/legal/notifications", requireClearHire, legalNotificationRoutes);
 
 app.use("/api/announcements", requireClearHire, announcementsRoutes);
 
