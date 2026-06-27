@@ -186,7 +186,7 @@ router.get("/eod-reports", requireAuth, requireRole(["manager", "admin", "super-
       matchStage.employeeId = employeeId;
     } else if (employee) {
       // Filter by employee name (case-insensitive)
-      matchStage.employeeName = new RegExp(`^${employee.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i");
+      matchStage.employeeName = new RegExp(`^${employee.replace(/[.*+?^${}()|[\]\\]/g, "\$&")}$`, "i");
     }
 
     // Status filter
@@ -392,7 +392,7 @@ router.get("/time-entries", requireAuth, requireRole(["manager", "admin", "super
 async function getUserIdByEmployeeEmail(email) {
   try {
     const emp = await Employee.findOne(
-      { email: new RegExp(`^${email.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i") },
+      { email: new RegExp(`^${email.replace(/[.*+?^${}()|[\]\\]/g, "\$&")}$`, "i") },
       { _id: 1 }
     ).lean();
     return emp ? String(emp._id) : null;

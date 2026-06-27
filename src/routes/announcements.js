@@ -122,7 +122,7 @@ function buildMatchQuery(req) {
   if (search) match.$text = { $search: search };
 
   if (author && String(author).trim()) {
-    match.authorName = new RegExp(String(author).trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
+    match.authorName = new RegExp(String(author).trim().replace(/[.*+?^${}()|[\]\\]/g, "\$&"), "i");
   }
 
   if (dateFrom || dateTo) {
@@ -148,11 +148,11 @@ function buildMatchQuery(req) {
   // Target hints for listing (optional): narrow by location/team label on targetSummary
   const locRx =
     location && String(location).trim()
-      ? new RegExp(String(location).trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i")
+      ? new RegExp(String(location).trim().replace(/[.*+?^${}()|[\]\\]/g, "\$&"), "i")
       : null;
   const teamRx =
     team && String(team).trim()
-      ? new RegExp(String(team).trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i")
+      ? new RegExp(String(team).trim().replace(/[.*+?^${}()|[\]\\]/g, "\$&"), "i")
       : null;
   if (locRx && teamRx) {
     match.$and = [{ targetSummary: locRx }, { targetSummary: teamRx }];

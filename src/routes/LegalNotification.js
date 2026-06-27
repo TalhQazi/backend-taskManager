@@ -5,7 +5,10 @@ const LegalNotification = require("../models/LegalNotification");
 const { requireAuth, requireRole } = require("../middleware/auth");
 
 const createSchema = z.object({
-  title: z.string().min(1, "Title is required"),\n  message: z.string().optional().nullable().or(z.literal("")),\n  type: z.string().optional().nullable().or(z.literal("")),\n  isRead: z.string().optional().nullable().or(z.literal(""))
+  title: z.string().min(1, "Title is required"),
+  message: z.string().optional().nullable().or(z.literal("")),
+  type: z.string().optional().nullable().or(z.literal("")),
+  isRead: z.string().optional().nullable().or(z.literal(""))
 });
 const updateSchema = createSchema.partial();
 

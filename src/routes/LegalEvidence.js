@@ -5,7 +5,13 @@ const LegalEvidence = require("../models/LegalEvidence");
 const { requireAuth, requireRole } = require("../middleware/auth");
 
 const createSchema = z.object({
-  title: z.string().min(1, "Title is required"),\n  description: z.string().optional().nullable().or(z.literal("")),\n  evidenceType: z.string().min(1, "Evidence Type is required"),\n  dateAcquired: z.string().optional().nullable().or(z.literal("")),\n  location: z.string().optional().nullable().or(z.literal("")),\n  caseReference: z.string().optional().nullable().or(z.literal("")),\n  status: z.string().optional().nullable().or(z.literal(""))
+  title: z.string().min(1, "Title is required"),
+  description: z.string().optional().nullable().or(z.literal("")),
+  evidenceType: z.string().min(1, "Evidence Type is required"),
+  dateAcquired: z.string().optional().nullable().or(z.literal("")),
+  location: z.string().optional().nullable().or(z.literal("")),
+  caseReference: z.string().optional().nullable().or(z.literal("")),
+  status: z.string().optional().nullable().or(z.literal(""))
 });
 const updateSchema = createSchema.partial();
 

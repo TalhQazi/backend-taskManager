@@ -50,7 +50,7 @@ function withId(doc) {
 }
 
 function escapeRegExp(s) {
-  return String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return String(s).replace(/[.*+?^${}()|[\]\\]/g, "\$&");
 }
 
 function getDayRange(d = new Date()) {

@@ -288,7 +288,7 @@ async function logActivity(req, action, resourceType, resourceId, resourceName, 
 }
 
 function escapeRegExp(s) {
-  return String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return String(s).replace(/[.*+?^${}()|[\]\\]/g, "\$&");
 }
 
 

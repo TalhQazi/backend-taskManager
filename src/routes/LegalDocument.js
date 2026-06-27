@@ -5,7 +5,12 @@ const LegalDocument = require("../models/LegalDocument");
 const { requireAuth, requireRole } = require("../middleware/auth");
 
 const createSchema = z.object({
-  title: z.string().min(1, "Title is required"),\n  description: z.string().optional().nullable().or(z.literal("")),\n  fileType: z.string().min(1, "File Type is required"),\n  caseReference: z.string().optional().nullable().or(z.literal("")),\n  status: z.string().optional().nullable().or(z.literal("")),\n  author: z.string().optional().nullable().or(z.literal(""))
+  title: z.string().min(1, "Title is required"),
+  description: z.string().optional().nullable().or(z.literal("")),
+  fileType: z.string().min(1, "File Type is required"),
+  caseReference: z.string().optional().nullable().or(z.literal("")),
+  status: z.string().optional().nullable().or(z.literal("")),
+  author: z.string().optional().nullable().or(z.literal(""))
 });
 const updateSchema = createSchema.partial();
 

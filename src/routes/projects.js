@@ -292,7 +292,7 @@ router.post("/", requireAuth, async (req, res, next) => {
 
 // Optimized GET all projects with task stats using aggregation
 function escapeRegExp(s) {
-  return String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return String(s).replace(/[.*+?^${}()|[\]\\]/g, "\$&");
 }
 
 router.get("/", requireAuth, async (req, res, next) => {

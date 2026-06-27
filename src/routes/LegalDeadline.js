@@ -5,7 +5,13 @@ const LegalDeadline = require("../models/LegalDeadline");
 const { requireAuth, requireRole } = require("../middleware/auth");
 
 const createSchema = z.object({
-  title: z.string().min(1, "Title is required"),\n  description: z.string().optional().nullable().or(z.literal("")),\n  dueDate: z.string().optional().nullable().or(z.literal("")),\n  caseReference: z.string().optional().nullable().or(z.literal("")),\n  assignedTo: z.string().optional().nullable().or(z.literal("")),\n  status: z.string().optional().nullable().or(z.literal("")),\n  priority: z.string().optional().nullable().or(z.literal(""))
+  title: z.string().min(1, "Title is required"),
+  description: z.string().optional().nullable().or(z.literal("")),
+  dueDate: z.string().optional().nullable().or(z.literal("")),
+  caseReference: z.string().optional().nullable().or(z.literal("")),
+  assignedTo: z.string().optional().nullable().or(z.literal("")),
+  status: z.string().optional().nullable().or(z.literal("")),
+  priority: z.string().optional().nullable().or(z.literal(""))
 });
 const updateSchema = createSchema.partial();
 

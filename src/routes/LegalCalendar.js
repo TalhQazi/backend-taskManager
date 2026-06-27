@@ -5,7 +5,13 @@ const LegalCalendar = require("../models/LegalCalendar");
 const { requireAuth, requireRole } = require("../middleware/auth");
 
 const createSchema = z.object({
-  title: z.string().min(1, "Event Title is required"),\n  description: z.string().optional().nullable().or(z.literal("")),\n  eventDate: z.string().optional().nullable().or(z.literal("")),\n  time: z.string().optional().nullable().or(z.literal("")),\n  location: z.string().optional().nullable().or(z.literal("")),\n  eventType: z.string().min(1, "Event Type is required"),\n  attendees: z.string().optional().nullable().or(z.literal(""))
+  title: z.string().min(1, "Event Title is required"),
+  description: z.string().optional().nullable().or(z.literal("")),
+  eventDate: z.string().optional().nullable().or(z.literal("")),
+  time: z.string().optional().nullable().or(z.literal("")),
+  location: z.string().optional().nullable().or(z.literal("")),
+  eventType: z.string().min(1, "Event Type is required"),
+  attendees: z.string().optional().nullable().or(z.literal(""))
 });
 const updateSchema = createSchema.partial();
 

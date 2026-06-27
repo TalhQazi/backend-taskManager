@@ -5,7 +5,12 @@ const LegalContact = require("../models/LegalContact");
 const { requireAuth, requireRole } = require("../middleware/auth");
 
 const createSchema = z.object({
-  firstName: z.string().min(1, "First Name is required"),\n  lastName: z.string().min(1, "Last Name is required"),\n  email: z.string().optional().nullable().or(z.literal("")),\n  phone: z.string().optional().nullable().or(z.literal("")),\n  company: z.string().optional().nullable().or(z.literal("")),\n  contactType: z.string().optional().nullable().or(z.literal(""))
+  firstName: z.string().min(1, "First Name is required"),
+  lastName: z.string().min(1, "Last Name is required"),
+  email: z.string().optional().nullable().or(z.literal("")),
+  phone: z.string().optional().nullable().or(z.literal("")),
+  company: z.string().optional().nullable().or(z.literal("")),
+  contactType: z.string().optional().nullable().or(z.literal(""))
 });
 const updateSchema = createSchema.partial();
 

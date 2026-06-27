@@ -24,7 +24,7 @@ const updateSchema = createSchema.partial();
 async function generateCaseNumber() {
   const count = await LegalCase.countDocuments();
   const year = new Date().getFullYear();
-  return \`CASE-\${year}-\${String(count + 1).padStart(4, "0")}\`;
+  return `CASE-${year}-${String(count + 1).padStart(4, "0")}`;
 }
 
 function withId(doc) {

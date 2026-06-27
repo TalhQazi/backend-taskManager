@@ -226,7 +226,7 @@ router.get("/assets", requireAuth, async (req, res, next) => {
     }
 
     if (q) {
-      const rx = new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
+      const rx = new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, "\$&"), "i");
       filter.$or = [{ title: rx }, { originalFilename: rx }, { description: rx }, { tags: rx }];
     }
 

@@ -47,7 +47,7 @@ async function requireEmployeeSelf(req, res) {
   let employee = await Employee.findById(userId).lean();
 
   if (!employee && normalizedCandidates.length > 0) {
-    const regexes = normalizedCandidates.map((c) => new RegExp(`^${c.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i"));
+    const regexes = normalizedCandidates.map((c) => new RegExp(`^${c.replace(/[.*+?^${}()|[\]\\]/g, "\$&")}$`, "i"));
     employee = await Employee.findOne({
       $or: [{ email: { $in: regexes } }, { name: { $in: regexes } }],
     }).lean();

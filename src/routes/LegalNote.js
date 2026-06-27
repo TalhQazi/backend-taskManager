@@ -5,7 +5,11 @@ const LegalNote = require("../models/LegalNote");
 const { requireAuth, requireRole } = require("../middleware/auth");
 
 const createSchema = z.object({
-  title: z.string().min(1, "Title is required"),\n  content: z.string().optional().nullable().or(z.literal("")),\n  caseReference: z.string().optional().nullable().or(z.literal("")),\n  author: z.string().optional().nullable().or(z.literal("")),\n  dateAdded: z.string().optional().nullable().or(z.literal(""))
+  title: z.string().min(1, "Title is required"),
+  content: z.string().optional().nullable().or(z.literal("")),
+  caseReference: z.string().optional().nullable().or(z.literal("")),
+  author: z.string().optional().nullable().or(z.literal("")),
+  dateAdded: z.string().optional().nullable().or(z.literal(""))
 });
 const updateSchema = createSchema.partial();
 
