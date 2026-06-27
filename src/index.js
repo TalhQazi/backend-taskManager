@@ -68,6 +68,7 @@ const followUpsRoutes = require("./routes/followUps");
 const newHireReportsRoutes = require("./routes/newHireReports");
 
 const legalCaseRoutes = require("./routes/LegalCase");
+const legalCourtRoutes = require("./routes/LegalCourt");
 const legalDocumentRoutes = require("./routes/LegalDocument");
 const legalEvidenceRoutes = require("./routes/LegalEvidence");
 const legalDeadlineRoutes = require("./routes/LegalDeadline");
@@ -398,6 +399,7 @@ app.use("/api/crm-communication", requireClearHire, crmCommunicationRoutes);
 app.use("/api/meme", requireClearHire, memeRoutes);
 
 app.use("/api/legal/cases", requireClearHire, legalCaseRoutes);
+app.use("/api/legal/courts", requireClearHire, legalCourtRoutes);
 app.use("/api/legal/documents", requireClearHire, legalDocumentRoutes);
 app.use("/api/legal/evidence", requireClearHire, legalEvidenceRoutes);
 app.use("/api/legal/deadlines", requireClearHire, legalDeadlineRoutes);
