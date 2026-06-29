@@ -30,6 +30,18 @@ const VehicleSchema = new mongoose.Schema(
       mimeType: { type: String, default: "" },
       size: { type: Number, default: 0 },
     },
+    needs: {
+      type: [
+        {
+          id: { type: String, required: true },
+          taskName: { type: String, required: true },
+          assignee: { type: String, default: "" }, // Stores the name of the assigned team member
+          dueDate: { type: String, default: "" },
+          completed: { type: Boolean, default: false }
+        }
+      ],
+      default: []
+    },
   },
   { timestamps: true }
 );

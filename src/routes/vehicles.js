@@ -95,6 +95,14 @@ const upload = multer({
 
 const vehicleStatusEnum = ["active", "inactive", "maintenance", "available", "in-use"];
 
+const needItemSchema = z.object({
+  id: z.string(),
+  taskName: z.string().min(1),
+  assignee: z.string().optional().default(""),
+  dueDate: z.string().optional().default(""),
+  completed: z.boolean().optional().default(false),
+});
+
 const createSchema = z.object({
   name: z.string().min(1),
   type: z.string().optional().default(""),
@@ -108,6 +116,7 @@ const createSchema = z.object({
   tagPhotoFileName: z.string().optional().default(""),
   tagPhotoDataUrl: z.string().optional().default(""),
   requiresInspection: z.boolean().optional().default(true),
+  needs: z.array(needItemSchema).optional(),
 }).passthrough();
 
 const adminUiSchema = z.object({
@@ -124,6 +133,7 @@ const adminUiSchema = z.object({
   tagPhotoFileName: z.string().optional().default(""),
   tagPhotoDataUrl: z.string().optional().default(""),
   requiresInspection: z.boolean().optional().default(true),
+  needs: z.array(needItemSchema).optional(),
 }).passthrough();
 
 const adminUiUpdateSchema = adminUiSchema.partial();
@@ -286,6 +296,7 @@ router.post("/", requireAuth, async (req, res, next) => {
         tagPhotoDataUrl: adminParsed.data.tagPhotoDataUrl || "",
         requiresInspection: adminParsed.data.requiresInspection ?? true,
         fuelLevel: 100,
+        needs: adminParsed.data.needs || [],
       });
 
       const obj = created.toObject();
@@ -415,6 +426,9 @@ router.put("/:id", requireAuth, async (req, res, next) => {
       if (typeof adminParsed.data.tagPhotoFileName === "string") patch.tagPhotoFileName = adminParsed.data.tagPhotoFileName;
       if (typeof adminParsed.data.tagPhotoDataUrl === "string") patch.tagPhotoDataUrl = adminParsed.data.tagPhotoDataUrl;
       if (typeof adminParsed.data.requiresInspection === "boolean") patch.requiresInspection = adminParsed.data.requiresInspection;
+      if (Array.isArray(req.body.needs)) {
+        patch.needs = req.body.needs;
+      }
 
       if (typeof patch.year === "string" || typeof patch.make === "string" || typeof patch.model === "string") {
         const existing = await Vehicle.findById(req.params.id).lean();
