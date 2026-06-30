@@ -24,18 +24,18 @@ async function dispatchAlert(subject, body, condition) {
     let recipientsList = recipients.map(r => ({ name: r.name, email: r.email }));
 
     if (recipientsList.length === 0) {
-      console.log("[AlertManager] No specific recipients configured. Falling back to active super-admins, admins, and managers.");
+      console.log("[AlertManager] No specific recipients configured. Falling back to active super-admins and admins.");
       const User = require("../models/User");
-      const adminsAndManagers = await User.find({
-        role: { $in: ["super-admin", "admin", "manager"] },
+      const admins = await User.find({
+        role: { $in: ["super-admin", "admin"] },
         status: "active",
         email: { $exists: true, $ne: "" }
       });
-      recipientsList = adminsAndManagers.map(u => ({ name: u.name || u.username, email: u.email }));
+      recipientsList = admins.map(u => ({ name: u.name || u.username, email: u.email }));
     }
 
     if (recipientsList.length === 0) {
-      console.warn("No recipients found for health alerts (NotificationRecipient and active admins/managers are empty).");
+      console.warn("No recipients found for health alerts (NotificationRecipient and active admins are empty).");
       return;
     }
 
