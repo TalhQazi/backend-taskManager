@@ -223,6 +223,8 @@ router.get("/assets", requireAuth, async (req, res, next) => {
       filter.mimeType = { $regex: /^image\//i };
     } else if (type === "pdf") {
       filter.mimeType = "application/pdf";
+    } else if (type === "document") {
+      filter.mimeType = { $nin: [/^image\//i, "application/pdf"] };
     }
 
     if (q) {
