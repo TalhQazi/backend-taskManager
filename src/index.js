@@ -461,6 +461,10 @@ connectDb()
     const { initializeComplianceTemplates } = require("./utils/complianceSeeder");
     await initializeComplianceTemplates();
 
+    // Initialize default alert rules
+    const { initializeAlertRules } = require("./utils/alertRuleSeeder");
+    await initializeAlertRules();
+
     // Start background reminders (Annual Reports)
     const { checkAnnualReportReminders } = require("./utils/reminders");
     checkAnnualReportReminders(); // Run once on startup

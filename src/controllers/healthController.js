@@ -47,6 +47,7 @@ exports.getIncidents = async (req, res) => {
     const limit = parseInt(req.query.limit) || 50;
     const incidents = await WebsiteIncident.find()
       .populate("websiteId", "siteName url")
+      .populate("serverId", "name ipAddress")
       .sort({ startedAt: -1 })
       .limit(limit);
       
@@ -101,13 +102,45 @@ exports.ingestMetrics = async (req, res) => {
     }
 
     // 2. Update Server status and last seen
+    const previousStatus = server.status || "UNKNOWN";
     server.lastSeenAt = new Date();
+    let currentStatus = "LIVE";
     if (cpu > 90 || memory > 90 || disk > 90) {
-      server.status = 'DEGRADED';
-    } else {
-      server.status = 'LIVE';
+      currentStatus = "DEGRADED";
     }
+    server.status = currentStatus;
     await server.save();
+
+    // Trigger alerts immediately on status change
+    if (currentStatus !== previousStatus) {
+      if (currentStatus === "DEGRADED") {
+        let openIncident = await WebsiteIncident.findOne({ serverId: server._id, status: "OPEN" });
+        if (!openIncident) {
+          openIncident = await WebsiteIncident.create({
+            serverId: server._id,
+            type: "DEGRADED",
+            errorDetails: `High usage: CPU ${cpu}%, Memory ${memory}%, Disk ${disk}%`,
+          });
+          await dispatchAlert(
+            `[DEGRADED] Server ${server.name}`,
+            `Server ${server.name} (${server.ipAddress || "Unknown IP"}) is currently DEGRADED.\nDetails: ${openIncident.errorDetails}`,
+            "DEGRADED"
+          );
+        }
+      } else if (currentStatus === "LIVE" && (previousStatus === "DOWN" || previousStatus === "DEGRADED")) {
+        const openIncident = await WebsiteIncident.findOne({ serverId: server._id, status: "OPEN" });
+        if (openIncident) {
+          openIncident.status = "RESOLVED";
+          openIncident.resolvedAt = new Date();
+          await openIncident.save();
+          await dispatchAlert(
+            `[RECOVERED] Server ${server.name}`,
+            `Server ${server.name} (${server.ipAddress || "Unknown IP"}) has recovered and is now LIVE.`,
+            "RECOVERED"
+          );
+        }
+      }
+    }
 
     // 3. Create the Metric using the Server's ObjectId
     const metric = await ServerMetric.create({

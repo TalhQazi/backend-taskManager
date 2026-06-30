@@ -21,12 +21,25 @@ async function dispatchAlert(subject, body, condition) {
     }
 
     const recipients = await NotificationRecipient.find({ isActive: true });
-    if (recipients.length === 0) {
-      console.warn("No active notification recipients found for health alerts.");
+    let recipientsList = recipients.map(r => ({ name: r.name, email: r.email }));
+
+    if (recipientsList.length === 0) {
+      console.log("[AlertManager] No specific recipients configured. Falling back to active super-admins, admins, and managers.");
+      const User = require("../models/User");
+      const adminsAndManagers = await User.find({
+        role: { $in: ["super-admin", "admin", "manager"] },
+        status: "active",
+        email: { $exists: true, $ne: "" }
+      });
+      recipientsList = adminsAndManagers.map(u => ({ name: u.name || u.username, email: u.email }));
+    }
+
+    if (recipientsList.length === 0) {
+      console.warn("No recipients found for health alerts (NotificationRecipient and active admins/managers are empty).");
       return;
     }
 
-    for (const recipient of recipients) {
+    for (const recipient of recipientsList) {
       const success = await sendRawEmail({
         to: recipient.email,
         subject,

@@ -192,6 +192,68 @@ async function runMonitor() {
 
   await Promise.all(checkPromises);
   console.log(`[WebsiteMonitor] Completed check cycle for ${websites.length} websites.`);
+
+  // Monitor Servers for offline timeout (no metrics for > 5 minutes)
+  try {
+    const Server = require("../models/Server");
+    const servers = await Server.find({ isMonitoringEnabled: { $ne: false } });
+    
+    for (const server of servers) {
+      const previousStatus = server.status || "UNKNOWN";
+      let currentStatus = previousStatus;
+      
+      const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
+      if (!server.lastSeenAt || server.lastSeenAt < fiveMinutesAgo) {
+        currentStatus = "DOWN";
+      } else if (server.status === "DOWN") {
+        currentStatus = "LIVE";
+      }
+      
+      if (currentStatus !== previousStatus) {
+        server.status = currentStatus;
+        await server.save();
+      }
+      
+      if (currentStatus === "DOWN") {
+        let openIncident = await WebsiteIncident.findOne({ 
+          serverId: server._id, 
+          status: "OPEN" 
+        });
+        
+        if (!openIncident) {
+          openIncident = await WebsiteIncident.create({
+            serverId: server._id,
+            type: "DOWN",
+            errorDetails: "Server hasn't reported metrics in over 5 minutes.",
+          });
+          
+          await dispatchAlert(
+            `[DOWN] Server ${server.name}`,
+            `Server ${server.name} (${server.ipAddress || "Unknown IP"}) hasn't reported metrics in over 5 minutes and is currently DOWN.`,
+            "DOWN"
+          );
+        }
+      } else if (currentStatus === "LIVE" && previousStatus === "DOWN") {
+        const openIncident = await WebsiteIncident.findOne({ 
+          serverId: server._id, 
+          status: "OPEN" 
+        });
+        if (openIncident) {
+          openIncident.status = "RESOLVED";
+          openIncident.resolvedAt = new Date();
+          await openIncident.save();
+          
+          await dispatchAlert(
+            `[RECOVERED] Server ${server.name}`,
+            `Server ${server.name} (${server.ipAddress || "Unknown IP"}) has recovered and is now LIVE.`,
+            "RECOVERED"
+          );
+        }
+      }
+    }
+  } catch (err) {
+    console.error("[WebsiteMonitor] Error monitoring servers:", err);
+  }
 }
 
 // Start cron job (every minute)
