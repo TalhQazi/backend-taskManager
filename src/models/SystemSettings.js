@@ -68,6 +68,11 @@ const SystemSettingsSchema = new mongoose.Schema(
         subject: { type: String, default: "Final Adverse Action Notice — Application Status" },
         body: { type: String, default: "Hello {name},\n\nWe regret to inform you that we are unable to proceed with your application. This decision is based in whole or in part on information contained in your background check report.\n\nBest regards,\nHuman Resources" },
       },
+      patentExpiration: {
+        enabled: { type: Boolean, default: true },
+        subject: { type: String, default: "ALERT: Patent Expiring - {patentName}" },
+        body: { type: String, default: "Hello {name},\n\nThis is an automated notification to inform you that the patent '{patentName}' is expiring in {daysUntilExpiration} days (Expiration Date: {expirationDate}).\n\nApplication Number: {applicationNumber}\nCategory: {category}\n\nPlease take necessary actions.\n\nBest regards,\nTask Manager System" }
+      },
     },
     taskRewardSystemEnabled: { type: Boolean, default: true },
     scheConfig: {

@@ -157,15 +157,28 @@ router.get("/eod-status", requireAuth, requireRole(["manager", "admin", "super-a
 // GET /api/manager/eod-reports - Get EOD reports with filters
 router.get("/eod-reports", requireAuth, requireRole(["manager", "admin", "super-admin"]), async (req, res, next) => {
   try {
-    const { date, employeeId, employee, status, page = 1, limit = 50 } = req.query;
+    const { date, from, to, location, employeeId, employee, status, page = 1, limit = 50 } = req.query;
     const skip = (Number(page) - 1) * Number(limit);
 
     const matchStage = {};
 
-    // Date filter
-    if (date) {
+    // Date/Range filter
+    if (from) {
+      const start = new Date(from);
+      start.setHours(0, 0, 0, 0);
+      const end = to ? new Date(to) : new Date();
+      end.setHours(23, 59, 59, 999);
+      matchStage.date = { $gte: start, $lte: end };
+    } else if (date) {
       const { start, end } = getDayRange(new Date(date));
       matchStage.date = { $gte: start, $lte: end };
+    }
+
+    // Location filter
+    if (location && location !== "all") {
+      const employeesInLocation = await Employee.find({ location }).select("_id").lean();
+      const empIds = employeesInLocation.map(e => e._id);
+      matchStage.employeeId = { $in: empIds };
     }
 
     // Employee filter - support both employeeId and employee (name) parameters
@@ -173,7 +186,7 @@ router.get("/eod-reports", requireAuth, requireRole(["manager", "admin", "super-
       matchStage.employeeId = employeeId;
     } else if (employee) {
       // Filter by employee name (case-insensitive)
-      matchStage.employeeName = new RegExp(`^${employee.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i");
+      matchStage.employeeName = new RegExp(`^${employee.replace(/[.*+?^${}()|[\]\\]/g, "\$&")}$`, "i");
     }
 
     // Status filter
@@ -181,7 +194,7 @@ router.get("/eod-reports", requireAuth, requireRole(["manager", "admin", "super-
       matchStage.status = status;
     }
 
-    const cacheKey = `eod-reports:list:${date || 'all'}:${employeeId || employee || 'all'}:${status || 'all'}:p${page}:l${limit}`;
+    const cacheKey = `eod-reports:list:${date || 'all'}:${from || 'none'}:${to || 'none'}:${location || 'all'}:${employeeId || employee || 'all'}:${status || 'all'}:p${page}:l${limit}`;
 
     const result = await cacheWrap(cacheKey, async () => {
       const [reports, total] = await Promise.all([
@@ -194,17 +207,52 @@ router.get("/eod-reports", requireAuth, requireRole(["manager", "admin", "super-
       ]);
 
       // Get time entries for additional data
-      const reportIds = reports.map((r) => String(r._id));
-      const timeEntries = await TimeEntry.find({
-        _id: { $in: reports.map((r) => r.timeEntryId).filter(Boolean) },
-      }).lean();
+      const timeEntryIds = reports.map((r) => r.timeEntryId).filter(Boolean);
+      const orConditions = [];
+      if (timeEntryIds.length > 0) {
+        orConditions.push({ _id: { $in: timeEntryIds } });
+      }
+      reports.forEach((report) => {
+        if (report.employeeName && report.date) {
+          const { start, end } = getDayRange(report.date);
+          orConditions.push({
+            employee: report.employeeName,
+            date: { $gte: start, $lte: end }
+          });
+        }
+      });
+
+      const timeEntries = orConditions.length > 0
+        ? await TimeEntry.find({ $or: orConditions }).lean()
+        : [];
 
       const timeEntryById = new Map(
         timeEntries.map((te) => [String(te._id), te])
       );
 
+      const timeEntryByEmployeeAndDate = new Map();
+      timeEntries.forEach((te) => {
+        if (te.employee && te.date) {
+          const dateKey = new Date(te.date).toISOString().slice(0, 10);
+          const key = `${te.employee.toLowerCase()}_${dateKey}`;
+          timeEntryByEmployeeAndDate.set(key, te);
+        }
+      });
+
+      // Fetch employee locations
+      const reportEmployeeIds = reports.map(r => r.employeeId).filter(Boolean);
+      const employeesList = await Employee.find({ _id: { $in: reportEmployeeIds } }).select("_id location").lean();
+      const employeeLocationMap = new Map(
+        employeesList.map(e => [String(e._id), e.location || ""])
+      );
+
       const items = reports.map((report) => {
-        const timeEntry = report.timeEntryId ? timeEntryById.get(String(report.timeEntryId)) : null;
+        let timeEntry = report.timeEntryId ? timeEntryById.get(String(report.timeEntryId)) : null;
+        if (!timeEntry && report.employeeName && report.date) {
+          const dateKey = new Date(report.date).toISOString().slice(0, 10);
+          const key = `${report.employeeName.toLowerCase()}_${dateKey}`;
+          timeEntry = timeEntryByEmployeeAndDate.get(key);
+        }
         return {
           id: String(report._id),
           userId: report.userId,
@@ -222,6 +270,7 @@ router.get("/eod-reports", requireAuth, requireRole(["manager", "admin", "super-
           aiSummary: report.aiSummary || "",
           productivityScore: report.productivityScore,
           flags: report.flags || [],
+          employeeLocation: employeeLocationMap.get(String(report.employeeId)) || "",
         };
       });
 
@@ -243,9 +292,17 @@ router.get("/eod-reports/:id", requireAuth, requireRole(["manager", "admin", "su
       return res.status(404).json({ error: "EOD report not found" });
     }
 
-    const timeEntry = report.timeEntryId
+    let timeEntry = report.timeEntryId
       ? await TimeEntry.findById(report.timeEntryId).lean()
       : null;
+
+    if (!timeEntry && report.employeeName && report.date) {
+      const { start, end } = getDayRange(report.date);
+      timeEntry = await TimeEntry.findOne({
+        employee: report.employeeName,
+        date: { $gte: start, $lte: end }
+      }).lean();
+    }
 
     const item = {
       id: String(report._id),
@@ -335,7 +392,7 @@ router.get("/time-entries", requireAuth, requireRole(["manager", "admin", "super
 async function getUserIdByEmployeeEmail(email) {
   try {
     const emp = await Employee.findOne(
-      { email: new RegExp(`^${email.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i") },
+      { email: new RegExp(`^${email.replace(/[.*+?^${}()|[\]\\]/g, "\$&")}$`, "i") },
       { _id: 1 }
     ).lean();
     return emp ? String(emp._id) : null;

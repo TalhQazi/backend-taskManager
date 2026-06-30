@@ -1,29 +1,65 @@
 const { S3Client, PutObjectCommand, DeleteObjectCommand, GetObjectCommand } = require("@aws-sdk/client-s3");
 const path = require("path");
+const fs = require("fs");
 
-const s3Client = new S3Client({
-  region: process.env.AWS_REGION || "us-east-1",
-  credentials: {
-    accessKeyId: process.env.AWS_ACCESS_KEY_ID,
-    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
-  },
-});
+let s3Client;
+const hasAwsConfig = !!(process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY);
+
+if (hasAwsConfig) {
+  s3Client = new S3Client({
+    region: process.env.AWS_REGION || "us-east-1",
+    credentials: {
+      accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+      secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
+    },
+  });
+}
+
+const getMimeType = (filePath) => {
+  const ext = path.extname(filePath).toLowerCase();
+  const mimes = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".gif": "image/gif",
+    ".svg": "image/svg+xml",
+    ".pdf": "application/pdf",
+    ".doc": "application/msword",
+    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ".xls": "application/vnd.ms-excel",
+    ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ".txt": "text/plain",
+    ".zip": "application/zip",
+    ".mp4": "video/mp4",
+    ".mp3": "audio/mpeg",
+  };
+  return mimes[ext] || "application/octet-stream";
+};
 
 /**
- * Upload a file buffer to S3
+ * Upload a file buffer to S3 (or local disk if S3 is not configured)
  * @param {Buffer} buffer - File data
  * @param {string} originalName - Original filename
  * @param {string} mimeType - File mime type
  * @param {string} folder - Folder in bucket (optional)
- * @returns {Promise<string>} - The S3 URL of the uploaded file
+ * @returns {Promise<string>} - The S3 URL or local relative URL of the uploaded file
  */
 async function uploadToS3(buffer, originalName, mimeType, folder = "uploads") {
-  if (!process.env.AWS_ACCESS_KEY_ID || !process.env.AWS_SECRET_ACCESS_KEY) {
-    throw new Error("AWS Credentials missing in environment variables");
+  const fileExtension = path.extname(originalName);
+  const uniqueName = `${Date.now()}-${Math.random().toString(36).substring(2, 9)}${fileExtension}`;
+  const fileKey = `${folder}/${uniqueName}`;
+
+  if (!hasAwsConfig) {
+    console.log(`[File System] Saving upload locally (S3 keys missing): ${fileKey}`);
+    const destPath = path.join(__dirname, "../../uploads", folder, uniqueName);
+    
+    await fs.promises.mkdir(path.dirname(destPath), { recursive: true });
+    await fs.promises.writeFile(destPath, buffer);
+    
+    // Return relative URL for static Express serving
+    return `/uploads/${folder}/${uniqueName}`;
   }
 
-  const fileExtension = path.extname(originalName);
-  const fileName = `${folder}/${Date.now()}-${Math.random().toString(36).substring(2, 9)}${fileExtension}`;
   const bucketName = process.env.AWS_S3_BUCKET_NAME || process.env.AWS_S3_BUCKET;
   if (!bucketName) {
     throw new Error("AWS S3 bucket name missing in environment variables");
@@ -31,34 +67,41 @@ async function uploadToS3(buffer, originalName, mimeType, folder = "uploads") {
 
   const command = new PutObjectCommand({
     Bucket: bucketName,
-    Key: fileName,
+    Key: fileKey,
     Body: buffer,
     ContentType: mimeType,
-    // Note: If you unchecked "Block Public Access", we can potentially set ACL: "public-read"
-    // But many AWS accounts now forbid this at the account level. 
-    // Standard practice is to serve from a public bucket or use CloudFront.
-    // For now, we rely on the bucket's "Block Public Access" being OFF and a Bucket Policy allowing reads.
   });
 
   await s3Client.send(command);
 
-  // Return the public URL
-  return `https://${bucketName}.s3.${process.env.AWS_REGION || "us-east-1"}.amazonaws.com/${fileName}`;
+  return `https://${bucketName}.s3.${process.env.AWS_REGION || "us-east-1"}.amazonaws.com/${fileKey}`;
 }
 
 /**
- * Delete a file from S3 by URL
+ * Delete a file from S3 or local disk by URL
  * @param {string} url - Entire URL of the file
  */
 async function deleteFromS3(url) {
   try {
-    if (!url || !url.includes("amazonaws.com")) return;
+    if (!url) return;
+
+    // Local file deletion
+    if (url.startsWith("/uploads/")) {
+      const relativePath = url.replace(/^\/uploads\//, "");
+      const localPath = path.join(__dirname, "../../uploads", relativePath);
+      if (fs.existsSync(localPath)) {
+        await fs.promises.unlink(localPath);
+        console.log(`[File System] Deleted local file: ${localPath}`);
+      }
+      return;
+    }
+
+    if (!hasAwsConfig || !url.includes("amazonaws.com")) return;
     
     const bucketName = process.env.AWS_S3_BUCKET_NAME || process.env.AWS_S3_BUCKET;
     if (!bucketName) return;
     const region = process.env.AWS_REGION || "us-east-1";
     
-    // Extract key from URL
     const urlPattern = new RegExp(`https://${bucketName}.s3.${region}.amazonaws.com/(.*)`);
     const match = url.match(urlPattern);
     if (!match) return;
@@ -72,31 +115,49 @@ async function deleteFromS3(url) {
 
     await s3Client.send(command);
   } catch (err) {
-    console.error("Failed to delete from S3:", err);
+    console.error("Failed to delete file:", err);
   }
 }
 
 /**
- * Get a file from S3 by its key and return the readable stream + content type.
+ * Get a file from local disk or S3 by its key and return the readable stream + content type.
  * Used to proxy S3 files through the backend API to avoid CORS issues.
  * @param {string} key - The S3 object key (e.g. "projects/logos/1234-abc.png")
  * @returns {Promise<{stream: ReadableStream, contentType: string, contentLength: number}>}
  */
 async function getFromS3(key) {
-  const bucketName = process.env.AWS_S3_BUCKET_NAME || process.env.AWS_S3_BUCKET;
-  if (!bucketName) {
-    throw new Error("AWS S3 bucket name missing in environment variables");
+  // Check if file is available locally on disk first
+  const localPath = path.join(__dirname, "../../uploads", key);
+  if (fs.existsSync(localPath)) {
+    console.log(`[File System] Serving proxied file from local disk: ${key}`);
+    const contentType = getMimeType(localPath);
+    const stats = fs.statSync(localPath);
+    return {
+      stream: fs.createReadStream(localPath),
+      contentType,
+      contentLength: stats.size,
+    };
   }
-  const command = new GetObjectCommand({
-    Bucket: bucketName,
-    Key: key,
-  });
-  const response = await s3Client.send(command);
-  return {
-    stream: response.Body,
-    contentType: response.ContentType || "application/octet-stream",
-    contentLength: response.ContentLength || 0,
-  };
+
+  // Fallback to AWS S3 if config is present
+  if (hasAwsConfig) {
+    const bucketName = process.env.AWS_S3_BUCKET_NAME || process.env.AWS_S3_BUCKET;
+    if (!bucketName) {
+      throw new Error("AWS S3 bucket name missing in environment variables");
+    }
+    const command = new GetObjectCommand({
+      Bucket: bucketName,
+      Key: key,
+    });
+    const response = await s3Client.send(command);
+    return {
+      stream: response.Body,
+      contentType: response.ContentType || "application/octet-stream",
+      contentLength: response.ContentLength || 0,
+    };
+  }
+
+  throw new Error(`File not found: ${key} (Local file missing and S3 credentials not configured)`);
 }
 
 /**
@@ -105,7 +166,11 @@ async function getFromS3(key) {
  * @returns {string|null} - The object key, or null if not a valid S3 URL
  */
 function extractS3Key(url) {
-  if (!url || !url.includes("amazonaws.com")) return null;
+  if (!url) return null;
+  if (url.startsWith("/uploads/")) {
+    return url.replace(/^\/uploads\//, "");
+  }
+  if (!url.includes("amazonaws.com")) return null;
   const bucketName = process.env.AWS_S3_BUCKET_NAME || process.env.AWS_S3_BUCKET;
   if (!bucketName) return null;
   const region = process.env.AWS_REGION || "us-east-1";

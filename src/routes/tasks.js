@@ -289,7 +289,7 @@ async function logActivity(req, action, resourceType, resourceId, resourceName, 
 }
 
 function escapeRegExp(s) {
-  return String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return String(s).replace(/[.*+?^${}()|[\]\\]/g, "\$&");
 }
 
 
@@ -1689,9 +1689,22 @@ router.put("/:id/reassign", requireAuth, async (req, res, next) => {
       category: "TASK_ASSIGNED",
     });
 
-    assignees.forEach(assignee => {
-      sendEmailNotification(assignee, "taskAssignment", { taskTitle: updated.title });
-    });
+    let projectName = "General";
+    if (updated.projectId) {
+      const proj = await Project.findById(updated.projectId).select("name").lean();
+      if (proj) projectName = proj.name;
+    }
+
+    const taskAssignees = Array.isArray(assignees) ? assignees : [];
+    for (const assignee of taskAssignees) {
+      await sendEmailNotification(assignee, "taskAssignment", {
+        taskTitle: updated.title,
+        projectName,
+        priority: updated.priority || "Normal",
+        dueDate: updated.dueDate ? new Date(updated.dueDate).toLocaleDateString() : "No due date",
+        description: updated.description || ""
+      });
+    }
 
     return res.json({ item: withId(updated) });
   } catch (err) {

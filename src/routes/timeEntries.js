@@ -18,7 +18,7 @@ const { cacheWrap, cacheDel } = require("../lib/cache");
 const router = express.Router();
 
 function escapeRegex(value) {
-  return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\$&");
 }
 
 const createSchema = z.object({

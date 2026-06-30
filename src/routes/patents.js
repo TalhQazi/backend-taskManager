@@ -10,6 +10,8 @@ const calculateExpiration = (filingDate, filingType) => {
   const date = new Date(filingDate);
   if (filingType === "Provisional") {
     date.setFullYear(date.getFullYear() + 1);
+  } else {
+    date.setFullYear(date.getFullYear() + 20);
   }
   return date;
 };

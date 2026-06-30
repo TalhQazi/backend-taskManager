@@ -114,7 +114,7 @@ router.get("/unread-count", requireAuth, async (req, res, next) => {
     };
 
     if (role !== "super-admin") {
-      const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\$&");
       // Include both email-based username AND display name so employees can find
       // notifications stored with their display name (from task.assignees).
       let candidates = [role, currentUser, currentName].filter(Boolean);
@@ -180,7 +180,7 @@ router.get("/", requireAuth, async (req, res, next) => {
         if (role === "super-admin") {
           // super-admin sees all broadcast notifications
         } else {
-          const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+          const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\$&");
 
           // Include both email-username AND display name. Employees have username=email
           // but task.assignees stores display names, so both must be searchable.
@@ -508,7 +508,7 @@ router.post("/mark-all-read_", requireAuth, async (req, res, next) => {
       }],
     };
     if (role !== "super-admin") {
-      const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\$&");
 
       let candidates = [role, currentUser, currentName].filter(Boolean);
 

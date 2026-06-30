@@ -106,7 +106,7 @@ router.post("/", requireAuth, requireRole(["super-admin", "admin"]), async (req,
     const { name, email, password, role, status, department, phone } = parsed.data;
 
     const existing = await Employee.findOne({
-      email: new RegExp(`^${email.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i"),
+      email: new RegExp(`^${email.replace(/[.*+?^${}()|[\]\\]/g, "\$&")}$`, "i"),
     }).lean();
     if (existing) {
       return res.status(409).json({ error: { message: "An employee with this email already exists" } });

@@ -25,7 +25,7 @@ function withId(doc) {
 }
 
 function escapeRegExp(s) {
-  return String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return String(s).replace(/[.*+?^${}()|[\]\\]/g, "\$&");
 }
 
 // GET /api/crm-deals - List deals with pagination, search, filter

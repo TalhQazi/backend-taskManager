@@ -85,7 +85,7 @@ const createSchema = z.object({
   department: z.string().optional().default(""),
   userRole: z.string().optional().default(""),
   userStatus: z.string().optional().default("active"),
-  password: z.string().min(1),
+  password: z.string().optional(),
 });
 
 const updateSchema = createSchema
@@ -100,7 +100,7 @@ function withId(doc) {
 }
 
 function escapeRegExp(s) {
-  return String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return String(s).replace(/[.*+?^${}()|[\]\\]/g, "\$&");
 }
 
 function getDayRange(d = new Date()) {
@@ -829,7 +829,7 @@ router.post("/", requireAuth, async (req, res, next) => {
         .join("")
         .toUpperCase();
 
-    const passwordHash = await bcrypt.hash(parsed.data.password, 10);
+    const passwordHash = parsed.data.password ? await bcrypt.hash(parsed.data.password, 10) : "";
 
     const { password, ...employeePayload } = parsed.data;
 

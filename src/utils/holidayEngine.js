@@ -224,7 +224,7 @@ async function resolveUserCountryCode(userId, employee) {
 }
 
 function escapeRegExp(s) {
-  return String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return String(s).replace(/[.*+?^${}()|[\]\\]/g, "\$&");
 }
 
 // Localization Messages Dictionary

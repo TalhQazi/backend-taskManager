@@ -13,7 +13,7 @@ const { sendSystemEmail } = require("../lib/email");
 const router = express.Router();
 
 function escapeRegex(str) {
-  return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return str.replace(/[.*+?^${}()|[\]\\]/g, "\$&");
 }
 
 async function findEmployee(identifier) {

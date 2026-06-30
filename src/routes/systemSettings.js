@@ -38,6 +38,7 @@ const systemSettingsSchema = z.object({
     projectReassignment: templateSchema.optional(),
     preAdverseAction: templateSchema.optional(),
     finalAdverseAction: templateSchema.optional(),
+    patentExpiration: templateSchema.optional(),
   }).optional(),
   taskRewardSystemEnabled: z.boolean().optional(),
   scheConfig: z.object({
