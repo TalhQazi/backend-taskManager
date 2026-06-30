@@ -21,20 +21,43 @@ function getDayRange(d = new Date()) {
 
 const PRIORITY_ORDER = { high: 0, medium: 1, low: 2 };
 
+function escapeRegExp(s) {
+  return String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 function buildAssigneeFilter(req) {
   const role = req.user?.role || "";
   const mine = req.query.mine === "true";
 
-  // Admins and managers see all tasks unless they request their own
-  if ((role === "admin" || role === "super-admin" || role === "manager") && !mine) {
+  // Admins see all tasks unless they request their own
+  if ((role === "admin" || role === "super-admin") && !mine) {
     return {};
   }
 
-  const userId = String(req.user?.id || req.user?._id || "");
-  const username = String(req.user?.username || req.user?.name || "");
-  const matchers = [...new Set([userId, username].filter(Boolean))];
-  if (matchers.length === 0) return {};
-  return { assignees: { $in: matchers } };
+  const username = String(req.user?.username || "").trim();
+  const name = String(req.user?.name || "").trim();
+  const fullName = String(req.user?.fullName || "").trim();
+  const candidates = [username, name, fullName].filter(Boolean);
+
+  if (candidates.length === 0) return { _id: null };
+
+  const regexes = candidates.map((c) => new RegExp(`^${escapeRegExp(c)}$`, "i"));
+
+  if (role === "manager" || role === "team-lead") {
+    return {
+      $or: [
+        { teamLead: { $in: regexes } },
+        { assignees: { $elemMatch: { $in: regexes } } }
+      ]
+    };
+  }
+
+  return {
+    $or: candidates.flatMap((c) => [
+      { assignees: { $elemMatch: { $regex: new RegExp(`^${escapeRegExp(c)}$`, "i") } } },
+      { assignee: { $regex: new RegExp(`^${escapeRegExp(c)}$`, "i") } } // Legacy
+    ])
+  };
 }
 
 function sortByPriorityTime(tasks) {
@@ -48,10 +71,50 @@ function sortByPriorityTime(tasks) {
   });
 }
 
-router.get("/summary", requireAuth, async (_req, res, next) => {
+router.get("/summary", requireAuth, async (req, res, next) => {
   try {
     const now = new Date();
     const { start, end } = getDayRange(now);
+
+    const role = String(req.user?.role || "").trim().toLowerCase();
+    const username = String(req.user?.username || "").trim();
+    const name = String(req.user?.name || "").trim();
+    const fullName = String(req.user?.fullName || "").trim();
+    const candidates = [username, name, fullName].filter(Boolean);
+
+    let taskFilter = {};
+    let projectFilter = {};
+
+    if (role !== "admin" && role !== "super-admin") {
+      if (candidates.length > 0) {
+        const regexes = candidates.map((c) => new RegExp(`^${escapeRegExp(c)}$`, "i"));
+        if (role === "manager" || role === "team-lead") {
+          taskFilter = {
+            $or: [
+              { teamLead: { $in: regexes } },
+              { assignees: { $elemMatch: { $in: regexes } } }
+            ]
+          };
+          projectFilter = {
+            $or: [
+              { teamLead: { $in: regexes } },
+              { assignees: { $elemMatch: { $in: regexes } } }
+            ]
+          };
+        } else {
+          taskFilter = {
+            $or: candidates.flatMap((c) => [
+              { assignees: { $elemMatch: { $regex: new RegExp(`^${escapeRegExp(c)}$`, "i") } } },
+              { assignee: { $regex: new RegExp(`^${escapeRegExp(c)}$`, "i") } }
+            ])
+          };
+          projectFilter = { assignees: { $elemMatch: { $in: regexes } } };
+        }
+      } else {
+        taskFilter = { _id: null };
+        projectFilter = { _id: null };
+      }
+    }
 
     const [
       tasks,
@@ -66,7 +129,7 @@ router.get("/summary", requireAuth, async (_req, res, next) => {
       openBugReports,
       companyTotal
     ] = await Promise.all([
-      Task.find().lean(),
+      Task.find(taskFilter).lean(),
       Employee.countDocuments({ status: "active" }),
       TimeEntry.find({ date: { $gte: start, $lte: end } }).lean(),
       Vehicle.countDocuments(),
@@ -74,7 +137,7 @@ router.get("/summary", requireAuth, async (_req, res, next) => {
       Patent.countDocuments({ patentType: "pending" }),
       Website.countDocuments({ websiteType: "active" }),
       Website.countDocuments({ websiteType: "future" }),
-      Project.countDocuments(),
+      Project.countDocuments(projectFilter),
       require("../models/BugReport").countDocuments({ status: "open" }),
       require("../models/Company").countDocuments({ status: "active" })
     ]);

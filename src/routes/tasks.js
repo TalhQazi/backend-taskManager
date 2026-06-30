@@ -1433,6 +1433,7 @@ router.patch("/:id/status", requireAuth, async (req, res, next) => {
 
     if (updated.status === "completed") {
       void handleTaskCompletion(updated);
+      await archiveTaskById(req.params.id, req.user);
     }
 
     // Fire-and-forget
@@ -1560,6 +1561,7 @@ router.put("/:id", requireAuth, async (req, res, next) => {
 
     if (updated.status === "completed") {
       void handleTaskCompletion(updated);
+      await archiveTaskById(req.params.id, req.user);
     }
 
     // Fire-and-forget

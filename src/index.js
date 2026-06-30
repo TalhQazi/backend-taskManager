@@ -435,6 +435,28 @@ connectDb()
     // Initialize default founder messages
     await initializeMessages();
 
+    // Archive existing completed tasks on startup
+    try {
+      const Archive = require("./models/Archive");
+      const Task = require("./models/Task");
+      const completedTasks = await Task.find({ status: "completed" }).lean();
+      if (completedTasks.length > 0) {
+        console.log(`[Startup Migration] Archiving ${completedTasks.length} existing completed tasks...`);
+        for (const task of completedTasks) {
+          await Archive.create({
+            itemType: "task",
+            originalId: task._id,
+            archivedBy: "system",
+            data: task
+          });
+          await Task.findByIdAndDelete(task._id);
+        }
+        console.log(`[Startup Migration] Finished archiving completed tasks.`);
+      }
+    } catch (migErr) {
+      console.error("[Startup Migration] Error archiving completed tasks:", migErr);
+    }
+
     // Initialize default compliance templates
     const { initializeComplianceTemplates } = require("./utils/complianceSeeder");
     await initializeComplianceTemplates();

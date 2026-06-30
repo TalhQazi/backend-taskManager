@@ -1,8 +1,11 @@
 const express = require("express");
 const { z } = require("zod");
+const path = require("path");
+const fs = require("fs");
 const router = express.Router();
 const LegalCase = require("../models/LegalCase");
 const { requireAuth, requireRole } = require("../middleware/auth");
+const { base64ToBuffer } = require("../lib/s3");
 
 // Validation Schemas
 const createSchema = z.object({
@@ -15,10 +18,51 @@ const createSchema = z.object({
   judge: z.string().optional().default(""),
   description: z.string().optional().default(""),
   openDate: z.string().optional().nullable(),
-  closeDate: z.string().optional().nullable()
+  closeDate: z.string().optional().nullable(),
+  attachments: z.array(z.object({
+    fileName: z.string().optional().nullable(),
+    url: z.string().optional().nullable(),
+    mimeType: z.string().optional().nullable(),
+    size: z.number().optional().nullable(),
+    uploadedAt: z.union([z.date(), z.string()]).optional().nullable()
+  })).optional()
 });
 
 const updateSchema = createSchema.partial();
+
+async function saveFileLocally(buffer, originalName, folder) {
+  const fileExtension = path.extname(originalName);
+  const uniqueName = `${Date.now()}-${Math.random().toString(36).substring(2, 9)}${fileExtension}`;
+  
+  const destPath = path.join(__dirname, "../../uploads", folder, uniqueName);
+  await fs.promises.mkdir(path.dirname(destPath), { recursive: true });
+  await fs.promises.writeFile(destPath, buffer);
+  
+  return `/uploads/${folder}/${uniqueName}`;
+}
+
+async function processAttachments(attachments, folder) {
+  if (!Array.isArray(attachments) || attachments.length === 0) return [];
+  return Promise.all(attachments.map(async (att) => {
+    if (att.url && att.url.startsWith("data:")) {
+      try {
+        const { buffer, mimeType } = base64ToBuffer(att.url);
+        const localUrl = await saveFileLocally(buffer, att.fileName || "attachment", folder);
+        return {
+          fileName: att.fileName || "attachment",
+          url: localUrl,
+          mimeType: att.mimeType || mimeType,
+          size: att.size || buffer.length,
+          uploadedAt: new Date()
+        };
+      } catch (err) {
+        console.error("Failed to save attachment locally:", err);
+        return att;
+      }
+    }
+    return att;
+  }));
+}
 
 // Helper to generate a unique case number
 async function generateCaseNumber() {
@@ -64,10 +108,12 @@ router.post("/", requireAuth, requireRole(["super-admin", "admin"]), async (req,
     }
 
     const caseNumber = await generateCaseNumber();
+    const processedAttachments = await processAttachments(parsed.data.attachments, "legal/cases");
 
     const created = await LegalCase.create({
       ...parsed.data,
       caseNumber,
+      attachments: processedAttachments,
       createdBy: req.user?.id,
     });
 
@@ -85,9 +131,15 @@ router.put("/:id", requireAuth, requireRole(["super-admin", "admin"]), async (re
       return res.status(400).json({ error: { message: parsed.error.errors[0]?.message || "Invalid payload" } });
     }
 
+    const processedAttachments = parsed.data.attachments ? await processAttachments(parsed.data.attachments, "legal/cases") : undefined;
+    const updateData = { ...parsed.data };
+    if (processedAttachments !== undefined) {
+      updateData.attachments = processedAttachments;
+    }
+
     const updated = await LegalCase.findByIdAndUpdate(
       req.params.id, 
-      { ...parsed.data, updatedBy: req.user?.id }, 
+      { ...updateData, updatedBy: req.user?.id }, 
       { new: true }
     ).lean();
 
