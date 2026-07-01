@@ -66,6 +66,14 @@ router.get("/", requireAuth, requireRole(["admin", "super-admin", "manager"]), a
       });
     }
 
+    // Resolve profile pictures from Settings (keyed by Employee._id === userId)
+    const { getAuthorProfileMap } = require("../utils/authorProfile");
+    const profileMap = await getAuthorProfileMap(contributors.map(c => c.userId));
+    contributors = contributors.map(c => ({
+      ...c,
+      avatar: profileMap[String(c.userId)]?.avatar || c.avatar || "",
+    }));
+
     res.json({
       items: contributors,
       total,

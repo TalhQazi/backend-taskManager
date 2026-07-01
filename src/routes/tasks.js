@@ -1428,11 +1428,17 @@ router.patch("/:id/status", requireAuth, async (req, res, next) => {
     }
 
     const update = { status };
-    
+    const actorName = String(req.user?.name || req.user?.username || "Unknown");
+
     // Timer Logic
     if (status === "in-progress" && task.status !== "in-progress") {
       // Starting the task
       update.startedAt = new Date();
+      // Permanent "first started" history — only set once
+      if (!task.firstStartedAt) {
+        update.firstStartedAt = new Date();
+        update.startedByName = actorName;
+      }
     } else if (task.status === "in-progress" && status !== "in-progress") {
       // Stopping/Completing the task
       const now = new Date();
@@ -1442,6 +1448,16 @@ router.patch("/:id/status", requireAuth, async (req, res, next) => {
         update.totalTimeSpent = (task.totalTimeSpent || 0) + diffSeconds;
         update.startedAt = null; // Reset startedAt since it's not currently running
       }
+    }
+
+    // Permanent "closed/completed" history
+    if (status === "completed") {
+      update.completedAt = new Date();
+      update.completedByName = actorName;
+    } else if (task.status === "completed" && status !== "completed") {
+      // Task re-opened — clear the completion record
+      update.completedAt = null;
+      update.completedByName = "";
     }
 
     const updated = await Task.findByIdAndUpdate(req.params.id, update, { new: true }).lean();
@@ -1587,6 +1603,25 @@ router.put("/:id", requireAuth, async (req, res, next) => {
 
     delete patch.assignee;
     delete patch.assigneeInitials;
+
+    // Start/close history when status changes via a full task update
+    if (patch.status) {
+      const existing = await Task.findById(req.params.id).select("status firstStartedAt").lean();
+      if (existing) {
+        const actorName = String(req.user?.name || req.user?.username || "Unknown");
+        if (patch.status === "in-progress" && !existing.firstStartedAt) {
+          patch.firstStartedAt = new Date();
+          patch.startedByName = actorName;
+        }
+        if (patch.status === "completed" && existing.status !== "completed") {
+          patch.completedAt = new Date();
+          patch.completedByName = actorName;
+        } else if (existing.status === "completed" && patch.status !== "completed") {
+          patch.completedAt = null;
+          patch.completedByName = "";
+        }
+      }
+    }
 
     const updated = await Task.findByIdAndUpdate(req.params.id, patch, {
       new: true,
@@ -1773,6 +1808,10 @@ async function archiveTaskById(taskId, archivedBy) {
       createdAt: task.createdAt,
       startedAt: task.startedAt,
       totalTimeSpent: task.totalTimeSpent,
+      firstStartedAt: task.firstStartedAt,
+      startedByName: task.startedByName,
+      completedAt: task.completedAt,
+      completedByName: task.completedByName,
     },
     parentType: task.projectId ? "project" : "standalone",
     parentId: String(task.projectId || ""),
