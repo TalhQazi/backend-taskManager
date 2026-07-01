@@ -11,6 +11,8 @@ const { checkAndFlagOffTheClock } = require("../lib/offTheClockWork");
 const { parsePagination, paginatedResponse } = require("../lib/pagination");
 const { cacheWrap, cacheDel } = require("../lib/cache");
 const { uploadToS3 } = require("../lib/s3");
+const { createNotification } = require("../utils/notifications");
+const { sendEmailNotification } = require("../utils/emailNotifications");
 
 const router = express.Router();
 
@@ -447,6 +449,19 @@ router.post("/", requireAuth, async (req, res, next) => {
     const finalData = withId(decryptOut(created.toObject()));
     const io = global.io;
 
+    // Notify the recipient(s) of a direct message so offline users still get an
+    // in-app notification (persists + real-time) and an email.
+    const recipients = parsed.data.type === "direct"
+      ? String(parsed.data.recipient || "")
+          .split(",")
+          .map((r) => r.trim())
+          .filter((r) => r && r.toLowerCase() !== String(parsed.data.sender || "").toLowerCase())
+      : [];
+
+    const preview = content.trim()
+      ? (content.trim().length > 60 ? content.trim().slice(0, 60) + "…" : content.trim())
+      : (hasAttachment ? "Sent an attachment" : "");
+
     // Fire-and-forget side effects
     Promise.allSettled([
       checkAndFlagOffTheClock({
@@ -456,7 +471,23 @@ router.post("/", requireAuth, async (req, res, next) => {
         activityType: "message_create",
         metadata: { recipient: parsed.data.recipient, type: parsed.data.type },
       }),
-      cacheDel("messages:list:*")
+      cacheDel("messages:list:*"),
+      // In-app notification (targets sender + recipient only, private to them)
+      ...(recipients.length > 0 ? [createNotification({
+        actor: parsed.data.sender,
+        actorRole: String(req.user?.role || ""),
+        action: "messaged you",
+        resourceType: "",
+        resourceName: "",
+        assignees: recipients,
+        details: preview,
+        category: "MENTIONED",
+      })] : []),
+      // Email notification (skips gracefully if template/SMTP not configured or user opted out)
+      ...recipients.map((r) => sendEmailNotification(r, "newMessage", {
+        senderName: parsed.data.sender,
+        messagePreview: preview || "You have a new message.",
+      })),
     ]).catch(() => {});
 
     if (io) {

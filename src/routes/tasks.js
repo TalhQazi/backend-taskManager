@@ -397,9 +397,15 @@ router.get("/", requireAuth, async (req, res, next) => {
       conditions.push({ priority: priorityQ });
     }
 
+    // 6. Exact assignee filter (used by the per-employee Task History for server-side paging)
+    const assigneeQ = String(req.query.assignee || "").trim();
+    if (assigneeQ) {
+      conditions.push({ assignees: { $elemMatch: { $regex: new RegExp(`^${escapeRegExp(assigneeQ)}$`, "i") } } });
+    }
+
     const filter = conditions.length > 0 ? { $and: conditions } : {};
 
-    const cacheKey = `tasks:list:${role}:${req.user?.sub || ''}:p${page}:l${limit}:s${searchQ}:st${statusQ}:pr${priorityQ}:so${sortQ}:pid${projectIdQ}`;
+    const cacheKey = `tasks:list:${role}:${req.user?.sub || ''}:p${page}:l${limit}:s${searchQ}:st${statusQ}:pr${priorityQ}:so${sortQ}:pid${projectIdQ}:a${assigneeQ}`;
     const result = await cacheWrap(cacheKey, async () => {
 
       const total = await Task.countDocuments(filter);
@@ -452,6 +458,37 @@ router.get("/", requireAuth, async (req, res, next) => {
     }, 15);
 
     res.json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Per-assignee task stats (Task History employee list) — aggregation avoids
+// shipping every task to the client just to count them.
+router.get("/assignee-stats", requireAuth, async (req, res, next) => {
+  try {
+    const rows = await Task.aggregate([
+      { $unwind: "$assignees" },
+      {
+        $group: {
+          _id: "$assignees",
+          total: { $sum: 1 },
+          completed: { $sum: { $cond: [{ $eq: ["$status", "completed"] }, 1, 0] } },
+          pending: { $sum: { $cond: [{ $in: ["$status", ["pending", "in-progress"]] }, 1, 0] } },
+          overdue: { $sum: { $cond: [{ $eq: ["$status", "overdue"] }, 1, 0] } },
+        },
+      },
+    ]);
+    const stats = {};
+    rows.forEach((r) => {
+      stats[String(r._id)] = {
+        total: r.total,
+        completed: r.completed,
+        pending: r.pending,
+        overdue: r.overdue,
+      };
+    });
+    res.json({ stats });
   } catch (err) {
     next(err);
   }
