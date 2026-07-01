@@ -34,7 +34,7 @@ router.get("/", requireAuth, async (req, res, next) => {
     const enriched = items.map((i) => ({
       id: String(i._id),
       itemType: i.itemType,
-      itemData: i.itemData,
+      itemData: i.itemData || {},
       parentType: i.parentType,
       parentId: i.parentId,
       parentName: i.parentName,

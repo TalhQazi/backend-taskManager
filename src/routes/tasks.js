@@ -603,7 +603,16 @@ router.post("/", requireAuth, async (req, res, next) => {
       }));
     }
 
-    const dueDate = data.dueDate ? new Date(data.dueDate) : undefined;
+    let dueDate = data.dueDate ? new Date(data.dueDate) : undefined;
+    if (dueDate && !isNaN(dueDate.getTime())) {
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const checkDate = new Date(dueDate);
+      checkDate.setHours(0, 0, 0, 0);
+      if (checkDate < today && data.status !== "completed") {
+        dueDate = undefined;
+      }
+    }
     const createdAt = data.createdAt || new Date().toISOString().split("T")[0];
     const firstAssignee = data.assignees?.[0] || "";
 
@@ -1513,7 +1522,15 @@ router.put("/:id", requireAuth, async (req, res, next) => {
     if (patch.dueDate) {
       const d = new Date(patch.dueDate);
       if (!isNaN(d.getTime())) {
-        patch.dueDate = d;
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const checkDate = new Date(d);
+        checkDate.setHours(0, 0, 0, 0);
+        if (checkDate < today && patch.status !== "completed") {
+          patch.dueDate = null;
+        } else {
+          patch.dueDate = d;
+        }
       } else {
         delete patch.dueDate;
       }
