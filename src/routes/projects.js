@@ -15,7 +15,7 @@ const { sendEmailNotification } = require("../utils/emailNotifications");
 const { extractMentions } = require("../utils/mentions");
 const { parsePagination, paginatedResponse } = require("../lib/pagination");
 const { cacheWrap, cacheDel } = require("../lib/cache");
-const { uploadToS3, base64ToBuffer } = require("../lib/s3");
+const { uploadToS3, saveToServer, base64ToBuffer } = require("../lib/s3");
 
 const router = express.Router();
 
@@ -100,6 +100,7 @@ const projectCreateSchema = z.object({
   description: z.string().optional().default(""),
   assignees: z.array(z.string()).optional().default([]),
   teamLead: z.string().optional().default(""),
+  introVideoUrl: z.string().optional().default(""),
   logo: logoSchema,
   attachments: z.array(z.object({
     fileName: z.string().optional().default(""),
@@ -165,11 +166,23 @@ router.post("/", requireAuth, async (req, res, next) => {
       }));
     }
 
+    // 2b. Save Project Intro Video to server disk (recorded/uploaded as base64 data URL)
+    if (data.introVideoUrl && data.introVideoUrl.startsWith("data:")) {
+      try {
+        const { buffer, mimeType } = base64ToBuffer(data.introVideoUrl);
+        const videoUrl = await saveToServer(buffer, "project-intro-video", mimeType, "projects/videos");
+        data.introVideoUrl = videoUrl;
+      } catch (err) {
+        console.error("Failed to save project intro video to server:", err);
+      }
+    }
+
     const createdProject = await Project.create({
       name: data.name,
       description: data.description || "",
       assignees: data.assignees || [],
       teamLead: data.teamLead || "",
+      introVideoUrl: data.introVideoUrl || "",
       logo: data.logo || { fileName: "", url: "", mimeType: "", size: 0 },
       attachments: data.attachments || [],
       dropboxAttachments: data.dropboxAttachments || [],
@@ -707,6 +720,7 @@ const projectUpdateSchema = z.object({
   description: z.string().optional(),
   assignees: z.array(z.string()).optional(),
   teamLead: z.string().optional(),
+  introVideoUrl: z.string().optional(),
   logo: logoSchema,
   attachments: z.array(z.object({
     fileName: z.string().optional(),
@@ -785,6 +799,17 @@ router.put("/:id", requireAuth, async (req, res, next) => {
         }
         return att;
       }));
+    }
+
+    // Save Project Intro Video to server disk if update includes a new base64 video
+    if (patch.introVideoUrl && patch.introVideoUrl.startsWith("data:")) {
+      try {
+        const { buffer, mimeType } = base64ToBuffer(patch.introVideoUrl);
+        const videoUrl = await saveToServer(buffer, "project-intro-video", mimeType, "projects/videos");
+        patch.introVideoUrl = videoUrl;
+      } catch (err) {
+        console.error("Failed to save updated project intro video to server:", err);
+      }
     }
 
     // Update fields using findByIdAndUpdate

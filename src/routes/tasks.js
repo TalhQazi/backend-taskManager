@@ -22,7 +22,7 @@ const { createNotification } = require("../utils/notifications");
 const { extractMentions } = require("../utils/mentions");
 const { parsePagination, paginatedResponse } = require("../lib/pagination");
 const { cacheWrap, cacheDel } = require("../lib/cache");
-const { uploadToS3, base64ToBuffer, getFromS3, extractS3Key } = require("../lib/s3");
+const { uploadToS3, saveToServer, base64ToBuffer, getFromS3, extractS3Key } = require("../lib/s3");
 const contributionTracker = require("../utils/contributionTracker");
 const { sendEmailNotification } = require("../utils/emailNotifications");
 const Website = require("../models/Website");
@@ -78,6 +78,7 @@ const createSchema = z.object({
   dueDate: z.union([z.string(), z.date()]).optional(),
   dueTime: z.string().optional().default(""),
   location: z.string().optional().default(""),
+  introVideoUrl: z.string().optional().default(""),
   createdAt: z.string().optional().default(""),
   attachmentFileName: z.string().optional().default(""),
   attachmentNote: z.string().optional().default(""),
@@ -117,6 +118,7 @@ const updateSchema = z.object({
   dueDate: z.union([z.string(), z.date()]).optional(),
   dueTime: z.string().optional(),
   location: z.string().optional(),
+  introVideoUrl: z.string().optional(),
   attachmentFileName: z.string().optional(),
   attachmentNote: z.string().optional(),
   attachment: z.object({
@@ -601,6 +603,17 @@ router.post("/", requireAuth, async (req, res, next) => {
         }
         return att;
       }));
+    }
+
+    // Save Task Video to server disk (recorded/uploaded as base64 data URL)
+    if (data.introVideoUrl && data.introVideoUrl.startsWith("data:")) {
+      try {
+        const { buffer, mimeType } = base64ToBuffer(data.introVideoUrl);
+        const videoUrl = await saveToServer(buffer, "task-video", mimeType, "tasks/videos");
+        data.introVideoUrl = videoUrl;
+      } catch (err) {
+        console.error("Failed to save task video to server:", err);
+      }
     }
 
     let dueDate = data.dueDate ? new Date(data.dueDate) : undefined;
@@ -1559,6 +1572,17 @@ router.put("/:id", requireAuth, async (req, res, next) => {
         }
         return att;
       }));
+    }
+
+    // Save Task Video to server disk if update includes a new base64 video
+    if (patch.introVideoUrl && patch.introVideoUrl.startsWith("data:")) {
+      try {
+        const { buffer, mimeType } = base64ToBuffer(patch.introVideoUrl);
+        const videoUrl = await saveToServer(buffer, "task-video", mimeType, "tasks/videos");
+        patch.introVideoUrl = videoUrl;
+      } catch (err) {
+        console.error("Failed to save updated task video to server:", err);
+      }
     }
 
     delete patch.assignee;

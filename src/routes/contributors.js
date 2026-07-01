@@ -245,13 +245,19 @@ router.get("/task/:taskId/contributors", requireAuth, async (req, res) => {
 
     const contributors = await contributionTracker.getTaskContributors(taskId);
 
+    // Resolve display name + avatar consistently for all roles (Settings/Employee).
+    const { getAuthorProfileMap } = require("../utils/authorProfile");
+    const authorProfiles = await getAuthorProfileMap(contributors.map((c) => c.userId));
+
     // Enrich with full profile info
     const enrichedContributors = await Promise.all(
       contributors.map(async (c) => {
         const profile = await Contributor.findOne({ userId: c.userId }).lean();
+        const authorProfile = authorProfiles[String(c.userId)] || { fullName: "", avatar: "" };
         return {
           ...c,
-          avatar: profile?.avatar || "",
+          name: authorProfile.fullName || c.name || "",
+          avatar: authorProfile.avatar || profile?.avatar || "",
           department: profile?.department || "",
           stats: profile?.stats || {},
         };

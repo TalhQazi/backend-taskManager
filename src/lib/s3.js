@@ -78,6 +78,33 @@ async function uploadToS3(buffer, originalName, mimeType, folder = "uploads") {
 }
 
 /**
+ * Save a file buffer to the local server disk (never uses S3, regardless of AWS config).
+ * Returns a relative "/uploads/{folder}/{name}" URL, served by Express static and by the
+ * /api/s3-proxy/* endpoint (which checks local disk first).
+ * @param {Buffer} buffer - File data
+ * @param {string} originalName - Original filename (used for extension)
+ * @param {string} mimeType - File mime type (unused on disk, kept for signature parity)
+ * @param {string} folder - Sub-folder under uploads/
+ * @returns {Promise<string>} - Relative URL of the saved file
+ */
+async function saveToServer(buffer, originalName, mimeType, folder = "uploads") {
+  let fileExtension = path.extname(originalName || "");
+  if (!fileExtension) {
+    // Derive a sensible extension from the mime type (e.g. video/webm -> .webm)
+    const subtype = String(mimeType || "").split("/")[1] || "";
+    if (subtype) fileExtension = `.${subtype.split(";")[0]}`;
+  }
+  const uniqueName = `${Date.now()}-${Math.random().toString(36).substring(2, 9)}${fileExtension}`;
+  const destPath = path.join(__dirname, "../../uploads", folder, uniqueName);
+
+  await fs.promises.mkdir(path.dirname(destPath), { recursive: true });
+  await fs.promises.writeFile(destPath, buffer);
+
+  console.log(`[File System] Saved upload to server: ${folder}/${uniqueName}`);
+  return `/uploads/${folder}/${uniqueName}`;
+}
+
+/**
  * Delete a file from S3 or local disk by URL
  * @param {string} url - Entire URL of the file
  */
@@ -198,6 +225,7 @@ function base64ToBuffer(base64String) {
 
 module.exports = {
   uploadToS3,
+  saveToServer,
   deleteFromS3,
   getFromS3,
   extractS3Key,
