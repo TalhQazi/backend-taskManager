@@ -20,6 +20,7 @@ router.post("/metrics/ingest", requireAgentAuth, healthController.ingestMetrics)
 router.use(requireAuth, requireRole(["admin", "super-admin"]));
 
 router.get("/overview", healthController.getOverview);
+router.get("/system", healthController.getSystemStats);
 router.get("/websites", healthController.getWebsitesStatus);
 router.get("/incidents", healthController.getIncidents);
 
