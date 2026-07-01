@@ -131,6 +131,14 @@ router.get("/top", requireAuth, async (req, res) => {
       });
     }
 
+    // Resolve profile pictures from Settings (keyed by Employee._id === userId)
+    const { getAuthorProfileMap } = require("../utils/authorProfile");
+    const profileMap = await getAuthorProfileMap(contributors.map(c => c.userId));
+    contributors = contributors.map(c => ({
+      ...c,
+      avatar: profileMap[String(c.userId)]?.avatar || c.avatar || "",
+    }));
+
     res.json({
       items: contributors,
       total: contributors.length,
@@ -149,6 +157,14 @@ router.get("/:userId", requireAuth, async (req, res) => {
     const contributor = await Contributor.findOne({ userId }).lean();
     if (!contributor) {
       return res.status(404).json({ error: "Contributor not found" });
+    }
+
+    // Resolve profile picture from Settings (keyed by Employee._id === userId)
+    const { getAuthorProfile } = require("../utils/authorProfile");
+    const authorProfile = await getAuthorProfile(userId);
+    contributor.avatar = authorProfile.avatar || contributor.avatar || "";
+    if ((!contributor.name || contributor.name === "Unknown") && authorProfile.fullName) {
+      contributor.name = authorProfile.fullName;
     }
 
     // Get recent contributions
