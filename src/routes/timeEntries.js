@@ -190,12 +190,32 @@ router.get("/", requireAuth, requireRole(["manager", "admin", "super-admin"]), a
 
       const empById = new Map(emps.map((e) => [String(e._id), e]));
 
+      // Resolve avatars from Settings. Entries carry userId (Employee._id); legacy
+      // entries only have the employee name, so map those names to an Employee._id too.
+      const namesWithoutId = Array.from(new Set(
+        items
+          .filter((e) => !String(e.userId || "").trim())
+          .map((e) => String(e.employee || "").trim())
+          .filter(Boolean)
+      ));
+      const empsByName = namesWithoutId.length
+        ? await Employee.find({ name: { $in: namesWithoutId } }, { name: 1 }).lean()
+        : [];
+      const idByName = new Map(empsByName.map((e) => [e.name, String(e._id)]));
+
+      const { getAuthorProfileMap } = require("../utils/authorProfile");
+      const profileMap = await getAuthorProfileMap([
+        ...userIds,
+        ...empsByName.map((e) => String(e._id)),
+      ]);
+
       const enriched = items.map((e) => {
         const uid = String(e.userId || "").trim();
         const emp = uid ? empById.get(uid) : null;
         const resolved = employeeDisplayName(emp) || String(e.employee || "").trim();
-        if (!resolved) return withId(e);
-        return withId({ ...e, employee: resolved });
+        const avatarId = uid || idByName.get(String(e.employee || "").trim()) || "";
+        const avatar = (avatarId && profileMap[avatarId]?.avatar) || "";
+        return withId({ ...e, employee: resolved || e.employee, avatar });
       });
 
       // Compliance evaluation (partial - don't block list query if it fails)
