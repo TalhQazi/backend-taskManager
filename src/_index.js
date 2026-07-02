@@ -1,5 +1,6 @@
 const express = require("express");
 const cors = require("cors");
+
 const compression = require("compression");
 const morgan = require("morgan");
 const path = require("path");
@@ -28,7 +29,6 @@ const reportsRoutes = require("./routes/reports");
 const usersRoutes = require("./routes/users");
 const dashboardRoutes = require("./routes/dashboard");
 const vendorsRoutes = require("./routes/vendors");
-const companyRegistryRoutes = require("./routes/companyRegistry");
 const complianceRoutes = require("./routes/compliance");
 const activityLogsRoutes = require("./routes/activityLogs");
 const companiesRoutes = require("./routes/companies");
@@ -42,21 +42,19 @@ const socialMediaRoutes = require("./routes/socialMedia");
 const patentsRoutes = require("./routes/patents");
 const credentialsRoutes = require("./routes/credentials");
 const archiveRoutes = require("./routes/archive");
-const teamLeadMappingsRoutes = require("./routes/teamLeadMappings");
-const taskPermissionsRoutes = require("./routes/taskPermissions");
+
 const { router: founderMessagesRoutes, initializeMessages } = require("./routes/founderMessages");
 const notesRoutes = require("./routes/notes");
 const assetLibraryRoutes = require("./routes/assetLibrary");
 const contributorsRoutes = require("./routes/contributors");
 const eodReportsRoutes = require("./routes/eodReports");
-const emailAccountsRoutes = require("./routes/emailAccounts");
 const uiPreferencesRoutes = require("./routes/uiPreferences");
 const { router: videoMessagesRoutes, historyRouter: videoUserHistoryRoutes } = require("./routes/videoMessages");
 const vendorCategoriesRoutes = require("./routes/vendorCategories");
 const trademarksRoutes = require("./routes/trademarks");
-const travelCalendarRoutes = require("./routes/travelCalendar");
 const dropboxRoutes = require("./routes/dropbox");
 const shoppingListsRoutes = require("./routes/shoppingLists");
+
 const leaveRequestsRoutes = require("./routes/leaveRequests");
 const clearhireRoutes = require("./routes/clearhire");
 const systemSettingsRoutes = require("./routes/systemSettings");
@@ -91,12 +89,23 @@ const crmCommunicationRoutes = require("./routes/crmcommunication");
 
 const memeRoutes = require("./routes/meme");
 
+const emailAccountsRoutes = require("./routes/emailAccounts");
+
+
+
+
+const expenseItemsRoutes = require("./routes/expenseItems");
+const expenseSheetsRoutes = require("./routes/expenseSheets");
+const expenseAttachmentRoutes = require("./routes/expenseAttachments");
+const expenseSummaryRoutes = require("./routes/expenseSummaryRoutes");
+
 const announcementsRoutes = require("./routes/announcements");
 
 const milestonesRoutes = require("./routes/milestones");
 const atlasbookRoutes = require("./routes/atlasbook");
 const personalBudgetRoutes = require("./routes/personalBudget");
 const healthRoutes = require("./routes/health");
+
 
 
 
@@ -122,7 +131,8 @@ const io = new Server(httpServer, {
         "http://localhost:3001",
         "https://task.se7eninc.com",
         "http://localhost:8080",
-        "http://192.168.31.13:8080"
+        "http://192.168.31.13:8080",
+        "http://192.168.31.250:8080"
       );
       
       if (!origin) return callback(null, true);
@@ -155,25 +165,7 @@ global.io = io;
 // Socket.io connection handling
 io.on("connection", (socket) => {
   console.log("Client connected:", socket.id);
-
-  // Register user into their personal room + role room for targeted notification delivery.
-  // `name` is the display name room — needed so @mentions (which use display names) reach
-  // admin/manager sockets that are keyed by email username.
-  socket.on("register-user", ({ username, role, name } = {}) => {
-    if (username) {
-      socket.join(username);
-      console.log(`Socket ${socket.id} registered as user: ${username}`);
-    }
-    if (name && name !== username) {
-      socket.join(name);
-      console.log(`Socket ${socket.id} joined display-name room: ${name}`);
-    }
-    if (role) {
-      socket.join(role);
-      console.log(`Socket ${socket.id} joined role room: ${role}`);
-    }
-  });
-
+  
   // Join task-specific room for receiving real-time comments
   socket.on("join-task", (taskId) => {
     if (taskId) {
@@ -181,7 +173,7 @@ io.on("connection", (socket) => {
       console.log(`Socket ${socket.id} joined task-${taskId}`);
     }
   });
-
+  
   // Leave task room
   socket.on("leave-task", (taskId) => {
     if (taskId) {
@@ -189,33 +181,17 @@ io.on("connection", (socket) => {
       console.log(`Socket ${socket.id} left task-${taskId}`);
     }
   });
-
-  // Join project-specific room for receiving real-time project comments
-  socket.on("join-project", (projectId) => {
-    if (projectId) {
-      socket.join(`project-${projectId}`);
-      console.log(`Socket ${socket.id} joined project-${projectId}`);
-    }
-  });
-
-  // Leave project room
-  socket.on("leave-project", (projectId) => {
-    if (projectId) {
-      socket.leave(`project-${projectId}`);
-      console.log(`Socket ${socket.id} left project-${projectId}`);
-    }
-  });
-
+  
   // Handle typing indicator
   socket.on("typing", ({ taskId, username }) => {
     socket.to(`task-${taskId}`).emit("typing", { taskId, username });
   });
-
+  
   // Handle stop typing
   socket.on("stop-typing", ({ taskId }) => {
     socket.to(`task-${taskId}`).emit("stop-typing", { taskId });
   });
-
+  
   socket.on("disconnect", () => {
     console.log("Client disconnected:", socket.id);
   });
@@ -237,14 +213,11 @@ configuredOrigins.push(
   "https://bug-panel.vercel.app", 
   "http://localhost:3001",
   "https://task.se7eninc.com",
-  "https://bug-panel.vercel.app", 
-       "http://192.168.31.130:8080",
-        "http://192.168.31.250:8080"
 );
 
 const isDev = String(process.env.NODE_ENV || "").toLowerCase() !== "production";
 
-app.use(
+/*app.use(
   cors({
     origin(origin, callback) {
       if (!origin) return callback(null, true);
@@ -270,16 +243,22 @@ app.use(
     },
     credentials: true,
   })
-);
+);*/
+
+app.use(cors());
+app.options("*", cors());
 
 app.use((req, res, next) => {
   const ct = req.headers['content-type'] || '';
   if (ct.includes('multipart/form-data')) {
     return next();
   }
-  // For other requests, use JSON parser
-  express.json({ limit: "100mb" })(req, res, next);
+  express.json({ limit: "50mb" })(req, res, next);
 });
+
+app.use(express.urlencoded({ limit: "50mb", extended: true }));
+
+
 
 // Gzip compression — reduces response sizes by 60-80%
 app.use(compression());
@@ -333,6 +312,9 @@ app.get("/api/s3-proxy/*", requireAuth, async (req, res) => {
 });
 
 app.use("/api/auth", authRoutes);
+
+
+
 app.use("/api/clearhire", clearhireRoutes);
 app.use("/api/onboarding", onboardingRoutes);
 app.use("/api/employees", employeesRoutes); // left open to allow profile checks during onboarding
@@ -391,6 +373,11 @@ app.use("/api/itineraries", requireClearHire, itinerariesRoutes);
 app.use("/api/tasks", requireClearHire, followUpsRoutes);
 app.use("/api/new-hire-reports", requireClearHire, newHireReportsRoutes);
 
+app.use("/api/expense-items", requireClearHire, expenseItemsRoutes);
+app.use("/api/expense-sheets", requireClearHire, expenseSheetsRoutes);
+app.use("/api/expense-attachments", requireClearHire, expenseAttachmentRoutes);
+app.use("/api/expenses", requireClearHire, expenseSummaryRoutes);
+
 app.use("/api/crm-company", requireClearHire, crmCompanyRoutes);
 app.use("/api/crm-contacts", requireClearHire, crmContactsRoutes);
 app.use("/api/crm-deals", requireClearHire, crmDealsRoutes);
@@ -399,6 +386,7 @@ app.use("/api/crm-dashboard", requireClearHire, crmDashboardRoutes);
 app.use("/api/crm-commandcore", requireClearHire, crmCommandCoreRoutes);
 app.use("/api/crm-files", requireClearHire, crmFilesRoutes);
 app.use("/api/crm-communication", requireClearHire, crmCommunicationRoutes);
+
 app.use("/api/meme", requireClearHire, memeRoutes);
 
 app.use("/api/legal/cases", requireClearHire, legalCaseRoutes);
@@ -416,6 +404,8 @@ app.use("/api/legal/notifications", requireClearHire, legalNotificationRoutes);
 
 app.use("/api/announcements", requireClearHire, announcementsRoutes);
 
+app.use("/api/announcements", requireClearHire, announcementsRoutes);
+
 app.use("/api/milestones", requireClearHire, milestonesRoutes);
 app.use("/api/video", requireClearHire, videoMessagesRoutes);
 app.use("/api/user", requireClearHire, videoUserHistoryRoutes);
@@ -424,11 +414,57 @@ app.use("/api/personal-budget", requireClearHire, personalBudgetRoutes);
 app.use("/api/health", healthRoutes);
 
 
+app.use("/api/tasks", tasksRoutes);
+app.use("/api/employees", employeesRoutes);
+app.use("/api/manager", eodReportsRoutes);
+app.use("/api/admin", eodReportsRoutes);
+app.use("/api/vehicles", vehiclesRoutes);
+app.use("/api/time-entries", timeEntriesRoutes);
+app.use("/api/appliances", appliancesRoutes);
+app.use("/api/locations", locationsRoutes);
+app.use("/api/do-not-hire", doNotHireRoutes);
+app.use("/api/events", eventsRoutes);
+app.use("/api/schedules", eventsRoutes);
+app.use("/api/messages", messagesRoutes);
+app.use("/api/notifications", messagesRoutes);
+app.use("/api/onboarding", onboardingRoutes);
+app.use("/api/settings", settingsRoutes);
+app.use("/api/reports", reportsRoutes);
+app.use("/api/users", usersRoutes);
+app.use("/api/dashboard", dashboardRoutes);
+app.use("/api/vendors", vendorsRoutes);
+app.use("/api/compliance", complianceRoutes);
+app.use("/api/activity-logs", activityLogsRoutes);
+app.use("/api/companies", companiesRoutes);
+app.use("/api/asana-import", asanaImportRoutes);
+app.use("/api/bugs", bugsRoutes);
+app.use("/api/projects", projectsRoutes);
+app.use("/api/header-settings", headerSettingsRoutes);
+app.use("/api/admin-info", adminInfoRoutes);
+app.use("/api/websites", websitesRoutes);
+app.use("/api/social-media", socialMediaRoutes);
+app.use("/api/patents", patentsRoutes);
+app.use("/api/credentials", credentialsRoutes);
+app.use("/api/archive", archiveRoutes);
+
+app.use("/api/founder-messages", founderMessagesRoutes);
+app.use("/api/notes", notesRoutes);
+app.use("/api/asset-library", assetLibraryRoutes);
+app.use("/api/contributors", contributorsRoutes);
+app.use("/api/ui-preferences", uiPreferencesRoutes);
+app.use("/api/vendor-categories", vendorCategoriesRoutes);
+app.use("/api/trademarks", trademarksRoutes);
+app.use("/api/dropbox", dropboxRoutes);
+app.use("/api/shopping-lists", shoppingListsRoutes);
+app.use("/api/email-accounts", emailAccountsRoutes);
+
+
+
 
 app.use(notFoundHandler);
 app.use(errorHandler);
 
-const port = Number(process.env.PORT || 5000);
+const port = Number(process.env.PORT || 5001);
 
 connectDb()
   .then(async () => {
@@ -437,6 +473,7 @@ connectDb()
     
     // Initialize default founder messages
     await initializeMessages();
+
 
     // Initialize default compliance templates
     const { initializeComplianceTemplates } = require("./utils/complianceSeeder");
@@ -492,6 +529,7 @@ connectDb()
     // Start Website Monitor cron job
     const { startWebsiteMonitor } = require("./jobs/websiteMonitor");
     startWebsiteMonitor();
+
     
     httpServer.listen(port, () => {
       console.log(`Backend listening on http://localhost:${port}`);
