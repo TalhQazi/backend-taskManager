@@ -4,6 +4,7 @@ const EODReport = require("../models/EODReport");
 const TimeEntry = require("../models/TimeEntry");
 const Employee = require("../models/Employee");
 const Settings = require("../models/Settings");
+const User = require("../models/User");
 const { requireAuth, requireRole } = require("../middleware/auth");
 const { cacheWrap, cacheDel } = require("../lib/cache");
 
@@ -65,16 +66,20 @@ router.get("/eod-status", requireAuth, requireRole(["manager", "admin", "super-a
       timeEntryByEmployee.set(entry.employee, entry);
     });
 
-    const eodReportByUserId = new Map();
+    const eodReportByEmpOrUserKey = new Map();
     eodReports.forEach((report) => {
-      eodReportByUserId.set(String(report.userId), report);
+      if (report.employeeId) {
+        eodReportByEmpOrUserKey.set(String(report.employeeId), report);
+      }
+      if (report.userId) {
+        eodReportByEmpOrUserKey.set(String(report.userId), report);
+      }
     });
 
     // Build status list
     const statusList = await Promise.all(
       employees.map(async (emp) => {
         const timeEntry = timeEntryByEmployee.get(emp.name);
-        const userId = await getUserIdByEmployeeEmail(emp.email);
         const avatar = avatarById.get(String(emp._id)) || "";
 
         if (!timeEntry) {
@@ -91,7 +96,13 @@ router.get("/eod-status", requireAuth, requireRole(["manager", "admin", "super-a
           };
         }
 
-        const eodReport = userId ? eodReportByUserId.get(userId) : null;
+        let eodReport = eodReportByEmpOrUserKey.get(String(emp._id));
+        if (!eodReport) {
+          const userId = await getUserIdByEmployeeEmail(emp.email);
+          if (userId) {
+            eodReport = eodReportByEmpOrUserKey.get(userId);
+          }
+        }
 
         if (!eodReport) {
           const clockOutTime = timeEntry.clockOutAt || timeEntry.clockOut;
@@ -391,11 +402,11 @@ router.get("/time-entries", requireAuth, requireRole(["manager", "admin", "super
 // Helper functions
 async function getUserIdByEmployeeEmail(email) {
   try {
-    const emp = await Employee.findOne(
+    const user = await User.findOne(
       { email: new RegExp(`^${email.replace(/[.*+?^${}()|[\]\\]/g, "\$&")}$`, "i") },
       { _id: 1 }
     ).lean();
-    return emp ? String(emp._id) : null;
+    return user ? String(user._id) : null;
   } catch {
     return null;
   }
