@@ -282,6 +282,7 @@ router.get("/eod-reports", requireAuth, requireRole(["manager", "admin", "super-
           productivityScore: report.productivityScore,
           flags: report.flags || [],
           employeeLocation: employeeLocationMap.get(String(report.employeeId)) || "",
+          comments: report.comments || [],
         };
       });
 
@@ -332,6 +333,7 @@ router.get("/eod-reports/:id", requireAuth, requireRole(["manager", "admin", "su
       aiSummary: report.aiSummary || "",
       productivityScore: report.productivityScore,
       flags: report.flags || [],
+      comments: report.comments || [],
     };
 
     res.json({ item });
@@ -418,5 +420,40 @@ function formatTime(date) {
   if (!Number.isFinite(d.getTime())) return undefined;
   return d.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: true });
 }
+
+// POST /eod-reports/:id/comments - Add comment to EOD report (manager/admin/super-admin)
+router.post("/eod-reports/:id/comments", requireAuth, requireRole(["manager", "admin", "super-admin"]), async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { message } = req.body;
+
+    if (!message || !message.trim()) {
+      return res.status(400).json({ error: { message: "Comment message is required" } });
+    }
+
+    const report = await EODReport.findById(id);
+    if (!report) {
+      return res.status(404).json({ error: { message: "EOD report not found" } });
+    }
+
+    const newComment = {
+      authorUserId: String(req.user.sub || req.user.id || ""),
+      authorName: String(req.user.name || req.user.username || "Anonymous"),
+      authorRole: String(req.user.role || ""),
+      message: message.trim(),
+      createdAt: new Date(),
+    };
+
+    report.comments = report.comments || [];
+    report.comments.push(newComment);
+    await report.save();
+
+    cacheDel("eod-reports:*").catch(() => {});
+
+    res.status(201).json({ success: true, item: newComment, comments: report.comments });
+  } catch (err) {
+    next(err);
+  }
+});
 
 module.exports = router;
