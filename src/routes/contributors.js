@@ -66,6 +66,14 @@ router.get("/", requireAuth, requireRole(["admin", "super-admin", "manager"]), a
       });
     }
 
+    // Resolve profile pictures from Settings (keyed by Employee._id === userId)
+    const { getAuthorProfileMap } = require("../utils/authorProfile");
+    const profileMap = await getAuthorProfileMap(contributors.map(c => c.userId));
+    contributors = contributors.map(c => ({
+      ...c,
+      avatar: profileMap[String(c.userId)]?.avatar || c.avatar || "",
+    }));
+
     res.json({
       items: contributors,
       total,
@@ -123,6 +131,14 @@ router.get("/top", requireAuth, async (req, res) => {
       });
     }
 
+    // Resolve profile pictures from Settings (keyed by Employee._id === userId)
+    const { getAuthorProfileMap } = require("../utils/authorProfile");
+    const profileMap = await getAuthorProfileMap(contributors.map(c => c.userId));
+    contributors = contributors.map(c => ({
+      ...c,
+      avatar: profileMap[String(c.userId)]?.avatar || c.avatar || "",
+    }));
+
     res.json({
       items: contributors,
       total: contributors.length,
@@ -141,6 +157,14 @@ router.get("/:userId", requireAuth, async (req, res) => {
     const contributor = await Contributor.findOne({ userId }).lean();
     if (!contributor) {
       return res.status(404).json({ error: "Contributor not found" });
+    }
+
+    // Resolve profile picture from Settings (keyed by Employee._id === userId)
+    const { getAuthorProfile } = require("../utils/authorProfile");
+    const authorProfile = await getAuthorProfile(userId);
+    contributor.avatar = authorProfile.avatar || contributor.avatar || "";
+    if ((!contributor.name || contributor.name === "Unknown") && authorProfile.fullName) {
+      contributor.name = authorProfile.fullName;
     }
 
     // Get recent contributions
@@ -245,13 +269,19 @@ router.get("/task/:taskId/contributors", requireAuth, async (req, res) => {
 
     const contributors = await contributionTracker.getTaskContributors(taskId);
 
+    // Resolve display name + avatar consistently for all roles (Settings/Employee).
+    const { getAuthorProfileMap } = require("../utils/authorProfile");
+    const authorProfiles = await getAuthorProfileMap(contributors.map((c) => c.userId));
+
     // Enrich with full profile info
     const enrichedContributors = await Promise.all(
       contributors.map(async (c) => {
         const profile = await Contributor.findOne({ userId: c.userId }).lean();
+        const authorProfile = authorProfiles[String(c.userId)] || { fullName: "", avatar: "" };
         return {
           ...c,
-          avatar: profile?.avatar || "",
+          name: authorProfile.fullName || c.name || "",
+          avatar: authorProfile.avatar || profile?.avatar || "",
           department: profile?.department || "",
           stats: profile?.stats || {},
         };

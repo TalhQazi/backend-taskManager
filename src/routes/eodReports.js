@@ -4,6 +4,7 @@ const EODReport = require("../models/EODReport");
 const TimeEntry = require("../models/TimeEntry");
 const Employee = require("../models/Employee");
 const Settings = require("../models/Settings");
+const User = require("../models/User");
 const { requireAuth, requireRole } = require("../middleware/auth");
 const { cacheWrap, cacheDel } = require("../lib/cache");
 
@@ -65,16 +66,20 @@ router.get("/eod-status", requireAuth, requireRole(["manager", "admin", "super-a
       timeEntryByEmployee.set(entry.employee, entry);
     });
 
-    const eodReportByUserId = new Map();
+    const eodReportByEmpOrUserKey = new Map();
     eodReports.forEach((report) => {
-      eodReportByUserId.set(String(report.userId), report);
+      if (report.employeeId) {
+        eodReportByEmpOrUserKey.set(String(report.employeeId), report);
+      }
+      if (report.userId) {
+        eodReportByEmpOrUserKey.set(String(report.userId), report);
+      }
     });
 
     // Build status list
     const statusList = await Promise.all(
       employees.map(async (emp) => {
         const timeEntry = timeEntryByEmployee.get(emp.name);
-        const userId = await getUserIdByEmployeeEmail(emp.email);
         const avatar = avatarById.get(String(emp._id)) || "";
 
         if (!timeEntry) {
@@ -91,7 +96,13 @@ router.get("/eod-status", requireAuth, requireRole(["manager", "admin", "super-a
           };
         }
 
-        const eodReport = userId ? eodReportByUserId.get(userId) : null;
+        let eodReport = eodReportByEmpOrUserKey.get(String(emp._id));
+        if (!eodReport) {
+          const userId = await getUserIdByEmployeeEmail(emp.email);
+          if (userId) {
+            eodReport = eodReportByEmpOrUserKey.get(userId);
+          }
+        }
 
         if (!eodReport) {
           const clockOutTime = timeEntry.clockOutAt || timeEntry.clockOut;
@@ -271,6 +282,7 @@ router.get("/eod-reports", requireAuth, requireRole(["manager", "admin", "super-
           productivityScore: report.productivityScore,
           flags: report.flags || [],
           employeeLocation: employeeLocationMap.get(String(report.employeeId)) || "",
+          comments: report.comments || [],
         };
       });
 
@@ -321,6 +333,7 @@ router.get("/eod-reports/:id", requireAuth, requireRole(["manager", "admin", "su
       aiSummary: report.aiSummary || "",
       productivityScore: report.productivityScore,
       flags: report.flags || [],
+      comments: report.comments || [],
     };
 
     res.json({ item });
@@ -391,11 +404,11 @@ router.get("/time-entries", requireAuth, requireRole(["manager", "admin", "super
 // Helper functions
 async function getUserIdByEmployeeEmail(email) {
   try {
-    const emp = await Employee.findOne(
+    const user = await User.findOne(
       { email: new RegExp(`^${email.replace(/[.*+?^${}()|[\]\\]/g, "\$&")}$`, "i") },
       { _id: 1 }
     ).lean();
-    return emp ? String(emp._id) : null;
+    return user ? String(user._id) : null;
   } catch {
     return null;
   }
@@ -407,5 +420,40 @@ function formatTime(date) {
   if (!Number.isFinite(d.getTime())) return undefined;
   return d.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: true });
 }
+
+// POST /eod-reports/:id/comments - Add comment to EOD report (manager/admin/super-admin)
+router.post("/eod-reports/:id/comments", requireAuth, requireRole(["manager", "admin", "super-admin"]), async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { message } = req.body;
+
+    if (!message || !message.trim()) {
+      return res.status(400).json({ error: { message: "Comment message is required" } });
+    }
+
+    const report = await EODReport.findById(id);
+    if (!report) {
+      return res.status(404).json({ error: { message: "EOD report not found" } });
+    }
+
+    const newComment = {
+      authorUserId: String(req.user.sub || req.user.id || ""),
+      authorName: String(req.user.name || req.user.username || "Anonymous"),
+      authorRole: String(req.user.role || ""),
+      message: message.trim(),
+      createdAt: new Date(),
+    };
+
+    report.comments = report.comments || [];
+    report.comments.push(newComment);
+    await report.save();
+
+    cacheDel("eod-reports:*").catch(() => {});
+
+    res.status(201).json({ success: true, item: newComment, comments: report.comments });
+  } catch (err) {
+    next(err);
+  }
+});
 
 module.exports = router;

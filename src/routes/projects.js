@@ -15,7 +15,7 @@ const { sendEmailNotification } = require("../utils/emailNotifications");
 const { extractMentions } = require("../utils/mentions");
 const { parsePagination, paginatedResponse } = require("../lib/pagination");
 const { cacheWrap, cacheDel } = require("../lib/cache");
-const { uploadToS3, base64ToBuffer } = require("../lib/s3");
+const { uploadToS3, saveToServer, base64ToBuffer } = require("../lib/s3");
 
 const router = express.Router();
 
@@ -100,6 +100,7 @@ const projectCreateSchema = z.object({
   description: z.string().optional().default(""),
   assignees: z.array(z.string()).optional().default([]),
   teamLead: z.string().optional().default(""),
+  introVideoUrl: z.string().optional().default(""),
   logo: logoSchema,
   attachments: z.array(z.object({
     fileName: z.string().optional().default(""),
@@ -165,11 +166,23 @@ router.post("/", requireAuth, async (req, res, next) => {
       }));
     }
 
+    // 2b. Save Project Intro Video to server disk (recorded/uploaded as base64 data URL)
+    if (data.introVideoUrl && data.introVideoUrl.startsWith("data:")) {
+      try {
+        const { buffer, mimeType } = base64ToBuffer(data.introVideoUrl);
+        const videoUrl = await saveToServer(buffer, "project-intro-video", mimeType, "projects/videos");
+        data.introVideoUrl = videoUrl;
+      } catch (err) {
+        console.error("Failed to save project intro video to server:", err);
+      }
+    }
+
     const createdProject = await Project.create({
       name: data.name,
       description: data.description || "",
       assignees: data.assignees || [],
       teamLead: data.teamLead || "",
+      introVideoUrl: data.introVideoUrl || "",
       logo: data.logo || { fileName: "", url: "", mimeType: "", size: 0 },
       attachments: data.attachments || [],
       dropboxAttachments: data.dropboxAttachments || [],
@@ -707,6 +720,7 @@ const projectUpdateSchema = z.object({
   description: z.string().optional(),
   assignees: z.array(z.string()).optional(),
   teamLead: z.string().optional(),
+  introVideoUrl: z.string().optional(),
   logo: logoSchema,
   attachments: z.array(z.object({
     fileName: z.string().optional(),
@@ -785,6 +799,17 @@ router.put("/:id", requireAuth, async (req, res, next) => {
         }
         return att;
       }));
+    }
+
+    // Save Project Intro Video to server disk if update includes a new base64 video
+    if (patch.introVideoUrl && patch.introVideoUrl.startsWith("data:")) {
+      try {
+        const { buffer, mimeType } = base64ToBuffer(patch.introVideoUrl);
+        const videoUrl = await saveToServer(buffer, "project-intro-video", mimeType, "projects/videos");
+        patch.introVideoUrl = videoUrl;
+      } catch (err) {
+        console.error("Failed to save updated project intro video to server:", err);
+      }
     }
 
     // Update fields using findByIdAndUpdate
@@ -984,16 +1009,8 @@ router.get("/:id/comments", requireAuth, async (req, res, next) => {
 
     const items = await ProjectComment.find({ projectId: project._id }).sort({ createdAt: 1 }).lean();
 
-    const userIds = [...new Set(items.map(c => c.authorUserId))].filter(Boolean);
-    const settingsList = await Settings.find({ userId: { $in: userIds } }).lean();
-    
-    const settingsMap = {};
-    settingsList.forEach(s => {
-      settingsMap[s.userId] = {
-        fullName: s.fullName || "",
-        avatar: s.avatarDataUrl || s.avatarUrl || ""
-      };
-    });
+    const { getAuthorProfileMap } = require("../utils/authorProfile");
+    const profileMap = await getAuthorProfileMap(items.map((c) => c.authorUserId));
 
     return res.json({
       items: items.map((c) => ({
@@ -1002,8 +1019,8 @@ router.get("/:id/comments", requireAuth, async (req, res, next) => {
         message: String(c.message || ""),
         authorUserId: String(c.authorUserId || ""),
         authorUsername: String(c.authorUsername || ""),
-        authorFullName: (c.authorUserId && settingsMap[c.authorUserId]?.fullName) || "",
-        authorAvatar: (c.authorUserId && settingsMap[c.authorUserId]?.avatar) || "",
+        authorFullName: (c.authorUserId && profileMap[String(c.authorUserId)]?.fullName) || "",
+        authorAvatar: (c.authorUserId && profileMap[String(c.authorUserId)]?.avatar) || "",
         authorRole: String(c.authorRole || ""),
         attachments: Array.isArray(c.attachments) ? c.attachments.map(a => ({
           fileName: a.fileName || "",
@@ -1080,8 +1097,9 @@ router.post("/:id/comments", requireAuth, async (req, res, next) => {
       });
     }
 
+    const { getAuthorProfile } = require("../utils/authorProfile");
     const authorUserId = String(req.user?.sub || req.user?.id || "");
-    const userSettings = await Settings.findOne({ userId: authorUserId }).lean();
+    const authorProfile = await getAuthorProfile(authorUserId);
 
     const commentData = {
       id: String(created._id),
@@ -1089,8 +1107,8 @@ router.post("/:id/comments", requireAuth, async (req, res, next) => {
       message: String(created.message || ""),
       authorUserId: authorUserId,
       authorUsername: String(created.authorUsername || ""),
-      authorFullName: userSettings?.fullName || "",
-      authorAvatar: userSettings?.avatarDataUrl || userSettings?.avatarUrl || "",
+      authorFullName: authorProfile.fullName || "",
+      authorAvatar: authorProfile.avatar || "",
       authorRole: String(created.authorRole || ""),
       attachments: Array.isArray(created.attachments) ? created.attachments.map(a => ({
         fileName: a.fileName || "",

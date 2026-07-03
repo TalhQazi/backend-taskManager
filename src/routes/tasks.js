@@ -22,7 +22,7 @@ const { createNotification } = require("../utils/notifications");
 const { extractMentions } = require("../utils/mentions");
 const { parsePagination, paginatedResponse } = require("../lib/pagination");
 const { cacheWrap, cacheDel } = require("../lib/cache");
-const { uploadToS3, base64ToBuffer, getFromS3, extractS3Key } = require("../lib/s3");
+const { uploadToS3, saveToServer, base64ToBuffer, getFromS3, extractS3Key } = require("../lib/s3");
 const contributionTracker = require("../utils/contributionTracker");
 const { sendEmailNotification } = require("../utils/emailNotifications");
 const Website = require("../models/Website");
@@ -79,6 +79,7 @@ const createSchema = z.object({
   dueDate: z.union([z.string(), z.date()]).optional(),
   dueTime: z.string().optional().default(""),
   location: z.string().optional().default(""),
+  introVideoUrl: z.string().optional().default(""),
   createdAt: z.string().optional().default(""),
   attachmentFileName: z.string().optional().default(""),
   attachmentNote: z.string().optional().default(""),
@@ -118,6 +119,7 @@ const updateSchema = z.object({
   dueDate: z.union([z.string(), z.date()]).optional(),
   dueTime: z.string().optional(),
   location: z.string().optional(),
+  introVideoUrl: z.string().optional(),
   attachmentFileName: z.string().optional(),
   attachmentNote: z.string().optional(),
   attachment: z.object({
@@ -396,9 +398,15 @@ router.get("/", requireAuth, async (req, res, next) => {
       conditions.push({ priority: priorityQ });
     }
 
+    // 6. Exact assignee filter (used by the per-employee Task History for server-side paging)
+    const assigneeQ = String(req.query.assignee || "").trim();
+    if (assigneeQ) {
+      conditions.push({ assignees: { $elemMatch: { $regex: new RegExp(`^${escapeRegExp(assigneeQ)}$`, "i") } } });
+    }
+
     const filter = conditions.length > 0 ? { $and: conditions } : {};
 
-    const cacheKey = `tasks:list:${role}:${req.user?.sub || ''}:p${page}:l${limit}:s${searchQ}:st${statusQ}:pr${priorityQ}:so${sortQ}:pid${projectIdQ}`;
+    const cacheKey = `tasks:list:${role}:${req.user?.sub || ''}:p${page}:l${limit}:s${searchQ}:st${statusQ}:pr${priorityQ}:so${sortQ}:pid${projectIdQ}:a${assigneeQ}`;
     const result = await cacheWrap(cacheKey, async () => {
 
       const total = await Task.countDocuments(filter);
@@ -451,6 +459,37 @@ router.get("/", requireAuth, async (req, res, next) => {
     }, 15);
 
     res.json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Per-assignee task stats (Task History employee list) — aggregation avoids
+// shipping every task to the client just to count them.
+router.get("/assignee-stats", requireAuth, async (req, res, next) => {
+  try {
+    const rows = await Task.aggregate([
+      { $unwind: "$assignees" },
+      {
+        $group: {
+          _id: "$assignees",
+          total: { $sum: 1 },
+          completed: { $sum: { $cond: [{ $eq: ["$status", "completed"] }, 1, 0] } },
+          pending: { $sum: { $cond: [{ $in: ["$status", ["pending", "in-progress"]] }, 1, 0] } },
+          overdue: { $sum: { $cond: [{ $eq: ["$status", "overdue"] }, 1, 0] } },
+        },
+      },
+    ]);
+    const stats = {};
+    rows.forEach((r) => {
+      stats[String(r._id)] = {
+        total: r.total,
+        completed: r.completed,
+        pending: r.pending,
+        overdue: r.overdue,
+      };
+    });
+    res.json({ stats });
   } catch (err) {
     next(err);
   }
@@ -604,7 +643,27 @@ router.post("/", requireAuth, async (req, res, next) => {
       }));
     }
 
-    const dueDate = data.dueDate ? new Date(data.dueDate) : undefined;
+    // Save Task Video to server disk (recorded/uploaded as base64 data URL)
+    if (data.introVideoUrl && data.introVideoUrl.startsWith("data:")) {
+      try {
+        const { buffer, mimeType } = base64ToBuffer(data.introVideoUrl);
+        const videoUrl = await saveToServer(buffer, "task-video", mimeType, "tasks/videos");
+        data.introVideoUrl = videoUrl;
+      } catch (err) {
+        console.error("Failed to save task video to server:", err);
+      }
+    }
+
+    let dueDate = data.dueDate ? new Date(data.dueDate) : undefined;
+    if (dueDate && !isNaN(dueDate.getTime())) {
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const checkDate = new Date(dueDate);
+      checkDate.setHours(0, 0, 0, 0);
+      if (checkDate < today && data.status !== "completed") {
+        dueDate = undefined;
+      }
+    }
     const createdAt = data.createdAt || new Date().toISOString().split("T")[0];
     const firstAssignee = data.assignees?.[0] || "";
 
@@ -896,17 +955,8 @@ router.get("/:id/comments", requireAuth, async (req, res, next) => {
 
     const items = await TaskComment.find({ taskId: task._id }).sort({ createdAt: 1 }).lean();
 
-    const Settings = require("../models/Settings");
-    const userIds = [...new Set(items.map(c => c.authorUserId))].filter(Boolean);
-    const settingsList = await Settings.find({ userId: { $in: userIds } }).lean();
-    
-    const settingsMap = {};
-    settingsList.forEach(s => {
-      settingsMap[s.userId] = {
-        fullName: s.fullName || "",
-        avatar: s.avatarDataUrl || s.avatarUrl || ""
-      };
-    });
+    const { getAuthorProfileMap } = require("../utils/authorProfile");
+    const profileMap = await getAuthorProfileMap(items.map((c) => c.authorUserId));
 
     return res.json({
       items: items.map((c) => ({
@@ -915,8 +965,8 @@ router.get("/:id/comments", requireAuth, async (req, res, next) => {
         message: String(c.message || ""),
         authorUserId: String(c.authorUserId || ""),
         authorUsername: String(c.authorUsername || ""),
-        authorFullName: (c.authorUserId && settingsMap[c.authorUserId]?.fullName) || "",
-        authorAvatar: (c.authorUserId && settingsMap[c.authorUserId]?.avatar) || "",
+        authorFullName: (c.authorUserId && profileMap[String(c.authorUserId)]?.fullName) || "",
+        authorAvatar: (c.authorUserId && profileMap[String(c.authorUserId)]?.avatar) || "",
         authorRole: String(c.authorRole || ""),
         attachments: Array.isArray(c.attachments) ? c.attachments.map(a => ({
           fileName: a.fileName || "",
@@ -1013,9 +1063,9 @@ router.post("/:id/comments", requireAuth, async (req, res, next) => {
       });
     }
 
-    const Settings = require("../models/Settings");
+    const { getAuthorProfile } = require("../utils/authorProfile");
     const authorUserId = String(req.user?.sub || req.user?.id || "");
-    const userSettings = await Settings.findOne({ userId: authorUserId }).lean();
+    const authorProfile = await getAuthorProfile(authorUserId);
 
     // Broadcast to all clients in the task room via WebSocket
     const commentData = {
@@ -1024,8 +1074,8 @@ router.post("/:id/comments", requireAuth, async (req, res, next) => {
       message: String(created.message || ""),
       authorUserId: authorUserId,
       authorUsername: String(created.authorUsername || ""),
-      authorFullName: userSettings?.fullName || "",
-      authorAvatar: userSettings?.avatarDataUrl || userSettings?.avatarUrl || "",
+      authorFullName: authorProfile.fullName || "",
+      authorAvatar: authorProfile.avatar || "",
       authorRole: String(created.authorRole || ""),
       attachments: Array.isArray(created.attachments) ? created.attachments.map(a => ({
         fileName: a.fileName || "",
@@ -1203,6 +1253,9 @@ router.patch("/:id/comments/:commentId", requireAuth, async (req, res, next) => 
 
     await logActivity(req, "COMMENT_UPDATE", "task", task._id, task.title, `Comment updated on task: ${task.title}`);
 
+    const { getAuthorProfile } = require("../utils/authorProfile");
+    const authorProfile = await getAuthorProfile(comment.authorUserId);
+
     return res.json({
       item: {
         id: String(comment._id),
@@ -1210,6 +1263,8 @@ router.patch("/:id/comments/:commentId", requireAuth, async (req, res, next) => 
         message: String(comment.message || ""),
         authorUserId: String(comment.authorUserId || ""),
         authorUsername: String(comment.authorUsername || ""),
+        authorFullName: authorProfile.fullName || "",
+        authorAvatar: authorProfile.avatar || "",
         authorRole: String(comment.authorRole || ""),
         attachments: comment.attachments || [],
         createdAt: comment.createdAt,
@@ -1413,11 +1468,17 @@ router.patch("/:id/status", requireAuth, async (req, res, next) => {
     }
 
     const update = { status };
-    
+    const actorName = String(req.user?.name || req.user?.username || "Unknown");
+
     // Timer Logic
     if (status === "in-progress" && task.status !== "in-progress") {
       // Starting the task
       update.startedAt = new Date();
+      // Permanent "first started" history — only set once
+      if (!task.firstStartedAt) {
+        update.firstStartedAt = new Date();
+        update.startedByName = actorName;
+      }
     } else if (task.status === "in-progress" && status !== "in-progress") {
       // Stopping/Completing the task
       const now = new Date();
@@ -1429,6 +1490,16 @@ router.patch("/:id/status", requireAuth, async (req, res, next) => {
       }
     }
 
+    // Permanent "closed/completed" history
+    if (status === "completed") {
+      update.completedAt = new Date();
+      update.completedByName = actorName;
+    } else if (task.status === "completed" && status !== "completed") {
+      // Task re-opened — clear the completion record
+      update.completedAt = null;
+      update.completedByName = "";
+    }
+
     const updated = await Task.findByIdAndUpdate(req.params.id, update, { new: true }).lean();
     if (!updated) {
       return res.status(404).json({ error: { message: "Task not found" } });
@@ -1436,6 +1507,7 @@ router.patch("/:id/status", requireAuth, async (req, res, next) => {
 
     if (updated.status === "completed") {
       void handleTaskCompletion(updated);
+      await archiveTaskById(req.params.id, req.user);
     }
 
     // Fire-and-forget
@@ -1515,7 +1587,15 @@ router.put("/:id", requireAuth, async (req, res, next) => {
     if (patch.dueDate) {
       const d = new Date(patch.dueDate);
       if (!isNaN(d.getTime())) {
-        patch.dueDate = d;
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const checkDate = new Date(d);
+        checkDate.setHours(0, 0, 0, 0);
+        if (checkDate < today && patch.status !== "completed") {
+          patch.dueDate = null;
+        } else {
+          patch.dueDate = d;
+        }
       } else {
         delete patch.dueDate;
       }
@@ -1550,8 +1630,38 @@ router.put("/:id", requireAuth, async (req, res, next) => {
       }));
     }
 
+    // Save Task Video to server disk if update includes a new base64 video
+    if (patch.introVideoUrl && patch.introVideoUrl.startsWith("data:")) {
+      try {
+        const { buffer, mimeType } = base64ToBuffer(patch.introVideoUrl);
+        const videoUrl = await saveToServer(buffer, "task-video", mimeType, "tasks/videos");
+        patch.introVideoUrl = videoUrl;
+      } catch (err) {
+        console.error("Failed to save updated task video to server:", err);
+      }
+    }
+
     delete patch.assignee;
     delete patch.assigneeInitials;
+
+    // Start/close history when status changes via a full task update
+    if (patch.status) {
+      const existing = await Task.findById(req.params.id).select("status firstStartedAt").lean();
+      if (existing) {
+        const actorName = String(req.user?.name || req.user?.username || "Unknown");
+        if (patch.status === "in-progress" && !existing.firstStartedAt) {
+          patch.firstStartedAt = new Date();
+          patch.startedByName = actorName;
+        }
+        if (patch.status === "completed" && existing.status !== "completed") {
+          patch.completedAt = new Date();
+          patch.completedByName = actorName;
+        } else if (existing.status === "completed" && patch.status !== "completed") {
+          patch.completedAt = null;
+          patch.completedByName = "";
+        }
+      }
+    }
 
     const updated = await Task.findByIdAndUpdate(req.params.id, patch, {
       new: true,
@@ -1563,6 +1673,7 @@ router.put("/:id", requireAuth, async (req, res, next) => {
 
     if (updated.status === "completed") {
       void handleTaskCompletion(updated);
+      await archiveTaskById(req.params.id, req.user);
     }
 
     // Fire-and-forget
@@ -1737,6 +1848,10 @@ async function archiveTaskById(taskId, archivedBy) {
       createdAt: task.createdAt,
       startedAt: task.startedAt,
       totalTimeSpent: task.totalTimeSpent,
+      firstStartedAt: task.firstStartedAt,
+      startedByName: task.startedByName,
+      completedAt: task.completedAt,
+      completedByName: task.completedByName,
     },
     parentType: task.projectId ? "project" : "standalone",
     parentId: String(task.projectId || ""),

@@ -48,6 +48,11 @@ const SystemSettingsSchema = new mongoose.Schema(
         subject: { type: String, default: "Response/Mention: {taskTitle}" },
         body: { type: String, default: "Hello {name},\n\n{authorName} has mentioned you or replied to your activity on task '{taskTitle}'.\n\nContext:\n--------------------------------------------------\n{replyText}\n--------------------------------------------------\n\nPlease review this update at your earliest convenience." },
       },
+      newMessage: {
+        enabled: { type: Boolean, default: true },
+        subject: { type: String, default: "New message from {senderName}" },
+        body: { type: String, default: "Hello {name},\n\nYou have received a new message from {senderName}:\n\n--------------------------------------------------\n{messagePreview}\n--------------------------------------------------\n\nPlease log in to view and reply." },
+      },
       projectAssignment: {
         enabled: { type: Boolean, default: true },
         subject: { type: String, default: "Involvement Confirmation: Project {projectName}" },

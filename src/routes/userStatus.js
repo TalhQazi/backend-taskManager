@@ -288,7 +288,16 @@ router.get("/statuses", requireAuth, async (req, res, next) => {
     const employees = await Employee.find({ status: "active" })
       .select("_id name current_status lunch_start_time lunch_expected_end break_start_time")
       .lean();
-    res.json({ items: employees });
+
+    // Attach profile pictures (resolved from Settings by Employee._id)
+    const { getAuthorProfileMap } = require("../utils/authorProfile");
+    const profileMap = await getAuthorProfileMap(employees.map((e) => e._id));
+    const items = employees.map((e) => ({
+      ...e,
+      avatar: profileMap[String(e._id)]?.avatar || "",
+    }));
+
+    res.json({ items });
   } catch (err) {
     next(err);
   }
@@ -478,6 +487,15 @@ router.get("/status-history", requireAuth, async (req, res, next) => {
     }
 
     const weeklyStats = Object.values(statsMap);
+
+    // Attach profile pictures (resolved from Settings by Employee._id === empId)
+    const { getAuthorProfileMap } = require("../utils/authorProfile");
+    const profileMap = await getAuthorProfileMap([
+      ...sessions.map((s) => s.employeeId),
+      ...weeklyStats.map((w) => w.employeeId),
+    ]);
+    sessions.forEach((s) => { s.avatar = profileMap[String(s.employeeId)]?.avatar || ""; });
+    weeklyStats.forEach((w) => { w.avatar = profileMap[String(w.employeeId)]?.avatar || ""; });
 
     res.json({
       ok: true,

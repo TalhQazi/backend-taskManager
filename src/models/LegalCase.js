@@ -12,6 +12,15 @@ const legalCaseSchema = new mongoose.Schema({
   description: { type: String },
   openDate: { type: Date },
   closeDate: { type: Date },
+  attachments: [
+    {
+      fileName: { type: String, default: "" },
+      url: { type: String, default: "" },
+      mimeType: { type: String, default: "" },
+      size: { type: Number, default: 0 },
+      uploadedAt: { type: Date, default: Date.now }
+    }
+  ],
   createdBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
   updatedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" }
 }, { timestamps: true });

@@ -1,3 +1,5 @@
+const os = require("os");
+const fs = require("fs");
 const Server = require("../models/Server");
 const ServerMetric = require("../models/ServerMetric");
 const Website = require("../models/Website");
@@ -29,6 +31,47 @@ exports.getOverview = async (req, res) => {
   }
 };
 
+// Live stats for the host running this backend: RAM (via os) and disk (via fs.statfs).
+exports.getSystemStats = async (req, res) => {
+  try {
+    const totalMem = os.totalmem();
+    const freeMem = os.freemem();
+    const usedMem = Math.max(totalMem - freeMem, 0);
+
+    // Disk usage — fs.statfs is available on Node 18.15+. Guard so older Node still
+    // returns RAM stats (disk = null) instead of erroring.
+    let disk = null;
+    try {
+      if (typeof fs.promises.statfs === "function") {
+        const targetPath = os.platform() === "win32"
+          ? `${process.cwd().split(":")[0]}:\\`
+          : "/";
+        const s = await fs.promises.statfs(targetPath);
+        const total = s.blocks * s.bsize;
+        const free = s.bavail * s.bsize; // space available to unprivileged users
+        const used = Math.max(total - free, 0);
+        disk = { total, used, free };
+      }
+    } catch (diskErr) {
+      console.error("Failed to read disk stats:", diskErr.message);
+      disk = null;
+    }
+
+    res.json({
+      hostname: os.hostname(),
+      platform: os.platform(),
+      uptimeSeconds: os.uptime(),
+      cpuCount: os.cpus().length,
+      loadAvg: os.loadavg(),
+      ram: { total: totalMem, used: usedMem, free: freeMem },
+      disk,
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: { message: "Failed to fetch system stats" } });
+  }
+};
+
 exports.getWebsitesStatus = async (req, res) => {
   try {
     const websites = await Website.find({ websiteType: "active", isMonitoringEnabled: { $ne: false }, url: { $exists: true, $ne: "" } })
@@ -47,6 +90,7 @@ exports.getIncidents = async (req, res) => {
     const limit = parseInt(req.query.limit) || 50;
     const incidents = await WebsiteIncident.find()
       .populate("websiteId", "siteName url")
+      .populate("serverId", "name ipAddress")
       .sort({ startedAt: -1 })
       .limit(limit);
       
@@ -101,13 +145,45 @@ exports.ingestMetrics = async (req, res) => {
     }
 
     // 2. Update Server status and last seen
+    const previousStatus = server.status || "UNKNOWN";
     server.lastSeenAt = new Date();
+    let currentStatus = "LIVE";
     if (cpu > 90 || memory > 90 || disk > 90) {
-      server.status = 'DEGRADED';
-    } else {
-      server.status = 'LIVE';
+      currentStatus = "DEGRADED";
     }
+    server.status = currentStatus;
     await server.save();
+
+    // Trigger alerts immediately on status change
+    if (currentStatus !== previousStatus) {
+      if (currentStatus === "DEGRADED") {
+        let openIncident = await WebsiteIncident.findOne({ serverId: server._id, status: "OPEN" });
+        if (!openIncident) {
+          openIncident = await WebsiteIncident.create({
+            serverId: server._id,
+            type: "DEGRADED",
+            errorDetails: `High usage: CPU ${cpu}%, Memory ${memory}%, Disk ${disk}%`,
+          });
+          await dispatchAlert(
+            `[DEGRADED] Server ${server.name}`,
+            `Server ${server.name} (${server.ipAddress || "Unknown IP"}) is currently DEGRADED.\nDetails: ${openIncident.errorDetails}`,
+            "DEGRADED"
+          );
+        }
+      } else if (currentStatus === "LIVE" && (previousStatus === "DOWN" || previousStatus === "DEGRADED")) {
+        const openIncident = await WebsiteIncident.findOne({ serverId: server._id, status: "OPEN" });
+        if (openIncident) {
+          openIncident.status = "RESOLVED";
+          openIncident.resolvedAt = new Date();
+          await openIncident.save();
+          await dispatchAlert(
+            `[RECOVERED] Server ${server.name}`,
+            `Server ${server.name} (${server.ipAddress || "Unknown IP"}) has recovered and is now LIVE.`,
+            "RECOVERED"
+          );
+        }
+      }
+    }
 
     // 3. Create the Metric using the Server's ObjectId
     const metric = await ServerMetric.create({

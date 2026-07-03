@@ -48,6 +48,12 @@ const TaskSchema = new mongoose.Schema(
     ],
     startedAt: { type: Date },
     totalTimeSpent: { type: Number, default: 0 }, // cumulative time in seconds
+
+    // Start/Close history — permanent timestamps for when work first began and when the task was closed
+    firstStartedAt: { type: Date },        // first time the task was moved to "in-progress"
+    startedByName: { type: String, default: "" },
+    completedAt: { type: Date },           // when the task was marked "completed"
+    completedByName: { type: String, default: "" },
     
     // Contributor tracking
     createdBy: {
