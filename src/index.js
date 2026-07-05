@@ -437,12 +437,15 @@ connectDb()
     // Initialize default founder messages
     await initializeMessages();
 
-    // Rename existing "UPH-Server" to "Se7en" in the Database
+    // Rename existing "UPH-Server" or "UPH Server" to "Se7en" in the Database
     try {
       const ServerModel = require("./models/Server");
-      const renameResult = await ServerModel.updateMany({ name: "UPH-Server" }, { name: "Se7en" });
+      const renameResult = await ServerModel.updateMany(
+        { name: { $in: ["UPH-Server", "UPH Server"] } },
+        { name: "Se7en" }
+      );
       if (renameResult.modifiedCount > 0) {
-        console.log(`[Startup Migration] Renamed ${renameResult.modifiedCount} Server instances from UPH-Server to Se7en.`);
+        console.log(`[Startup Migration] Renamed ${renameResult.modifiedCount} Server instances from UPH Server to Se7en.`);
       }
     } catch (migErr) {
       console.error("[Startup Migration] Error renaming UPH-Server:", migErr);
