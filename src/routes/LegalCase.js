@@ -9,6 +9,7 @@ const { base64ToBuffer } = require("../lib/s3");
 
 // Validation Schemas
 const createSchema = z.object({
+  caseNumber: z.string().optional(),
   title: z.string().min(1, "Title is required"),
   clientName: z.string().min(1, "Client Name is required"),
   type: z.string().min(1, "Case Type is required"),
@@ -107,7 +108,7 @@ router.post("/", requireAuth, requireRole(["super-admin", "admin"]), async (req,
       return res.status(400).json({ error: { message: parsed.error.errors[0]?.message || "Invalid payload" } });
     }
 
-    const caseNumber = await generateCaseNumber();
+    const caseNumber = parsed.data.caseNumber || await generateCaseNumber();
     const processedAttachments = await processAttachments(parsed.data.attachments, "legal/cases");
 
     const created = await LegalCase.create({

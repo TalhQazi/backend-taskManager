@@ -14,6 +14,9 @@ const PropertySchema = new mongoose.Schema(
       default: "Active",
     },
     company: { type: mongoose.Schema.Types.ObjectId, ref: "Company" },
+    assignedCustomer: { type: String },
+    assignedUnit: { type: String },
+    locationName: { type: String },
     metadata: { type: Map, of: String },
   },
   { timestamps: true }

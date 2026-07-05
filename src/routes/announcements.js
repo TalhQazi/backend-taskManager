@@ -21,7 +21,7 @@ const { requireAuth } = require("../middleware/auth");
 const ADMIN_ROLES = ["super-admin", "admin", "manager", "team-lead"];
 
 function isAdmin(role) {
-  return ADMIN_ROLES.includes(role);
+  return ADMIN_ROLES.includes(String(role || "").toLowerCase().trim());
 }
 
 /** JWT payload uses `sub` (employee/user id); legacy may use id/_id/username */
@@ -51,41 +51,44 @@ async function logAuditEvent(announcementId, userId, userName, userRole, action,
 
 // Helper: Check if user is eligible to see this announcement
 async function isUserEligible(userId, userRecord, announcement, targetList, viewerRole) {
+  const normViewerRole = String(viewerRole || "").toLowerCase().trim();
   // Admins / managers / team-leads (JWT role) always see all non-draft announcements
-  if (isAdmin(String(viewerRole || ""))) {
+  if (isAdmin(normViewerRole)) {
     return announcement.status !== "draft";
   }
 
   // If no targets specified, everyone sees it
-  if (targetList.length === 0) {
+  if (!targetList || targetList.length === 0) {
     return true;
   }
 
-  const empRole = userRecord?.userRole || userRecord?.role || "";
+  const empRole = String(userRecord?.userRole || userRecord?.role || "").toLowerCase().trim();
 
   // Check if user matches any target
   for (const target of targetList) {
-    if (target.targetType === "global" || target.targetType === "company") {
+    const tType = String(target.targetType || "").toLowerCase().trim();
+    if (tType === "global" || tType === "company") {
       return true;
     }
 
-    if (target.targetType === "user" && String(target.targetId) === String(userId)) {
+    if (tType === "user" && String(target.targetId || "").toLowerCase().trim() === String(userId || "").toLowerCase().trim()) {
       return true;
     }
 
-    if (target.targetType === "role" && (target.targetId === empRole || target.targetId === userRecord?.role)) {
+    const tId = String(target.targetId || "").toLowerCase().trim();
+    if (tType === "role" && (tId === empRole || tId === String(userRecord?.role || "").toLowerCase().trim())) {
       return true;
     }
 
-    if (target.targetType === "department" && target.targetId === userRecord?.department) {
+    if (tType === "department" && tId === String(userRecord?.department || "").toLowerCase().trim()) {
       return true;
     }
 
-    if (target.targetType === "team" && target.targetId === (userRecord?.team || userRecord?.department)) {
+    if (tType === "team" && (tId === String(userRecord?.team || "").toLowerCase().trim() || tId === String(userRecord?.department || "").toLowerCase().trim())) {
       return true;
     }
 
-    if (target.targetType === "location" && target.targetId === userRecord?.location) {
+    if (tType === "location" && tId === String(userRecord?.location || "").toLowerCase().trim()) {
       return true;
     }
   }
@@ -195,11 +198,20 @@ router.get("/", requireAuth, async (req, res) => {
       items = await Announcement.find(match).sort({ pinned: -1, createdAt: -1 }).skip(skip).limit(limit).lean();
     }
 
-    const userRecord = await Employee.findOne({
-      $or: [{ _id: userId }, { username: userId }, { email: userId }],
-    })
-      .select("_id username role userRole department team location")
-      .lean();
+    const queryConditions = [];
+    if (mongoose.Types.ObjectId.isValid(userId)) {
+      queryConditions.push({ _id: userId });
+    }
+    if (userId) {
+      queryConditions.push({ username: userId });
+      queryConditions.push({ email: userId });
+    }
+
+    const userRecord = queryConditions.length > 0
+      ? await Employee.findOne({ $or: queryConditions })
+          .select("_id username role userRole department team location")
+          .lean()
+      : null;
 
     const announcementIds = items.map((a) => a._id);
     const allTargets =
@@ -284,11 +296,20 @@ router.get("/unread-count", requireAuth, async (req, res) => {
     const match = { status: "active", $or: [{ expiresAt: null }, { expiresAt: { $gt: new Date() } }] };
     const items = await Announcement.find(match).sort({ pinned: -1, createdAt: -1 }).limit(500).lean();
 
-    const userRecord = await Employee.findOne({
-      $or: [{ _id: userId }, { username: userId }, { email: userId }],
-    })
-      .select("_id username role userRole department team location")
-      .lean();
+    const queryConditions = [];
+    if (mongoose.Types.ObjectId.isValid(userId)) {
+      queryConditions.push({ _id: userId });
+    }
+    if (userId) {
+      queryConditions.push({ username: userId });
+      queryConditions.push({ email: userId });
+    }
+
+    const userRecord = queryConditions.length > 0
+      ? await Employee.findOne({ $or: queryConditions })
+          .select("_id username role userRole department team location")
+          .lean()
+      : null;
 
     const announcementIds = items.map((a) => a._id);
     const allTargets =
