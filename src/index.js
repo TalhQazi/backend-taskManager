@@ -94,6 +94,7 @@ const memeRoutes = require("./routes/meme");
 const announcementsRoutes = require("./routes/announcements");
 
 const milestonesRoutes = require("./routes/milestones");
+const costManagerRoutes = require("./routes/costManager");
 const atlasbookRoutes = require("./routes/atlasbook");
 const personalBudgetRoutes = require("./routes/personalBudget");
 const healthRoutes = require("./routes/health");
@@ -417,6 +418,7 @@ app.use("/api/legal/notifications", requireClearHire, legalNotificationRoutes);
 app.use("/api/announcements", requireClearHire, announcementsRoutes);
 
 app.use("/api/milestones", requireClearHire, milestonesRoutes);
+app.use("/api/cost-manager", requireClearHire, costManagerRoutes);
 app.use("/api/video", requireClearHire, videoMessagesRoutes);
 app.use("/api/user", requireClearHire, videoUserHistoryRoutes);
 app.use("/api/atlasbook", requireClearHire, atlasbookRoutes);
@@ -437,6 +439,20 @@ connectDb()
     
     // Initialize default founder messages
     await initializeMessages();
+
+    // Rename existing "UPH-Server" or "UPH Server" to "Se7en" in the Database
+    try {
+      const ServerModel = require("./models/Server");
+      const renameResult = await ServerModel.updateMany(
+        { name: { $in: ["UPH-Server", "UPH Server"] } },
+        { name: "Se7en" }
+      );
+      if (renameResult.modifiedCount > 0) {
+        console.log(`[Startup Migration] Renamed ${renameResult.modifiedCount} Server instances from UPH Server to Se7en.`);
+      }
+    } catch (migErr) {
+      console.error("[Startup Migration] Error renaming UPH-Server:", migErr);
+    }
 
     // Archive existing completed tasks on startup
     try {
@@ -494,6 +510,13 @@ connectDb()
       processNewHireSubmissions().catch((err) => console.error("[New Hire Job] Interval run failed:", err));
     }, 60 * 1000);
 
+    // Start Cost Manager alert worker (purchased-not-stored, certification deadlines)
+    const { runCostManagerChecks } = require("./jobs/costManagerJob");
+    runCostManagerChecks().catch((err) => console.error("[Cost Manager Job] Startup run failed:", err));
+    setInterval(() => {
+      runCostManagerChecks().catch((err) => console.error("[Cost Manager Job] Interval run failed:", err));
+    }, 6 * 60 * 60 * 1000);
+
     // Initialize announcement scheduler
     const { runAllTasks: runAnnouncementScheduler } = require("./lib/announcementScheduler");
     runAnnouncementScheduler().catch((err) => console.error("[Announcements] Startup scheduler error:", err));
@@ -518,6 +541,13 @@ connectDb()
     // Start Website Monitor cron job
     const { startWebsiteMonitor } = require("./jobs/websiteMonitor");
     startWebsiteMonitor();
+
+    // Start background EOD Miss check job
+    const eodMissCheckJob = require("./jobs/eodMissCheckJob");
+    eodMissCheckJob.run().catch((err) => console.error("[EOD Miss Job] Startup run failed:", err));
+    setInterval(() => {
+      eodMissCheckJob.run().catch((err) => console.error("[EOD Miss Job] Interval run failed:", err));
+    }, 15 * 60 * 1000); // Check every 15 minutes
     
     httpServer.listen(port, () => {
       console.log(`Backend listening on http://localhost:${port}`);

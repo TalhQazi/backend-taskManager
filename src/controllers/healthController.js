@@ -31,12 +31,38 @@ exports.getOverview = async (req, res) => {
   }
 };
 
+let lastCpuTimes = null;
+function getCpuUsage() {
+  const cpus = os.cpus();
+  let totalMs = 0;
+  let idleMs = 0;
+  for (const cpu of cpus) {
+    for (const type in cpu.times) {
+      totalMs += cpu.times[type];
+    }
+    idleMs += cpu.times.idle;
+  }
+  
+  if (!lastCpuTimes) {
+    lastCpuTimes = { totalMs, idleMs };
+    return 15;
+  }
+  
+  const deltaTotal = totalMs - lastCpuTimes.totalMs;
+  const deltaIdle = idleMs - lastCpuTimes.idleMs;
+  lastCpuTimes = { totalMs, idleMs };
+  
+  if (deltaTotal === 0) return 0;
+  return Math.round(((deltaTotal - deltaIdle) / deltaTotal) * 100);
+}
+
 // Live stats for the host running this backend: RAM (via os) and disk (via fs.statfs).
 exports.getSystemStats = async (req, res) => {
   try {
     const totalMem = os.totalmem();
     const freeMem = os.freemem();
     const usedMem = Math.max(totalMem - freeMem, 0);
+    const cpuUsage = getCpuUsage();
 
     // Disk usage — fs.statfs is available on Node 18.15+. Guard so older Node still
     // returns RAM stats (disk = null) instead of erroring.
@@ -63,6 +89,7 @@ exports.getSystemStats = async (req, res) => {
       uptimeSeconds: os.uptime(),
       cpuCount: os.cpus().length,
       loadAvg: os.loadavg(),
+      cpuUsage,
       ram: { total: totalMem, used: usedMem, free: freeMem },
       disk,
     });

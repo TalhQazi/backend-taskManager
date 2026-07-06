@@ -10,6 +10,9 @@ const TenantSchema = new mongoose.Schema(
     identification: { type: String }, // SSN/EIN/ID
     notes: { type: String },
     company: { type: mongoose.Schema.Types.ObjectId, ref: "Company" },
+    assignedProperty: { type: String },
+    assignedUnit: { type: String },
+    locationName: { type: String },
   },
   { timestamps: true }
 );

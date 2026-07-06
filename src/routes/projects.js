@@ -338,7 +338,20 @@ router.get("/", requireAuth, async (req, res, next) => {
         });
       } else {
         const regexes = candidates.map((c) => new RegExp(`^${escapeRegExp(c)}$`, "i"));
-        matchStages.push({ $match: { assignees: { $elemMatch: { $in: regexes } } } });
+        const taskProjectIds = await Task.distinct("projectId", {
+          $or: [
+            { assignee: { $in: regexes } },
+            { assignees: { $elemMatch: { $in: regexes } } }
+          ]
+        });
+        matchStages.push({
+          $match: {
+            $or: [
+              { assignees: { $elemMatch: { $in: regexes } } },
+              { _id: { $in: taskProjectIds } }
+            ]
+          }
+        });
       }
     }
 
@@ -709,7 +722,33 @@ router.get("/:id", requireAuth, async (req, res, next) => {
       return res.status(404).json({ error: { message: "Project not found" } });
     }
 
-    return res.json({ item: cached });
+    const role = String(req.user?.role || "").trim().toLowerCase();
+    const cloned = JSON.parse(JSON.stringify(cached));
+
+    if (role !== "admin" && role !== "super-admin" && role !== "manager" && role !== "team-lead") {
+      const username = String(req.user?.username || "").trim().toLowerCase();
+      const name = String(req.user?.name || "").trim().toLowerCase();
+      
+      const isProjectAssignee = (cloned.assignees || []).some(
+        (a) => a.toLowerCase() === username || a.toLowerCase() === name
+      );
+
+      if (!isProjectAssignee) {
+        cloned.tasks = (cloned.tasks || []).filter((t) => {
+          const taskAssignees = (t.assignees || []).map(a => a.toLowerCase());
+          const legacyAssignee = t.assignee ? t.assignee.toLowerCase() : "";
+          return taskAssignees.includes(username) || taskAssignees.includes(name) || legacyAssignee === username || legacyAssignee === name;
+        });
+
+        if (cloned.tasks.length === 0) {
+          return res.status(403).json({ error: { message: "Access denied to this project" } });
+        }
+        
+        cloned.taskCount = cloned.tasks.length;
+      }
+    }
+
+    return res.json({ item: cloned });
   } catch (err) {
     return next(err);
   }

@@ -15,6 +15,8 @@ const UnitSchema = new mongoose.Schema(
     leaseStartDate: { type: Date },
     leaseEndDate: { type: Date },
     profitability: { type: Number, default: 0 },
+    assignedCustomer: { type: String },
+    locationName: { type: String },
     metadata: { type: Map, of: String },
   },
   { timestamps: true }
