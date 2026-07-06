@@ -61,7 +61,8 @@ function calculateProgress(onboarding, clearHireStatus = "PENDING") {
   }
 
   // W-4 Form
-  if (onboarding.w4Form?.status === "submitted" || onboarding.w4Form?.status === "verified") {
+  const hasW4 = onboarding.w4Form?.status === "submitted" || onboarding.w4Form?.status === "verified";
+  if (hasW4) {
     completed++;
   }
 
@@ -85,7 +86,8 @@ function calculateProgress(onboarding, clearHireStatus = "PENDING") {
     completed++;
   }
 
-  return Math.round((completed / 7) * 100);
+  const total = hasW4 ? 7 : 6;
+  return Math.round((completed / total) * 100);
 }
 
 // Asynchronous helper to resolve user's ClearHire status and get progress
@@ -219,23 +221,23 @@ router.post("/me", requireAuth, async (req, res, next) => {
       onboarding.employeeHandbook.status = "submitted";
     }
 
-    // Update digital signature status if all docs are submitted
+    // Update digital signature status if all mandatory docs are submitted
     if (onboarding.basicInfo.completed &&
         onboarding.identityVerification.primaryId.status === "submitted" &&
         onboarding.identityVerification.secondaryId.status === "submitted" &&
-        onboarding.w4Form.status === "submitted" &&
         onboarding.employeeHandbook.status === "submitted") {
       if (!onboarding.digitalSignature) {
         onboarding.digitalSignature = { status: "not_started", signatureData: "" };
       }
-      onboarding.digitalSignature.status = "submitted";
+      if (onboarding.digitalSignature.status === "not_started" || onboarding.digitalSignature.status === "missing") {
+        onboarding.digitalSignature.status = "submitted";
+      }
     }
 
-    // Calculate overall status
+    // Calculate overall status (W-4 is optional)
     const allSubmitted = onboarding.basicInfo.completed &&
                           onboarding.identityVerification.primaryId.status === "submitted" &&
                           onboarding.identityVerification.secondaryId.status === "submitted" &&
-                          onboarding.w4Form.status === "submitted" &&
                           onboarding.employeeHandbook.status === "submitted" &&
                           onboarding.digitalSignature.status === "submitted";
 
@@ -589,12 +591,11 @@ router.post("/me/submit", requireAuth, async (req, res, next) => {
       return res.status(404).json({ error: { message: "Onboarding not found" } });
     }
 
-    // Check if all steps are completed (submitted or verified)
+    // Check if all steps are completed (submitted or verified) - W-4 is optional
     const docReady = (s) => s === "submitted" || s === "verified";
     if (!onboarding.basicInfo?.completed ||
         !docReady(onboarding.identityVerification?.primaryId?.status) ||
         !docReady(onboarding.identityVerification?.secondaryId?.status) ||
-        !docReady(onboarding.w4Form?.status) ||
         !docReady(onboarding.employeeHandbook?.status) ||
         !docReady(onboarding.digitalSignature?.status)) {
       return res.status(400).json({

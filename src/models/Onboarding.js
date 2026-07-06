@@ -84,17 +84,20 @@ OnboardingSchema.index({ overallStatus: 1 });
 // Calculate progress before saving
 OnboardingSchema.pre("save", function (next) {
   let completedSteps = 0;
-  const totalSteps = 5;
 
   if (this.basicInfo.completed) completedSteps++;
   if ((this.identityVerification.primaryId.status === "submitted" || this.identityVerification.primaryId.status === "verified") &&
       (this.identityVerification.secondaryId.status === "submitted" || this.identityVerification.secondaryId.status === "verified")) completedSteps++;
-  if (this.w4Form.status === "submitted" || this.w4Form.status === "verified") completedSteps++;
+  
+  const hasW4 = this.w4Form.status === "submitted" || this.w4Form.status === "verified";
+  if (hasW4) completedSteps++;
+  
   if (this.employeeHandbook.status === "submitted" || this.employeeHandbook.status === "verified") completedSteps++;
   if (this.digitalSignature.status === "submitted" || this.digitalSignature.status === "verified") completedSteps++;
   if (this.workInfo?.completed) completedSteps++;
 
-  this.progress = Math.round((completedSteps / 6) * 100);
+  const divisor = hasW4 ? 6 : 5;
+  this.progress = Math.round((completedSteps / divisor) * 100);
 
   // Only auto-advance to in_progress — never auto-submit; submission requires explicit employee action
   if (this.overallStatus !== "submitted" && this.overallStatus !== "approved" && this.overallStatus !== "rejected") {
