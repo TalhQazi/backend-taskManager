@@ -7,6 +7,24 @@ const NoteSchema = new mongoose.Schema(
     content: { type: String, default: "" },
     color: { type: String, default: "#ffffff" },
     isPinned: { type: Boolean, default: false },
+    isFavorite: { type: Boolean, default: false },
+    folder: { type: String, default: "" },
+    tags: [{ type: String }],
+    actionItems: [
+      {
+        text: { type: String, default: "" },
+        completed: { type: Boolean, default: false }
+      }
+    ],
+    notesList: [{ type: String }],
+    attachments: [
+      {
+        fileName: { type: String, default: "" },
+        url: { type: String, default: "" },
+        mimeType: { type: String, default: "" },
+        size: { type: Number, default: 0 }
+      }
+    ],
     lastOpenedAt: { type: Date, default: Date.now },
   },
   { timestamps: true }
