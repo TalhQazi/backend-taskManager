@@ -20,6 +20,7 @@
 
 const { exec } = require("child_process");
 const os = require("os");
+const fs = require("fs");
 
 // Guarded shell helper — resolves { ok, out, err } and never throws.
 function run(cmd, timeout = 6000) {
@@ -493,19 +494,141 @@ function finalize(serverId, drives, meta) {
       raidLevel: meta.raidLevel,
       diskUsagePercent: meta.diskUsagePercent,
       source: meta.source,
+      mode: meta.mode || "physical",
     },
     diagnostics: meta.diagnostics,
     drives,
   };
 }
 
+// ---------------------------------------------------------------------------
+// Node-level real-volume collection. Cross-platform, needs no external tools
+// and no root — reads real disk capacity/used/free straight from the OS. This
+// is genuine data (not simulated); it just describes logical volumes rather
+// than physical drives (no SMART/RAID/temperature). Used as an automatic
+// fallback so the card shows real numbers even before smartctl/perccli exist.
+// ---------------------------------------------------------------------------
+function buildVolume(bay, label, id, totalBytes, usedBytes) {
+  const capacityGB = Math.round(totalBytes / 1024 ** 3);
+  const usagePercent = totalBytes ? Math.round((usedBytes / totalBytes) * 100) : 0;
+
+  let status = "healthy";
+  let score = 100;
+  const reasons = [];
+  if (usagePercent >= 95) {
+    status = "failed";
+    score = 20;
+    reasons.push(`Filesystem ${usagePercent}% full — critically low free space`);
+  } else if (usagePercent >= 85) {
+    status = "warning";
+    score = 60;
+    reasons.push(`Filesystem ${usagePercent}% full — low free space`);
+  }
+
+  return {
+    bay,
+    installed: true,
+    status,
+    model: label,
+    serial: id,
+    capacityGB,
+    rpm: null,
+    transport: "FS",
+    temperatureC: null,
+    powerOnHours: null,
+    smartStatus: null,
+    raidState: null,
+    readMBps: null,
+    writeMBps: null,
+    utilizationPercent: usagePercent,
+    healthScore: score,
+    healthReasons: reasons,
+    rebuildPercent: null,
+  };
+}
+
+async function collectNodeVolumes(diagnostics) {
+  const drives = [];
+  const platform = os.platform();
+  let totalBytesAll = 0;
+  let usedBytesAll = 0;
+
+  try {
+    if (platform === "linux") {
+      // `df` works for any user (no root). Enumerate real disk-backed mounts.
+      const df = await run("df -P -B1 2>/dev/null");
+      const lines = df.out.split("\n").slice(1);
+      let bay = 1;
+      for (const line of lines) {
+        const t = line.trim().split(/\s+/);
+        if (t.length < 6) continue;
+        const fsName = t[0];
+        const total = Number(t[1]);
+        const used = Number(t[2]);
+        const mount = t.slice(5).join(" ");
+        if (!/^\/dev\//.test(fsName) || !total) continue; // skip tmpfs/overlay/etc.
+        drives.push(buildVolume(bay, mount, fsName, total, used));
+        totalBytesAll += total;
+        usedBytesAll += used;
+        if (++bay > 16) break;
+      }
+    }
+
+    // Windows / macOS / linux-without-df: statfs the primary volume.
+    if (drives.length === 0 && typeof fs.promises.statfs === "function") {
+      const target = platform === "win32" ? `${process.cwd().split(":")[0]}:\\` : "/";
+      const s = await fs.promises.statfs(target);
+      const total = s.blocks * s.bsize;
+      const free = s.bavail * s.bsize;
+      const used = Math.max(total - free, 0);
+      if (total) {
+        drives.push(buildVolume(1, target, target, total, used));
+        totalBytesAll += total;
+        usedBytesAll += used;
+      }
+    }
+  } catch (e) {
+    if (diagnostics) diagnostics.notes.push(`Node volume read failed: ${e.message}`);
+  }
+
+  const diskUsagePercent = totalBytesAll ? Math.round((usedBytesAll / totalBytesAll) * 100) : 0;
+  return { drives, diskUsagePercent };
+}
+
 /**
  * Public entry point. Always resolves to a normalized payload (never throws).
+ * Collection tiers, best first:
+ *   1. Physical drives behind a PERC/MegaRAID controller (perccli/storcli)
+ *   2. Direct-attached physical drives (lsblk + smartctl)
+ *   3. Real logical volumes via Node (fs.statfs / df) — no tools, no root
+ *   4. Unavailable (with diagnostics)
  * @param {string} serverId - server identifier ("host" for the local machine).
  */
 async function getStorageHealth(serverId) {
   try {
-    return await collectReal(serverId);
+    const real = await collectReal(serverId);
+    if (real.summary.source === "live") return real; // tier 1 or 2
+
+    // Tier 3: real filesystem volumes (works everywhere, no privileges).
+    const diagnostics = real.diagnostics || { platform: os.platform(), hostname: os.hostname(), notes: [] };
+    const { drives, diskUsagePercent } = await collectNodeVolumes(diagnostics);
+    if (drives.length > 0) {
+      diagnostics.notes = diagnostics.notes || [];
+      diagnostics.notes.push(
+        "Showing real filesystem volumes. Install smartmontools/perccli (and run as root) for physical drive SMART & RAID."
+      );
+      return finalize(serverId, drives, {
+        model: `${os.hostname()} · filesystem volumes`,
+        raidLevel: "No RAID controller",
+        source: "live",
+        diskUsagePercent,
+        diagnostics,
+        hasRaidController: false,
+        mode: "filesystem",
+      });
+    }
+
+    return real; // tier 4: genuinely nothing to report
   } catch (err) {
     return unavailable(
       serverId,
