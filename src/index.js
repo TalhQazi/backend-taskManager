@@ -6,6 +6,7 @@ const path = require("path");
 const fs = require("fs");
 const { createServer } = require("http");
 const { Server } = require("socket.io");
+const jwt = require("jsonwebtoken");
 require("dotenv").config();
 
 const { connectDb } = require("./lib/db");
@@ -153,9 +154,59 @@ const io = new Server(httpServer, {
 // Store io instance globally so routes can access it
 global.io = io;
 
+/**
+ * Verify the JWT on the socket handshake and stash the identity on the socket.
+ *
+ * The legacy `register-user` event trusts client-supplied username/role. That
+ * is tolerable for the pre-existing comment rooms, but must never gate WIP
+ * rooms — those carry manager-only data. WIP rooms are joined server-side
+ * below, from the verified token only. Unauthenticated sockets still connect
+ * (preserving existing behaviour); they simply never get a WIP room.
+ */
+io.use((socket, next) => {
+  const raw =
+    socket.handshake.auth?.token ||
+    socket.handshake.query?.token ||
+    String(socket.handshake.headers?.authorization || "").replace(/^Bearer\s+/i, "");
+  if (!raw) return next();
+  try {
+    const payload = jwt.verify(String(raw), process.env.JWT_SECRET);
+    socket.data.auth = {
+      employeeId: String(payload.sub || payload.id || payload._id || ""),
+      role: String(payload.role || "").trim().toLowerCase(),
+      name: payload.name || "",
+      username: payload.username || "",
+    };
+  } catch {
+    // Bad/expired token: connect anonymously rather than dropping the socket.
+  }
+  return next();
+});
+
 // Socket.io connection handling
 io.on("connection", (socket) => {
   console.log("Client connected:", socket.id);
+
+  // --- WIP rooms: derived from the verified JWT, never from client input. ---
+  const wipAuth = socket.data?.auth;
+  if (wipAuth?.employeeId) {
+    const { WIP_ROOMS, OWNER_ROLES, MANAGER_ROLES } = require("./constants/wip");
+    const isPrivileged = [...OWNER_ROLES, ...MANAGER_ROLES].includes(wipAuth.role);
+
+    socket.join(WIP_ROOMS.employee(wipAuth.employeeId));
+    if (isPrivileged) socket.join(WIP_ROOMS.MANAGERS);
+
+    // Read-only TV displays opt in explicitly; they receive grid/summary only.
+    socket.on("wip:join-tv", () => {
+      if (isPrivileged) socket.join(WIP_ROOMS.TV);
+    });
+    socket.on("wip:join-session", (sessionId) => {
+      if (sessionId) socket.join(WIP_ROOMS.session(sessionId));
+    });
+    socket.on("wip:leave-session", (sessionId) => {
+      if (sessionId) socket.leave(WIP_ROOMS.session(sessionId));
+    });
+  }
 
   // Register user into their personal room + role room for targeted notification delivery.
   // `name` is the display name room — needed so @mentions (which use display names) reach
@@ -422,7 +473,15 @@ app.use("/api/atlasbook", requireClearHire, atlasbookRoutes);
 app.use("/api/personal-budget", requireClearHire, personalBudgetRoutes);
 app.use("/api/health", healthRoutes);
 
-
+// --- WIP Dashboard ---------------------------------------------------------
+// Mounted on three namespaces so the public API matches the spec exactly.
+// `taskRouter` is added *after* the existing tasks routes so it only handles
+// the two paths it declares and never shadows them.
+const { dashboardRouter, sessionRouter, blockerRouter, taskRouter } = require("./routes/wip");
+app.use("/api/dashboard/wip", dashboardRouter);
+app.use("/api/work-sessions", sessionRouter);
+app.use("/api/blockers", blockerRouter);
+app.use("/api/tasks", taskRouter);
 
 app.use(notFoundHandler);
 app.use(errorHandler);
@@ -538,6 +597,15 @@ connectDb()
     // Start Website Monitor cron job
     const { startWebsiteMonitor } = require("./jobs/websiteMonitor");
     startWebsiteMonitor();
+
+    // Start WIP idle sweep + heartbeat rollup (every 60s).
+    // Also probes transaction support once and warns loudly on a standalone.
+    const { startWipIdleMonitor } = require("./jobs/wipIdleMonitor");
+    startWipIdleMonitor();
+    require("./lib/withTransaction")
+      .detectTransactionSupport()
+      .then((ok) => console.log(`[WIP] transactions ${ok ? "supported (replica set)" : "UNAVAILABLE (standalone)"}`))
+      .catch(() => {});
 
     // Start background EOD Miss check job
     const eodMissCheckJob = require("./jobs/eodMissCheckJob");
