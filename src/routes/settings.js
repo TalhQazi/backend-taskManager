@@ -25,6 +25,21 @@ const upload = multer({
   },
 });
 
+const preferenceSchema = z.object({
+  taskAssignment: z.boolean().optional(),
+  projectAssignment: z.boolean().optional(),
+  commentAdded: z.boolean().optional(),
+  replyAdded: z.boolean().optional(),
+  taskCompleted: z.boolean().optional(),
+  eodMissAlert: z.boolean().optional(),
+  eodComment: z.boolean().optional(),
+  messageAlert: z.boolean().optional(),
+  systemAlert: z.boolean().optional(),
+  patentExpiration: z.boolean().optional(),
+  complianceReminder: z.boolean().optional(),
+  userRegistration: z.boolean().optional(),
+}).optional();
+
 const settingsSchema = z.object({
   companyName: z.string().optional(),
   supportEmail: z.string().optional(),
@@ -42,6 +57,8 @@ const settingsSchema = z.object({
       weeklyReports: z.boolean().optional(),
     })
     .optional(),
+  emailPreferences: preferenceSchema,
+  webPreferences: preferenceSchema,
   language: z.string().optional(),
   timezone: z.string().optional(),
   countryCode: z.string().optional(),

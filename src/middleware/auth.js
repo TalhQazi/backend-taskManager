@@ -58,9 +58,9 @@ function requireRole(roles) {
  */
 function requireClearHire(req, res, next) {
   const proceed = () => {
-    // Exempt admin roles — they manage the system
+    // Exempt super-admin roles — they manage the system
     const role = req.user?.role;
-    if (["super-admin", "admin"].includes(role)) {
+    if (["super-admin"].includes(role)) {
       return next();
     }
 

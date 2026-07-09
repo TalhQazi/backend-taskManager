@@ -35,7 +35,7 @@ router.get("/eod-status", requireAuth, requireRole(["manager", "admin", "super-a
 
     // Get all active employees (same fields as Employee Directory)
     const employees = await Employee.find(
-      { status: "active" },
+      { status: "active", userRole: { $ne: "super-admin" } },
       { name: 1, email: 1, _id: 1 }
     ).lean();
 

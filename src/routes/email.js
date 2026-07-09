@@ -7,52 +7,39 @@ const { decrypt } = require("../lib/encryption");
 
 const router = express.Router();
 
-// Employee Email Preferences Model (embedded in Employee or separate)
-// For now, we'll store preferences in user profile
-const employeeEmailPreferencesSchema = z.object({
-  userRegistration: z.boolean().default(true),
-  managerRegistration: z.boolean().default(true),
-  forgotPassword: z.boolean().default(true),
-  taskAssignment: z.boolean().default(true),
-  fileAttachment: z.boolean().default(true),
-  commentAdded: z.boolean().default(true),
-  replyAdded: z.boolean().default(true),
-  projectAssignment: z.boolean().default(true),
-  projectReassignment: z.boolean().default(true),
-});
-
 // Get employee email preferences (requires employee auth)
 router.get("/settings", requireAuth, async (req, res, next) => {
   try {
-    const userId = req.user?.id || req.user?._id;
+    const userId = String(req.user?.sub || req.user?.id || req.user?._id || "");
     if (!userId) {
       return res.status(401).json({ error: { message: "Unauthorized" } });
     }
 
-    // Get user preferences from Employee model or similar
-    const Employee = require("../models/Employee");
-    let employee = await Employee.findById(userId).lean();
-    
-    if (!employee) {
-      employee = {};
+    let settings = await Settings.findOne({ userId }).lean();
+    if (!settings) {
+      const created = await Settings.create({ userId, role: req.user?.role || "" });
+      settings = created.toObject();
     }
 
-    // Get or create default preferences
-    const preferences = employee.emailPreferences || {
-      userRegistration: true,
-      managerRegistration: true,
-      forgotPassword: true,
+    const defaultPrefs = {
       taskAssignment: true,
-      fileAttachment: true,
+      projectAssignment: true,
       commentAdded: true,
       replyAdded: true,
-      projectAssignment: true,
-      projectReassignment: true,
+      taskCompleted: true,
+      eodMissAlert: true,
+      eodComment: true,
+      messageAlert: true,
+      systemAlert: true,
+      patentExpiration: true,
+      complianceReminder: true,
+      userRegistration: true,
     };
 
     res.json({ 
       item: { 
-        preferences: employeeEmailPreferencesSchema.parse(preferences)
+        preferences: settings.emailPreferences || defaultPrefs,
+        webPreferences: settings.webPreferences || defaultPrefs
       }
     });
 
@@ -64,31 +51,26 @@ router.get("/settings", requireAuth, async (req, res, next) => {
 // Update employee email preferences (requires employee auth)
 router.put("/settings", requireAuth, async (req, res, next) => {
   try {
-    const userId = req.user?.id || req.user?._id;
+    const userId = String(req.user?.sub || req.user?.id || req.user?._id || "");
     if (!userId) {
       return res.status(401).json({ error: { message: "Unauthorized" } });
     }
 
-    const parsed = employeeEmailPreferencesSchema.safeParse(req.body.preferences);
-    if (!parsed.success) {
-      return res.status(400).json({ 
-        error: { 
-          message: "Invalid preferences", 
-          details: parsed.error.format() 
-        } 
-      });
-    }
+    const { preferences, webPreferences } = req.body;
+    const update = {};
+    if (preferences) update.emailPreferences = preferences;
+    if (webPreferences) update.webPreferences = webPreferences;
 
-    const Employee = require("../models/Employee");
-    const updated = await Employee.findByIdAndUpdate(
-      userId,
-      { emailPreferences: parsed.data },
-      { new: true, lean: true }
-    );
+    const updated = await Settings.findOneAndUpdate(
+      { userId },
+      { $set: update },
+      { new: true, upsert: true }
+    ).lean();
 
     res.json({ 
       item: { 
-        preferences: parsed.data 
+        preferences: updated.emailPreferences,
+        webPreferences: updated.webPreferences
       }
     });
 

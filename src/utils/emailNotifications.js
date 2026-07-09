@@ -28,8 +28,20 @@ async function sendEmailNotification(usernameOrId, templateKey, variables = {}) 
     const emailNotificationsEnabled = settings ? (settings.notifications && settings.notifications.emailNotifications !== false) : true;
     
     if (!emailNotificationsEnabled) {
-      console.log(`User ${user.username} has email notifications disabled.`);
+      console.log(`User ${user.username} has email notifications disabled globally.`);
       return false;
+    }
+
+    if (settings && settings.emailPreferences) {
+      let keyToCheck = templateKey;
+      if (templateKey === "fileAttachment") keyToCheck = "commentAdded";
+      if (templateKey === "projectReassignment") keyToCheck = "projectAssignment";
+      
+      const isEnabled = settings.emailPreferences[keyToCheck];
+      if (isEnabled === false) {
+        console.log(`User ${user.username} has email notification for ${templateKey} disabled.`);
+        return false;
+      }
     }
 
     variables.name = user.name || user.username;

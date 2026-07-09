@@ -120,7 +120,10 @@ async function checkEodMissForEmployee(employee, defaultCompanyTz) {
 
 async function run() {
   try {
-    const activeEmployees = await Employee.find({ status: "active" });
+    const activeEmployees = await Employee.find({
+      status: "active",
+      userRole: { $ne: "super-admin" }
+    });
     if (!activeEmployees.length) return;
 
     const company = await Company.findOne();

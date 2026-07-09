@@ -6,6 +6,7 @@ const Website = require("../models/Website");
 const WebsiteCheck = require("../models/WebsiteCheck");
 const WebsiteIncident = require("../models/WebsiteIncident");
 const { dispatchAlert } = require("../utils/alertManager");
+const { getStorageHealth } = require("../utils/storageTelemetry");
 
 exports.getOverview = async (req, res) => {
   try {
@@ -226,6 +227,27 @@ exports.ingestMetrics = async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: { message: "Failed to ingest metrics" } });
+  }
+};
+
+// Physical storage & RAID health for a server's drive chassis.
+// `id` may be a Server ObjectId or the sentinel "host" for the local machine.
+exports.getStorageHealth = async (req, res) => {
+  try {
+    const { id } = req.params;
+    let seed = id;
+
+    // Resolve a real server's name for a stable, human-meaningful seed.
+    if (id && id !== "host" && /^[0-9a-fA-F]{24}$/.test(id)) {
+      const server = await Server.findById(id).select("name");
+      if (server) seed = server.name || id;
+    }
+
+    const payload = await getStorageHealth(seed);
+    res.json(payload);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: { message: "Failed to fetch storage health" } });
   }
 };
 
