@@ -152,13 +152,41 @@ async function collectRaid(diagnostics) {
 
   const vd = await run(`${tool} /c0/vall show 2>/dev/null`);
   const pd = await run(`${tool} /c0/eall/sall show 2>/dev/null`);
+  const encl = await run(`${tool} /c0/eall show all 2>/dev/null`);
 
   const levelMatch = vd.out.match(/RAID[- ]?(\d+)/i);
-  // Physical drive states appear as e.g. "252:1  ... Onln" / "Rbld" / "Offln".
-  const states = [];
+
+  // Enclosure slot count → number of physical bays on the backplane.
+  const slotMatch =
+    encl.out.match(/Slot Count\s*[=:]\s*(\d+)/i) ||
+    encl.out.match(/Number of Slots\s*[=:]\s*(\d+)/i);
+  const slotCount = slotMatch ? Number(slotMatch[1]) : 0;
+
+  // Parse the physical-drive summary table. Rows look like:
+  //   252:0     9 Onln   0 558.406 GB SAS  HDD N   N  512B ST600MM0006     U  -
+  // columns: EID:Slt DID State DG Size(2 tok) Intf Med SED PI SeSz Model Sp Type
+  const drives = [];
   pd.out.split("\n").forEach((line) => {
-    const m = line.match(/\b(\d+):(\d+)\b.*?\b(Onln|Rbld|Offln|Failed|UGood|UBad|GHS|DHS|Msng)\b/i);
-    if (m) states.push({ enclosure: m[1], slot: Number(m[2]), state: m[3] });
+    const t = line.trim().split(/\s+/);
+    if (!/^\d+:\d+$/.test(t[0]) || t.length < 8) return;
+    const [eid, slot] = t[0].split(":");
+    const did = Number(t[1]);
+    const state = t[2];
+    const capacityGB = parseSizeToGB(`${t[4]} ${t[5]}`);
+    const intf = t[6];
+    const med = t[7];
+    // Model sits just before the trailing "Sp" and "Type" columns.
+    const model = t.length >= 3 ? t[t.length - 3] : "Unknown";
+    drives.push({
+      enclosure: eid,
+      slot: Number(slot),
+      did: Number.isFinite(did) ? did : null,
+      state,
+      capacityGB,
+      intf,
+      med,
+      model,
+    });
   });
 
   const rebuild = pd.out.match(/Rebuild.*?(\d+(?:\.\d+)?)\s*%/i);
@@ -166,10 +194,22 @@ async function collectRaid(diagnostics) {
   return {
     tool,
     level: levelMatch ? `RAID-${levelMatch[1]}` : null,
-    states,
+    slotCount,
+    drives,
     rebuildPercent: rebuild ? Math.round(Number(rebuild[1])) : null,
     raidRaw: vd.ok || pd.ok,
   };
+}
+
+// Convert a storcli/perccli size string ("558.406 GB", "1.090 TB") to GB.
+function parseSizeToGB(str) {
+  const m = String(str).match(/([\d.]+)\s*(TB|GB|MB)/i);
+  if (!m) return null;
+  const val = parseFloat(m[1]);
+  const unit = m[2].toUpperCase();
+  if (unit === "TB") return Math.round(val * 1000);
+  if (unit === "MB") return Math.round(val / 1000);
+  return Math.round(val);
 }
 
 function mapRaidState(s) {
@@ -264,67 +304,111 @@ async function collectReal(serverId) {
   if (!hasSmartctl) diagnostics.notes.push("smartctl not found — install smartmontools for SMART/temperature data.");
   else if (!diagnostics.ranAsRoot) diagnostics.notes.push("Backend is not running as root — smartctl may return no data.");
 
-  // RAID controller.
+  // RAID controller (PERC / MegaRAID) — enumerates physical drives that sit
+  // *behind* the controller (invisible to lsblk, which only sees the VD).
   const raid = await collectRaid(diagnostics);
-  if (raid && raid.tool) diagnostics.notes.push(`RAID controller queried via ${raid.tool}.`);
+  const hasRaidController = !!(raid && raid.tool);
+  if (hasRaidController) {
+    diagnostics.notes.push(
+      `RAID controller queried via ${raid.tool}: ${raid.drives.length} physical drive(s) found.`
+    );
+  }
 
-  const drives = [];
-  let bay = 1;
-  for (const disk of disks) {
-    let smart = { smartStatus: "UNKNOWN", temperatureC: null, powerOnHours: null, pendingSectors: 0, reallocatedSectors: 0 };
-    if (hasSmartctl) {
-      const out = await run(`smartctl -A -H -d auto /dev/${disk.name} 2>/dev/null`);
-      if (out.out.trim()) smart = parseSmart(out.out);
+  let drives = [];
+  let modelLabel;
+
+  if (hasRaidController && raid.drives.length > 0) {
+    // ---- RAID-first path: one entry per physical drive behind the controller.
+    // SMART must be read through the controller: smartctl -d megaraid,<DID>.
+    const hostDev = disks[0]?.name || "sda"; // any block device on the controller
+    const maxBay = raid.slotCount || raid.drives.length;
+
+    for (const pd of raid.drives) {
+      let smart = { smartStatus: "UNKNOWN", temperatureC: null, powerOnHours: null, pendingSectors: 0, reallocatedSectors: 0 };
+      if (hasSmartctl && pd.did != null) {
+        const out = await run(`smartctl -A -H -d megaraid,${pd.did} /dev/${hostDev} 2>/dev/null`);
+        if (out.out.trim()) smart = parseSmart(out.out);
+      }
+
+      const raidState = mapRaidState(pd.state);
+      const rebuildPercent =
+        raidState === "REBUILDING" ? (raid.rebuildPercent != null ? raid.rebuildPercent : 0) : null;
+
+      const raw = {
+        bay: pd.slot + 1, // slot 0 -> bay 1
+        installed: true,
+        model: pd.model || "Unknown",
+        serial: null,
+        capacityGB: pd.capacityGB,
+        rpm: pd.med === "SSD" ? 0 : null,
+        transport: pd.intf || null,
+        temperatureC: smart.temperatureC,
+        powerOnHours: smart.powerOnHours,
+        smartStatus: smart.smartStatus,
+        raidState,
+        readMBps: 0, // per-member throughput isn't exposed behind the VD
+        writeMBps: 0,
+        utilizationPercent: diskUsagePercent,
+        pendingSectors: smart.pendingSectors,
+        reallocatedSectors: smart.reallocatedSectors,
+        rebuildPercent,
+        missing: false,
+      };
+      drives.push({ ...raw, ...evaluateDrive(raw) });
     }
 
-    // Match a RAID physical-drive state by slot order (best-effort).
-    const raidEntry = raid && raid.states.length >= bay ? raid.states[bay - 1] : null;
-    const raidState = raidEntry ? mapRaidState(raidEntry.state) : raid && raid.tool ? "ONLINE" : null;
-    const rebuildPercent =
-      raidState === "REBUILDING" ? (raid && raid.rebuildPercent != null ? raid.rebuildPercent : 0) : null;
+    // Fill empty backplane slots so a 7-of-16 chassis renders correctly.
+    const filled = new Set(drives.map((d) => d.bay));
+    for (let b = 1; b <= maxBay; b++) {
+      if (!filled.has(b)) drives.push(emptyBay(b));
+    }
+    drives.sort((a, b) => a.bay - b.bay);
+    modelLabel = `${os.hostname()} · ${raid.drives.length}/${maxBay} bays populated`;
+  } else {
+    // ---- Direct-attached path (HBA / SATA / cloud): enumerate via lsblk.
+    let bay = 1;
+    for (const disk of disks) {
+      let smart = { smartStatus: "UNKNOWN", temperatureC: null, powerOnHours: null, pendingSectors: 0, reallocatedSectors: 0 };
+      if (hasSmartctl) {
+        const out = await run(`smartctl -A -H -d auto /dev/${disk.name} 2>/dev/null`);
+        if (out.out.trim()) smart = parseSmart(out.out);
+      }
 
-    const raw = {
-      bay,
-      installed: true,
-      model: disk.model,
-      serial: disk.serial,
-      capacityGB: Math.round(disk.sizeBytes / 1024 ** 3),
-      rpm: disk.rota === "1" ? null : 0, // 0 => SSD/flash; null => unknown RPM
-      transport: (disk.tran || "").toUpperCase() || null,
-      temperatureC: smart.temperatureC,
-      powerOnHours: smart.powerOnHours,
-      smartStatus: smart.smartStatus,
-      raidState,
-      readMBps: io[disk.name]?.readMBps ?? 0,
-      writeMBps: io[disk.name]?.writeMBps ?? 0,
-      utilizationPercent: diskUsagePercent,
-      pendingSectors: smart.pendingSectors,
-      reallocatedSectors: smart.reallocatedSectors,
-      rebuildPercent,
-      missing: false,
-    };
-
-    drives.push({ ...raw, ...evaluateDrive(raw) });
-    bay++;
+      const raw = {
+        bay,
+        installed: true,
+        model: disk.model,
+        serial: disk.serial,
+        capacityGB: Math.round(disk.sizeBytes / 1024 ** 3),
+        rpm: disk.rota === "1" ? null : 0, // 0 => SSD/flash; null => unknown RPM
+        transport: (disk.tran || "").toUpperCase() || null,
+        temperatureC: smart.temperatureC,
+        powerOnHours: smart.powerOnHours,
+        smartStatus: smart.smartStatus,
+        raidState: null,
+        readMBps: io[disk.name]?.readMBps ?? 0,
+        writeMBps: io[disk.name]?.writeMBps ?? 0,
+        utilizationPercent: diskUsagePercent,
+        pendingSectors: smart.pendingSectors,
+        reallocatedSectors: smart.reallocatedSectors,
+        rebuildPercent: null,
+        missing: false,
+      };
+      drives.push({ ...raw, ...evaluateDrive(raw) });
+      bay++;
+    }
+    modelLabel = `${os.hostname()} (${disks.length} physical disk${disks.length === 1 ? "" : "s"})`;
   }
 
-  // Bay count: if a RAID enclosure reported more slots, pad the rest as empty;
-  // otherwise show exactly the physical disks we found (no invented bays).
-  const raidSlots = raid && raid.states.length ? raid.states.length : 0;
-  const totalBays = Math.max(drives.length, raidSlots);
-  for (let b = drives.length + 1; b <= totalBays; b++) {
-    drives.push(emptyBay(b));
-  }
-
-  const raidLevel = raid && raid.level ? raid.level : raid && raid.tool ? "RAID" : "No RAID controller";
+  const raidLevel = raid && raid.level ? raid.level : hasRaidController ? "RAID" : "No RAID controller";
 
   return finalize(serverId, drives, {
-    model: `${os.hostname()} (${disks.length} physical disk${disks.length === 1 ? "" : "s"})`,
+    model: modelLabel,
     raidLevel,
     source: "live",
     diskUsagePercent,
     diagnostics,
-    hasRaidController: !!(raid && raid.tool),
+    hasRaidController,
   });
 }
 
