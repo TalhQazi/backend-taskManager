@@ -26,6 +26,47 @@ async function logActivity(req, action, resourceType, resourceId, resourceName, 
   }
 }
 
+const { createNotification } = require("../utils/notifications");
+const { sendEmailNotification } = require("../utils/emailNotifications");
+
+async function notifyStatusChange(employee, statusUpdate, exceededMinutes = 0) {
+  try {
+    let details = "";
+    if (exceededMinutes > 0) {
+      details = `overdue by ${exceededMinutes} minute(s)`;
+    }
+
+    await createNotification({
+      actor: employee.name,
+      actorRole: "employee",
+      action: statusUpdate.toLowerCase(),
+      resourceType: "status",
+      resourceName: employee.name,
+      details,
+      category: "LUNCH_BREAK_ALERT",
+    });
+
+    const EmployeeModel = require("../models/Employee");
+    const activeStaff = await EmployeeModel.find({
+      status: "active",
+      userRole: { $in: ["super-admin", "admin", "manager"] }
+    }).select("email").lean();
+
+    const timeStr = new Date().toLocaleString();
+    for (const staff of activeStaff) {
+      if (staff.email) {
+        await sendEmailNotification(staff.email, "lunchBreakAlert", {
+          employeeName: employee.name,
+          statusUpdate: details ? `${statusUpdate} (${details})` : statusUpdate,
+          time: timeStr,
+        });
+      }
+    }
+  } catch (err) {
+    console.error("Failed to dispatch status update notifications:", err);
+  }
+}
+
 // 1. POST /api/user/status/start-lunch
 router.post("/status/start-lunch", requireAuth, async (req, res, next) => {
   try {
@@ -80,6 +121,7 @@ router.post("/status/start-lunch", requireAuth, async (req, res, next) => {
     }
 
     await logActivity(req, "start_lunch", "employee", employee._id, employee.name, `${employee.name} went on lunch`);
+    void notifyStatusChange(employee, "Went on Lunch");
 
     res.json({ ok: true, employee });
   } catch (err) {
@@ -148,6 +190,7 @@ router.post("/status/end-lunch", requireAuth, async (req, res, next) => {
         }
       );
     }
+    void notifyStatusChange(employee, isLateReturn ? "Returned from Lunch Late" : "Returned from Lunch", exceededMinutes);
 
     res.json({ ok: true, employee });
   } catch (err) {
@@ -205,6 +248,7 @@ router.post("/status/start-break", requireAuth, async (req, res, next) => {
     }
 
     await logActivity(req, "start_break", "employee", employee._id, employee.name, `${employee.name} went on break`);
+    void notifyStatusChange(employee, "Went on Break");
 
     res.json({ ok: true, employee });
   } catch (err) {
@@ -274,6 +318,7 @@ router.post("/status/end-break", requireAuth, async (req, res, next) => {
         }
       );
     }
+    void notifyStatusChange(employee, isLateReturn ? "Returned from Break Late" : "Returned from Break", exceededMinutes);
 
     res.json({ ok: true, employee });
   } catch (err) {

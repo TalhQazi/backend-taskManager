@@ -112,6 +112,7 @@ async function createNotification({
       COMMENT_ADDED: "commentAdded",
       EOD_MISS_ALERT: "eodMissAlert",
       EOD_COMMENT: "eodComment",
+      LUNCH_BREAK_ALERT: "lunchBreakAlert",
     };
     const prefKey = map[derivedCategory] || "systemAlert";
 

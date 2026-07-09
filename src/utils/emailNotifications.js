@@ -13,6 +13,9 @@ async function sendEmailNotification(usernameOrId, templateKey, variables = {}) 
     // Find the user — try username first, then display name, then ObjectId
     let user = await User.findOne({ username: usernameOrId });
     if (!user) {
+      user = await User.findOne({ email: usernameOrId });
+    }
+    if (!user) {
       user = await User.findOne({ name: usernameOrId });
     }
     if (!user) {

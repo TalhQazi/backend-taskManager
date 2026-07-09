@@ -78,6 +78,11 @@ const SystemSettingsSchema = new mongoose.Schema(
         subject: { type: String, default: "ALERT: Patent Expiring - {patentName}" },
         body: { type: String, default: "Hello {name},\n\nThis is an automated notification to inform you that the patent '{patentName}' is expiring in {daysUntilExpiration} days (Expiration Date: {expirationDate}).\n\nApplication Number: {applicationNumber}\nCategory: {category}\n\nPlease take necessary actions.\n\nBest regards,\nTask Manager System" }
       },
+      lunchBreakAlert: {
+        enabled: { type: Boolean, default: true },
+        subject: { type: String, default: "Employee Status Alert: {employeeName} - {statusUpdate}" },
+        body: { type: String, default: "Hello {name},\n\nThis is an automated notification to inform you that employee '{employeeName}' has updated their status.\n\n--------------------------------------------------\n📊 Status: {statusUpdate}\n🕒 Time: {time}\n--------------------------------------------------\n\nPlease log in to view status details." }
+      },
     },
     taskRewardSystemEnabled: { type: Boolean, default: true },
     scheConfig: {

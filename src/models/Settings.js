@@ -34,6 +34,8 @@ const SettingsSchema = new mongoose.Schema(
       patentExpiration: { type: Boolean, default: true },
       complianceReminder: { type: Boolean, default: true },
       userRegistration: { type: Boolean, default: true },
+      lunchBreakAlert: { type: Boolean, default: true },
+      websiteDownAlert: { type: Boolean, default: true },
     },
     webPreferences: {
       taskAssignment: { type: Boolean, default: true },
@@ -48,6 +50,8 @@ const SettingsSchema = new mongoose.Schema(
       patentExpiration: { type: Boolean, default: true },
       complianceReminder: { type: Boolean, default: true },
       userRegistration: { type: Boolean, default: true },
+      lunchBreakAlert: { type: Boolean, default: true },
+      websiteDownAlert: { type: Boolean, default: true },
     },
     language: { type: String, default: "en" },
     timezone: { type: String, default: "UTC" },

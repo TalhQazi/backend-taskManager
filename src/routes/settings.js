@@ -38,6 +38,8 @@ const preferenceSchema = z.object({
   patentExpiration: z.boolean().optional(),
   complianceReminder: z.boolean().optional(),
   userRegistration: z.boolean().optional(),
+  lunchBreakAlert: z.boolean().optional(),
+  websiteDownAlert: z.boolean().optional(),
 }).optional();
 
 const settingsSchema = z.object({

@@ -1,6 +1,7 @@
 const express = require("express");
 const { z } = require("zod");
 const SystemSettings = require("../models/SystemSettings");
+const Settings = require("../models/Settings");
 const { requireAuth } = require("../middleware/auth");
 const nodemailer = require("nodemailer");
 const { decrypt } = require("../lib/encryption");
@@ -34,6 +35,8 @@ router.get("/settings", requireAuth, async (req, res, next) => {
       patentExpiration: true,
       complianceReminder: true,
       userRegistration: true,
+      lunchBreakAlert: true,
+      websiteDownAlert: true,
     };
 
     res.json({ 

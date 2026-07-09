@@ -20,22 +20,47 @@ async function dispatchAlert(subject, body, condition) {
       }
     }
 
-    const recipients = await NotificationRecipient.find({ isActive: true });
-    let recipientsList = recipients.map(r => ({ name: r.name, email: r.email }));
+    const recipientsList = [];
 
-    if (recipientsList.length === 0) {
-      console.log("[AlertManager] No specific recipients configured. Falling back to active super-admins and admins.");
-      const User = require("../models/User");
-      const admins = await User.find({
-        role: { $in: ["super-admin", "admin"] },
-        status: "active",
-        email: { $exists: true, $ne: "" }
-      });
-      recipientsList = admins.map(u => ({ name: u.name || u.username, email: u.email }));
+    // 1. Add active NotificationRecipients
+    const customRecipients = await NotificationRecipient.find({ isActive: true });
+    customRecipients.forEach(r => {
+      recipientsList.push({ name: r.name, email: r.email });
+    });
+
+    // 2. Add active Users with websiteDownAlert enabled
+    const User = require("../models/User");
+    const Settings = require("../models/Settings");
+
+    const activeUsers = await User.find({
+      role: { $in: ["super-admin", "admin", "manager", "employee"] },
+      status: "active",
+      email: { $exists: true, $ne: "" }
+    }).lean();
+
+    for (const u of activeUsers) {
+      // Avoid duplicate emails if they are also in NotificationRecipient
+      if (recipientsList.some(r => r.email.toLowerCase() === u.email.toLowerCase())) {
+        continue;
+      }
+
+      const settings = await Settings.findOne({ userId: String(u._id) }).lean();
+      
+      // Default websiteDownAlert:
+      // - true for super-admin, admin, manager
+      // - false for employee (to prevent spam, but they can toggle it on!)
+      let isEnabled = u.role === "super-admin" || u.role === "admin" || u.role === "manager";
+      if (settings && settings.emailPreferences && typeof settings.emailPreferences.websiteDownAlert === "boolean") {
+        isEnabled = settings.emailPreferences.websiteDownAlert;
+      }
+
+      if (isEnabled) {
+        recipientsList.push({ name: u.name || u.username, email: u.email });
+      }
     }
 
     if (recipientsList.length === 0) {
-      console.warn("No recipients found for health alerts (NotificationRecipient and active admins are empty).");
+      console.warn("No recipients found for health alerts.");
       return;
     }
 
