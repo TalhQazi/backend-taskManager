@@ -100,6 +100,76 @@ async function getProgress(onboarding) {
   }
 }
 
+async function mapOnboardingResponse(onboarding, chMap = null) {
+  if (!onboarding) return null;
+  
+  let clearHireStatus = "PENDING";
+  if (chMap && chMap[onboarding.userId.toString()]) {
+    clearHireStatus = chMap[onboarding.userId.toString()];
+  } else {
+    try {
+      const clearHire = await ClearHireProfile.findOne({ userId: onboarding.userId }).select("status").lean();
+      if (clearHire) clearHireStatus = clearHire.status;
+    } catch (err) {
+      console.error("[onboarding getProgress] ClearHire status lookup error:", err.message);
+    }
+  }
+
+  const progress = calculateProgress(onboarding, clearHireStatus);
+  
+  // Format identityVerification with flat fields for admin Profile.tsx compatibility
+  const identityVerification = onboarding.identityVerification ? {
+    ...onboarding.identityVerification,
+    idType: onboarding.identityVerification.primaryId?.idType || "",
+    idNumber: onboarding.identityVerification.primaryId?.idNumber || "",
+    idFrontUrl: onboarding.identityVerification.primaryId?.frontImage || "",
+    idBackUrl: onboarding.identityVerification.primaryId?.backImage || "",
+    secondaryIdType: onboarding.identityVerification.secondaryId?.idType || "",
+    secondaryIdUrl: onboarding.identityVerification.secondaryId?.image || "",
+    primaryId: onboarding.identityVerification.primaryId || null,
+    secondaryId: onboarding.identityVerification.secondaryId || null,
+  } : undefined;
+
+  return {
+    id: String(onboarding._id),
+    userId: String(onboarding.userId),
+    employeeId: String(onboarding.employeeId),
+    employeeName: onboarding.employeeName,
+    basicInfo: onboarding.basicInfo,
+    identityVerification,
+    w4Form: onboarding.w4Form,
+    employeeHandbook: onboarding.employeeHandbook,
+    digitalSignature: onboarding.digitalSignature,
+    workInfo: onboarding.workInfo,
+    overallStatus: onboarding.overallStatus,
+    progress,
+    adminReview: onboarding.adminReview,
+    createdAt: onboarding.createdAt,
+    updatedAt: onboarding.updatedAt,
+    
+    // Mappings for admin Profile.tsx form compatibility:
+    personalInfo: {
+      firstName: onboarding.employeeName ? onboarding.employeeName.split(" ")[0] : "",
+      lastName: onboarding.employeeName ? onboarding.employeeName.split(" ").slice(1).join(" ") : "",
+      phone: onboarding.basicInfo?.phone || "",
+      address: onboarding.basicInfo?.location || "",
+    },
+    taxInfo: {
+      ssn: "", 
+      taxFilingStatus: "",
+    },
+    bankInfo: {
+      bankName: "",
+      accountNumber: "",
+      routingNumber: "",
+    },
+    documents: {
+      w4FormUrl: onboarding.w4Form?.file || onboarding.w4Form?.documentUrl || "",
+      handbookSignatureUrl: onboarding.employeeHandbook?.signature || onboarding.employeeHandbook?.documentUrl || "",
+    }
+  };
+}
+
 // GET /api/onboarding/me - Get employee's onboarding status
 router.get("/me", requireAuth, async (req, res, next) => {
   try {
@@ -119,23 +189,7 @@ router.get("/me", requireAuth, async (req, res, next) => {
     }
 
     return res.json({
-      item: {
-        id: String(onboarding._id),
-        userId: String(onboarding.userId),
-        employeeId: String(onboarding.employeeId),
-        employeeName: onboarding.employeeName,
-        basicInfo: onboarding.basicInfo,
-        identityVerification: onboarding.identityVerification,
-        w4Form: onboarding.w4Form,
-        employeeHandbook: onboarding.employeeHandbook,
-        digitalSignature: onboarding.digitalSignature,
-        workInfo: onboarding.workInfo,
-        overallStatus: onboarding.overallStatus,
-        progress: await getProgress(onboarding),
-        adminReview: onboarding.adminReview,
-        createdAt: onboarding.createdAt,
-        updatedAt: onboarding.updatedAt,
-      },
+      item: await mapOnboardingResponse(onboarding),
     });
   } catch (err) {
     next(err);
@@ -204,18 +258,18 @@ router.post("/me", requireAuth, async (req, res, next) => {
     // Update W-4 form if provided
     if (documents && documents.w4FormUrl) {
       if (!onboarding.w4Form) {
-        onboarding.w4Form = { status: "not_started", documentUrl: "" };
+        onboarding.w4Form = { status: "not_started", file: "" };
       }
-      onboarding.w4Form.documentUrl = documents.w4FormUrl;
+      onboarding.w4Form.file = documents.w4FormUrl;
       onboarding.w4Form.status = "submitted";
     }
 
     // Update employee handbook if provided
     if (documents && documents.handbookSignatureUrl) {
       if (!onboarding.employeeHandbook) {
-        onboarding.employeeHandbook = { status: "not_started", documentUrl: "" };
+        onboarding.employeeHandbook = { status: "not_started", signature: "" };
       }
-      onboarding.employeeHandbook.documentUrl = documents.handbookSignatureUrl;
+      onboarding.employeeHandbook.signature = documents.handbookSignatureUrl;
       onboarding.employeeHandbook.status = "submitted";
     }
 
@@ -226,9 +280,10 @@ router.post("/me", requireAuth, async (req, res, next) => {
         onboarding.w4Form.status === "submitted" &&
         onboarding.employeeHandbook.status === "submitted") {
       if (!onboarding.digitalSignature) {
-        onboarding.digitalSignature = { status: "not_started", signatureData: "" };
+        onboarding.digitalSignature = { status: "not_started", signature: "" };
       }
       onboarding.digitalSignature.status = "submitted";
+      onboarding.digitalSignature.signature = "admin-auto-signed";
     }
 
     // Calculate overall status
@@ -640,6 +695,23 @@ router.get("/admin/all", requireAuth, requireRole(["super-admin", "admin", "mana
       filter.overallStatus = status;
     }
 
+    // Fetch all active employees (excluding super-admin) to ensure they have onboarding records
+    const activeEmployees = await Employee.find({
+      userStatus: "active",
+      userRole: { $in: ["admin", "manager", "team-lead", "employee", "coder"] }
+    }).select("_id name email").lean();
+
+    for (const emp of activeEmployees) {
+      const exists = await Onboarding.findOne({ userId: emp._id });
+      if (!exists) {
+        await Onboarding.create({
+          userId: emp._id,
+          employeeId: emp._id,
+          employeeName: emp.name || emp.email,
+        });
+      }
+    }
+
     const onboardings = await Onboarding.find(filter)
       .sort({ createdAt: -1 })
       .lean();
@@ -650,23 +722,10 @@ router.get("/admin/all", requireAuth, requireRole(["super-admin", "admin", "mana
       chMap[ch.userId.toString()] = ch.status;
     });
 
-    const mappedItems = onboardings.map((o) => ({
-      id: String(o._id),
-      userId: String(o.userId),
-      employeeId: String(o.employeeId),
-      employeeName: o.employeeName,
-      basicInfo: o.basicInfo,
-      identityVerification: o.identityVerification,
-      w4Form: o.w4Form,
-      employeeHandbook: o.employeeHandbook,
-      digitalSignature: o.digitalSignature,
-      workInfo: o.workInfo,
-      overallStatus: o.overallStatus,
-      progress: calculateProgress(o, chMap[o.userId.toString()]),
-      adminReview: o.adminReview,
-      createdAt: o.createdAt,
-      updatedAt: o.updatedAt,
-    }));
+    const mappedItems = [];
+    for (const o of onboardings) {
+      mappedItems.push(await mapOnboardingResponse(o, chMap));
+    }
 
     // Fetch all active/existing employees to check links
     const employees = await Employee.find({}).select("_id").lean();
@@ -726,22 +785,7 @@ router.get("/admin/:id", requireAuth, requireRole(["super-admin", "admin"]), asy
     }
 
     res.json({
-      item: {
-        id: String(onboarding._id),
-        userId: String(onboarding.userId),
-        employeeId: String(onboarding.employeeId),
-        employeeName: onboarding.employeeName,
-        basicInfo: onboarding.basicInfo,
-        identityVerification: onboarding.identityVerification,
-        w4Form: onboarding.w4Form,
-        employeeHandbook: onboarding.employeeHandbook,
-        digitalSignature: onboarding.digitalSignature,
-        overallStatus: onboarding.overallStatus,
-        progress: await getProgress(onboarding),
-        adminReview: onboarding.adminReview,
-        createdAt: onboarding.createdAt,
-        updatedAt: onboarding.updatedAt,
-      },
+      item: await mapOnboardingResponse(onboarding),
     });
   } catch (err) {
     next(err);
