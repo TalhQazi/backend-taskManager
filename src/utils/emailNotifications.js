@@ -1,6 +1,11 @@
 const { sendSystemEmail } = require("../lib/email");
 const Settings = require("../models/Settings");
 const User = require("../models/User");
+const Employee = require("../models/Employee");
+
+function escapeRegex(string) {
+  return string ? String(string).replace(/[/\-\\^$*+?.()|[\]{}]/g, '\\$&') : '';
+}
 
 /**
  * Sends an email notification if the user has email notifications enabled.
@@ -10,28 +15,65 @@ const User = require("../models/User");
  */
 async function sendEmailNotification(usernameOrId, templateKey, variables = {}) {
   try {
-    // Find the user — try username first, then display name, then ObjectId
-    let user = await User.findOne({ username: usernameOrId });
-    if (!user) {
-      user = await User.findOne({ email: usernameOrId });
+    let employee = null;
+
+    // 1. Try to find directly in Employee collection by email (case-insensitive)
+    if (usernameOrId && String(usernameOrId).includes("@")) {
+      employee = await Employee.findOne({ email: new RegExp(`^${escapeRegex(usernameOrId)}$`, "i") });
     }
-    if (!user) {
-      user = await User.findOne({ name: usernameOrId });
+
+    // 2. Try to find by name (case-insensitive)
+    if (!employee) {
+      employee = await Employee.findOne({ name: new RegExp(`^${escapeRegex(usernameOrId)}$`, "i") });
     }
-    if (!user) {
-      try { user = await User.findById(usernameOrId); } catch (_) { /* not an ObjectId */ }
+
+    // 3. Try to find by Employee ObjectId
+    if (!employee) {
+      try {
+        employee = await Employee.findById(usernameOrId);
+      } catch (_) {
+        /* not an ObjectId */
+      }
     }
-    if (!user || !user.email) {
-      console.warn(`Could not find email for user: ${usernameOrId}`);
+
+    // 4. Fallback: Search User collection, and if found, find matching Employee by email or name
+    if (!employee) {
+      let user = await User.findOne({ username: usernameOrId });
+      if (!user) {
+        user = await User.findOne({ email: usernameOrId });
+      }
+      if (!user) {
+        user = await User.findOne({ name: usernameOrId });
+      }
+      if (!user) {
+        try {
+          user = await User.findById(usernameOrId);
+        } catch (_) {
+          /* not an ObjectId */
+        }
+      }
+
+      if (user) {
+        employee = await Employee.findOne({
+          $or: [
+            { email: new RegExp(`^${escapeRegex(user.email)}$`, "i") },
+            { name: new RegExp(`^${escapeRegex(user.name || user.username)}$`, "i") }
+          ]
+        });
+      }
+    }
+
+    if (!employee || !employee.email) {
+      console.warn(`Could not find email/employee for user: ${usernameOrId}`);
       return false;
     }
 
-    // Check user settings
-    const settings = await Settings.findOne({ userId: String(user._id) });
+    // Check user settings under Employee ID (where settings are saved)
+    const settings = await Settings.findOne({ userId: String(employee._id) });
     const emailNotificationsEnabled = settings ? (settings.notifications && settings.notifications.emailNotifications !== false) : true;
     
     if (!emailNotificationsEnabled) {
-      console.log(`User ${user.username} has email notifications disabled globally.`);
+      console.log(`User ${employee.email} has email notifications disabled globally.`);
       return false;
     }
 
@@ -39,10 +81,11 @@ async function sendEmailNotification(usernameOrId, templateKey, variables = {}) 
       let keyToCheck = templateKey;
       if (templateKey === "fileAttachment") keyToCheck = "commentAdded";
       if (templateKey === "projectReassignment") keyToCheck = "projectAssignment";
+      if (templateKey === "newMessage") keyToCheck = "messageAlert";
       
       const isEnabled = settings.emailPreferences[keyToCheck];
       if (isEnabled === false) {
-        console.log(`User ${user.username} has email notification for ${templateKey} disabled.`);
+        console.log(`User ${employee.email} has email notification for ${templateKey} disabled.`);
         return false;
       }
     }
