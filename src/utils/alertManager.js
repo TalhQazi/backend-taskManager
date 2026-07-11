@@ -38,13 +38,30 @@ async function dispatchAlert(subject, body, condition) {
       email: { $exists: true, $ne: "" }
     }).lean();
 
+    function escapeRegex(string) {
+      return string ? String(string).replace(/[/\-\\^$*+?.()|[\]{}]/g, '\\$&') : '';
+    }
+
+    const Employee = require("../models/Employee");
+
     for (const u of activeUsers) {
       // Avoid duplicate emails if they are also in NotificationRecipient
       if (recipientsList.some(r => r.email.toLowerCase() === u.email.toLowerCase())) {
         continue;
       }
 
-      const settings = await Settings.findOne({ userId: String(u._id) }).lean();
+      let employeeId = String(u._id);
+      const emp = await Employee.findOne({
+        $or: [
+          { email: new RegExp(`^${escapeRegex(u.email)}$`, "i") },
+          { name: new RegExp(`^${escapeRegex(u.name || u.username)}$`, "i") }
+        ]
+      }).lean();
+      if (emp) {
+        employeeId = String(emp._id);
+      }
+
+      const settings = await Settings.findOne({ userId: employeeId }).lean();
       
       // Default websiteDownAlert:
       // - true for super-admin, admin, manager

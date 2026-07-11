@@ -116,21 +116,56 @@ async function createNotification({
     };
     const prefKey = map[derivedCategory] || "systemAlert";
 
+    function escapeRegex(string) {
+      return string ? String(string).replace(/[/\-\\^$*+?.()|[\]{}]/g, '\\$&') : '';
+    }
+
     for (const target of rawTargetSet) {
       try {
-        let targetUser = await User.findOne({ username: target });
-        if (!targetUser) {
-          targetUser = await User.findOne({ name: target });
-        }
-        if (!targetUser) {
-          const emp = await Employee.findOne({ $or: [{ email: target }, { name: target }] });
-          if (emp) {
-            targetUser = { _id: emp._id, username: emp.email };
+        let emp = await Employee.findOne({
+          $or: [
+            { email: new RegExp(`^${escapeRegex(target)}$`, "i") },
+            { name: new RegExp(`^${escapeRegex(target)}$`, "i") }
+          ]
+        });
+
+        if (!emp) {
+          try {
+            emp = await Employee.findById(target);
+          } catch (_) {
+            /* not an ObjectId */
           }
         }
 
-        if (targetUser) {
-          const settings = await Settings.findOne({ userId: String(targetUser._id) });
+        if (!emp) {
+          // Fallback to User
+          let user = await User.findOne({ username: target });
+          if (!user) {
+            user = await User.findOne({ name: target });
+          }
+          if (!user) {
+            user = await User.findOne({ email: target });
+          }
+          if (!user) {
+            try {
+              user = await User.findById(target);
+            } catch (_) {
+              /* not an ObjectId */
+            }
+          }
+
+          if (user) {
+            emp = await Employee.findOne({
+              $or: [
+                { email: new RegExp(`^${escapeRegex(user.email)}$`, "i") },
+                { name: new RegExp(`^${escapeRegex(user.name || user.username)}$`, "i") }
+              ]
+            });
+          }
+        }
+
+        if (emp) {
+          const settings = await Settings.findOne({ userId: String(emp._id) });
           const isWebEnabled = settings && settings.webPreferences ? settings.webPreferences[prefKey] : true;
           if (isWebEnabled !== false) {
             targetSet.add(target);
