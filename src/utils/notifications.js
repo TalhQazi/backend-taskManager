@@ -180,6 +180,10 @@ async function createNotification({
     }
 
     const recipient = Array.from(targetSet).join(",");
+    if (!recipient) {
+      console.log("No recipients remaining for in-app notification after filtering preferences.");
+      return null;
+    }
 
     // Leave meta.link empty for task/project — each panel's frontend computes
     // the correct route from resourceType + resourceId (avoids hardcoding /admin/ paths).

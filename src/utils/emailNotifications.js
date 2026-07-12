@@ -90,10 +90,10 @@ async function sendEmailNotification(usernameOrId, templateKey, variables = {}) 
       }
     }
 
-    variables.name = user.name || user.username;
+    variables.name = employee.name;
 
     return await sendSystemEmail({
-      to: user.email,
+      to: employee.email,
       templateKey,
       variables,
     });
