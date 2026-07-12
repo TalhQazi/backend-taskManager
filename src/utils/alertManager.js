@@ -102,9 +102,8 @@ async function dispatchAlert(subject, body, condition) {
       }).lean();
       
       // Default websiteDownAlert:
-      // - true for super-admin, admin, manager
-      // - false for employee (to prevent spam, but they can toggle it on!)
-      let isEnabled = u.role === "super-admin" || u.role === "admin" || u.role === "manager";
+      // - false for all users/roles. Only enabled if explicitly turned on in settings.
+      let isEnabled = false;
       if (settings && settings.emailPreferences && typeof settings.emailPreferences.websiteDownAlert === "boolean") {
         isEnabled = settings.emailPreferences.websiteDownAlert;
       }
