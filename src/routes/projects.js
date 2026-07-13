@@ -320,37 +320,39 @@ router.get("/", requireAuth, async (req, res, next) => {
     const name = String(req.user?.name || "").trim();
     const candidates = [username, name].filter(Boolean);
 
-    if (candidates.length === 0) {
-      return res.json(paginatedResponse([], 0, page, limit));
-    }
+    if (role !== "super-admin" && role !== "admin") {
+      if (candidates.length === 0) {
+        return res.json(paginatedResponse([], 0, page, limit));
+      }
 
-    const regexes = candidates.map((c) => new RegExp(`^${escapeRegExp(c)}$`, "i"));
+      const regexes = candidates.map((c) => new RegExp(`^${escapeRegExp(c)}$`, "i"));
 
-    if (role === "employee" || role === "coder") {
-      const taskProjectIds = await Task.distinct("projectId", {
-        $or: [
-          { assignee: { $in: regexes } },
-          { assignees: { $elemMatch: { $in: regexes } } }
-        ]
-      });
-      matchStages.push({
-        $match: {
+      if (role === "employee" || role === "coder") {
+        const taskProjectIds = await Task.distinct("projectId", {
           $or: [
-            { assignees: { $elemMatch: { $in: regexes } } },
-            { _id: { $in: taskProjectIds } }
-          ]
-        }
-      });
-    } else {
-      // Admin, Super-Admin, Manager, Team-Lead
-      matchStages.push({
-        $match: {
-          $or: [
-            { teamLead: { $in: regexes } },
+            { assignee: { $in: regexes } },
             { assignees: { $elemMatch: { $in: regexes } } }
           ]
-        }
-      });
+        });
+        matchStages.push({
+          $match: {
+            $or: [
+              { assignees: { $elemMatch: { $in: regexes } } },
+              { _id: { $in: taskProjectIds } }
+            ]
+          }
+        });
+      } else {
+        // Manager, Team-Lead
+        matchStages.push({
+          $match: {
+            $or: [
+              { teamLead: { $in: regexes } },
+              { assignees: { $elemMatch: { $in: regexes } } }
+            ]
+          }
+        });
+      }
     }
 
     if (searchQ) {
@@ -733,8 +735,10 @@ router.get("/:id", requireAuth, async (req, res, next) => {
     const isProjectLead = candidates.includes((cloned.teamLead || "").toLowerCase());
 
     if (role === "admin" || role === "super-admin" || role === "manager" || role === "team-lead") {
-      if (!isProjectAssignee && !isProjectLead) {
-        return res.status(403).json({ error: { message: "Access denied to this project" } });
+      if (role !== "super-admin" && role !== "admin") {
+        if (!isProjectAssignee && !isProjectLead) {
+          return res.status(403).json({ error: { message: "Access denied to this project" } });
+        }
       }
     } else {
       // Employee

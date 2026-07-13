@@ -173,6 +173,7 @@ function normalizeAssignees(input) {
 
 function canAccessTask(user, task) {
   const role = String(user?.role || "").trim().toLowerCase();
+  if (role === "super-admin" || role === "admin") return true;
   const username = String(user?.username || "").trim();
   const name = String(user?.name || "").trim();
   const fullName = String(user?.fullName || "").trim();
@@ -196,6 +197,7 @@ function canAccessTask(user, task) {
 
 async function canAccessTaskAsync(user, task) {
   const role = String(user?.role || "").trim().toLowerCase();
+  if (role === "super-admin" || role === "admin") return true;
 
   const legacyAssignee = typeof task?.assignee === "string" ? task.assignee : "";
   const legacyEmployee = typeof task?.employee === "string" ? task.employee : "";
@@ -315,30 +317,32 @@ router.get("/", requireAuth, async (req, res, next) => {
     const fullName = String(req.user?.fullName || "").trim();
     const candidates = [username, name, fullName].filter(Boolean);
 
-    // 1. Accessibility Filter for All Roles
-    if (candidates.length === 0) {
-      return res.json(paginatedResponse([], 0, page, limit));
+    // 1. Accessibility Filter (Skip for super-admin and admin)
+    if (role !== "super-admin" && role !== "admin") {
+      if (candidates.length === 0) {
+        return res.json(paginatedResponse([], 0, page, limit));
+      }
+
+      const regexList = candidates.map(escapeRegExp).join("|");
+      const assignedProjects = await Project.find({
+        $or: [
+          { teamLead: { $regex: new RegExp(`^(${regexList})$`, "i") } },
+          { assignees: { $elemMatch: { $regex: new RegExp(`^(${regexList})$`, "i") } } }
+        ]
+      }).select("_id").lean();
+      const assignedProjectIds = assignedProjects.map(p => p._id);
+
+      conditions.push({
+        $or: [
+          ...candidates.flatMap((c) => [
+            { teamLead: { $regex: new RegExp(`^${escapeRegExp(c)}$`, "i") } },
+            { assignee: { $regex: new RegExp(`^${escapeRegExp(c)}$`, "i") } }, // Legacy
+            { assignees: { $elemMatch: { $regex: new RegExp(`^${escapeRegExp(c)}$`, "i") } } },
+          ]),
+          { projectId: { $in: assignedProjectIds } }
+        ]
+      });
     }
-
-    const regexList = candidates.map(escapeRegExp).join("|");
-    const assignedProjects = await Project.find({
-      $or: [
-        { teamLead: { $regex: new RegExp(`^(${regexList})$`, "i") } },
-        { assignees: { $elemMatch: { $regex: new RegExp(`^(${regexList})$`, "i") } } }
-      ]
-    }).select("_id").lean();
-    const assignedProjectIds = assignedProjects.map(p => p._id);
-
-    conditions.push({
-      $or: [
-        ...candidates.flatMap((c) => [
-          { teamLead: { $regex: new RegExp(`^${escapeRegExp(c)}$`, "i") } },
-          { assignee: { $regex: new RegExp(`^${escapeRegExp(c)}$`, "i") } }, // Legacy
-          { assignees: { $elemMatch: { $regex: new RegExp(`^${escapeRegExp(c)}$`, "i") } } },
-        ]),
-        { projectId: { $in: assignedProjectIds } }
-      ]
-    });
 
     // 2. Project Filter
     if (projectIdQ) {
