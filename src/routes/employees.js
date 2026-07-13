@@ -588,7 +588,8 @@ router.post("/", requireAuth, async (req, res, next) => {
       passwordHash,
     });
 
-const obj = created.toObject();
+    const obj = created.toObject();
+    const { sendSystemEmail } = require("../lib/email");
     
     // Fire-and-forget side effects
     Promise.allSettled([
@@ -602,6 +603,13 @@ const obj = created.toObject();
         resourceId: String(created._id),
       }),
       cacheDel("employees:list"),
+      created.email
+        ? sendSystemEmail({
+            to: created.email,
+            templateKey: created.userRole === "manager" ? "managerRegistration" : "userRegistration",
+            variables: { name: created.name },
+          }).catch((err) => console.error("Welcome email failed:", err))
+        : Promise.resolve(),
     ]).catch(() => {});
     
     return res.status(201).json({ item: withId(obj) });
