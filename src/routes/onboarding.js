@@ -698,7 +698,8 @@ router.get("/admin/all", requireAuth, requireRole(["super-admin", "admin", "mana
     // Fetch all active employees (excluding super-admin) to ensure they have onboarding records
     const activeEmployees = await Employee.find({
       userStatus: "active",
-      userRole: { $in: ["admin", "manager", "team-lead", "employee", "coder"] }
+      userRole: { $in: ["admin", "manager", "team-lead", "employee", "coder"] },
+      onboardingRequired: { $ne: false }
     }).select("_id name email").lean();
 
     for (const emp of activeEmployees) {

@@ -95,12 +95,18 @@ const upload = multer({
 
 const vehicleStatusEnum = ["active", "inactive", "maintenance", "available", "in-use"];
 
+const partSchema = z.object({
+  name: z.string().optional().default(""),
+  cost: z.coerce.number().optional().default(0),
+});
+
 const needItemSchema = z.object({
   id: z.string(),
   taskName: z.string().min(1),
   assignee: z.string().optional().default(""),
   dueDate: z.string().optional().default(""),
   completed: z.boolean().optional().default(false),
+  parts: z.array(partSchema).optional().default([]),
 });
 
 const createSchema = z.object({

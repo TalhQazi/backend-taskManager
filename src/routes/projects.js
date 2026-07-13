@@ -316,43 +316,41 @@ router.get("/", requireAuth, async (req, res, next) => {
 
     const matchStages = [];
 
-    if (role !== "admin" && role !== "super-admin") {
-      const username = String(req.user?.username || "").trim();
-      const name = String(req.user?.name || "").trim();
-      const candidates = [username, name].filter(Boolean);
+    const username = String(req.user?.username || "").trim();
+    const name = String(req.user?.name || "").trim();
+    const candidates = [username, name].filter(Boolean);
 
-      if (candidates.length === 0) {
-        return res.json(paginatedResponse([], 0, page, limit));
-      }
+    if (candidates.length === 0) {
+      return res.json(paginatedResponse([], 0, page, limit));
+    }
 
-      // For managers and team-leads, filter by teamLead field
-      if (role === "manager" || role === "team-lead") {
-        const regexes = candidates.map((c) => new RegExp(`^${escapeRegExp(c)}$`, "i"));
-        matchStages.push({
-          $match: {
-            $or: [
-              { teamLead: { $in: regexes } },
-              { assignees: { $elemMatch: { $in: regexes } } }
-            ]
-          }
-        });
-      } else {
-        const regexes = candidates.map((c) => new RegExp(`^${escapeRegExp(c)}$`, "i"));
-        const taskProjectIds = await Task.distinct("projectId", {
+    const regexes = candidates.map((c) => new RegExp(`^${escapeRegExp(c)}$`, "i"));
+
+    if (role === "employee" || role === "coder") {
+      const taskProjectIds = await Task.distinct("projectId", {
+        $or: [
+          { assignee: { $in: regexes } },
+          { assignees: { $elemMatch: { $in: regexes } } }
+        ]
+      });
+      matchStages.push({
+        $match: {
           $or: [
-            { assignee: { $in: regexes } },
+            { assignees: { $elemMatch: { $in: regexes } } },
+            { _id: { $in: taskProjectIds } }
+          ]
+        }
+      });
+    } else {
+      // Admin, Super-Admin, Manager, Team-Lead
+      matchStages.push({
+        $match: {
+          $or: [
+            { teamLead: { $in: regexes } },
             { assignees: { $elemMatch: { $in: regexes } } }
           ]
-        });
-        matchStages.push({
-          $match: {
-            $or: [
-              { assignees: { $elemMatch: { $in: regexes } } },
-              { _id: { $in: taskProjectIds } }
-            ]
-          }
-        });
-      }
+        }
+      });
     }
 
     if (searchQ) {
@@ -725,19 +723,27 @@ router.get("/:id", requireAuth, async (req, res, next) => {
     const role = String(req.user?.role || "").trim().toLowerCase();
     const cloned = JSON.parse(JSON.stringify(cached));
 
-    if (role !== "admin" && role !== "super-admin" && role !== "manager" && role !== "team-lead") {
-      const username = String(req.user?.username || "").trim().toLowerCase();
-      const name = String(req.user?.name || "").trim().toLowerCase();
-      
-      const isProjectAssignee = (cloned.assignees || []).some(
-        (a) => a.toLowerCase() === username || a.toLowerCase() === name
-      );
+    const username = String(req.user?.username || "").trim().toLowerCase();
+    const name = String(req.user?.name || "").trim().toLowerCase();
+    const candidates = [username, name].filter(Boolean);
 
+    const isProjectAssignee = (cloned.assignees || []).some(
+      (a) => candidates.includes(a.toLowerCase())
+    );
+    const isProjectLead = candidates.includes((cloned.teamLead || "").toLowerCase());
+
+    if (role === "admin" || role === "super-admin" || role === "manager" || role === "team-lead") {
+      if (!isProjectAssignee && !isProjectLead) {
+        return res.status(403).json({ error: { message: "Access denied to this project" } });
+      }
+    } else {
+      // Employee
       if (!isProjectAssignee) {
         cloned.tasks = (cloned.tasks || []).filter((t) => {
           const taskAssignees = (t.assignees || []).map(a => a.toLowerCase());
           const legacyAssignee = t.assignee ? t.assignee.toLowerCase() : "";
-          return taskAssignees.includes(username) || taskAssignees.includes(name) || legacyAssignee === username || legacyAssignee === name;
+          const isTaskAssignee = taskAssignees.some(a => candidates.includes(a)) || candidates.includes(legacyAssignee);
+          return isTaskAssignee;
         });
 
         if (cloned.tasks.length === 0) {

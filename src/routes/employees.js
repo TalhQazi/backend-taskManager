@@ -36,6 +36,7 @@ const createSchema = z.object({
   userRole: z.string().optional().default(""),
   userStatus: z.string().optional().default("active"),
   password: z.string().optional(),
+  onboardingRequired: z.boolean().optional(),
 });
 
 const updateSchema = createSchema
@@ -351,14 +352,16 @@ router.post("/me/clock-in", requireAuth, async (req, res, next) => {
     const { employee, user } = ctx;
 
     // Check onboarding status
-    const Onboarding = require("../models/Onboarding");
-    const onboarding = await Onboarding.findOne({ userId: user._id });
-    if (!onboarding || onboarding.overallStatus !== "approved") {
-      return res.status(403).json({
-        error: {
-          message: "Complete onboarding and receive admin approval before clocking in",
-        },
-      });
+    if (employee.onboardingRequired !== false) {
+      const Onboarding = require("../models/Onboarding");
+      const onboarding = await Onboarding.findOne({ userId: user._id });
+      if (!onboarding || onboarding.overallStatus !== "approved") {
+        return res.status(403).json({
+          error: {
+            message: "Complete onboarding and receive admin approval before clocking in",
+          },
+        });
+      }
     }
 
     const { start, end } = getDayRange(new Date());
@@ -710,11 +713,23 @@ async function archiveEmployeeById(employeeId, archivedBy) {
       const Project = require('../models/Project');
       const targets = [employee.name, employee.email].filter(Boolean);
       if (targets.length > 0) {
-        if (Task) await Task.updateMany({ assignees: { $in: targets } }, { $pull: { assignees: { $in: targets } } });
-        if (Project) await Project.updateMany({ assignees: { $in: targets } }, { $pull: { assignees: { $in: targets } } });
+        if (Task) {
+          const deleteResult = await Task.deleteMany({
+            $or: [
+              { assignees: { $in: targets } },
+              { assignee: { $in: targets } },
+              { employee: { $in: targets } }
+            ]
+          });
+          console.log(`[Archive Cleanup] Deleted ${deleteResult.deletedCount} tasks assigned to archived employee.`);
+        }
+        if (Project) {
+          await Project.updateMany({ assignees: { $in: targets } }, { $pull: { assignees: { $in: targets } } });
+          await Project.updateMany({ teamLead: { $in: targets } }, { $set: { teamLead: "" } });
+        }
       }
     } catch (err) {
-      console.error('Failed to unassign employee', err);
+      console.error('Failed to clean up tasks/projects for archived employee', err);
     }
 
   await Employee.findByIdAndDelete(employeeId);

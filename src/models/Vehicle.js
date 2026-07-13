@@ -37,7 +37,13 @@ const VehicleSchema = new mongoose.Schema(
           taskName: { type: String, required: true },
           assignee: { type: String, default: "" }, // Stores the name of the assigned team member
           dueDate: { type: String, default: "" },
-          completed: { type: Boolean, default: false }
+          completed: { type: Boolean, default: false },
+          parts: [
+            {
+              name: { type: String, default: "" },
+              cost: { type: Number, default: 0 }
+            }
+          ]
         }
       ],
       default: []

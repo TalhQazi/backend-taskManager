@@ -27,12 +27,6 @@ function escapeRegExp(s) {
 
 function buildAssigneeFilter(req) {
   const role = req.user?.role || "";
-  const mine = req.query.mine === "true";
-
-  // Admins see all tasks unless they request their own
-  if ((role === "admin" || role === "super-admin") && !mine) {
-    return {};
-  }
 
   const username = String(req.user?.username || "").trim();
   const name = String(req.user?.name || "").trim();
@@ -43,19 +37,20 @@ function buildAssigneeFilter(req) {
 
   const regexes = candidates.map((c) => new RegExp(`^${escapeRegExp(c)}$`, "i"));
 
-  if (role === "manager" || role === "team-lead") {
+  if (role === "employee" || role === "coder") {
     return {
-      $or: [
-        { teamLead: { $in: regexes } },
-        { assignees: { $elemMatch: { $in: regexes } } }
-      ]
+      $or: candidates.flatMap((c) => [
+        { assignees: { $elemMatch: { $regex: new RegExp(`^${escapeRegExp(c)}$`, "i") } } },
+        { assignee: { $regex: new RegExp(`^${escapeRegExp(c)}$`, "i") } } // Legacy
+      ])
     };
   }
 
   return {
     $or: candidates.flatMap((c) => [
-      { assignees: { $elemMatch: { $regex: new RegExp(`^${escapeRegExp(c)}$`, "i") } } },
-      { assignee: { $regex: new RegExp(`^${escapeRegExp(c)}$`, "i") } } // Legacy
+      { teamLead: { $regex: new RegExp(`^${escapeRegExp(c)}$`, "i") } },
+      { assignee: { $regex: new RegExp(`^${escapeRegExp(c)}$`, "i") } },
+      { assignees: { $elemMatch: { $regex: new RegExp(`^${escapeRegExp(c)}$`, "i") } } }
     ])
   };
 }
@@ -85,35 +80,49 @@ router.get("/summary", requireAuth, async (req, res, next) => {
     let taskFilter = {};
     let projectFilter = {};
 
-    if (role !== "admin" && role !== "super-admin") {
-      if (candidates.length > 0) {
-        const regexes = candidates.map((c) => new RegExp(`^${escapeRegExp(c)}$`, "i"));
-        if (role === "manager" || role === "team-lead") {
-          taskFilter = {
-            $or: [
-              { teamLead: { $in: regexes } },
-              { assignees: { $elemMatch: { $in: regexes } } }
-            ]
-          };
-          projectFilter = {
-            $or: [
-              { teamLead: { $in: regexes } },
-              { assignees: { $elemMatch: { $in: regexes } } }
-            ]
-          };
-        } else {
-          taskFilter = {
-            $or: candidates.flatMap((c) => [
+    if (candidates.length > 0) {
+      const regexes = candidates.map((c) => new RegExp(`^${escapeRegExp(c)}$`, "i"));
+      if (role === "employee" || role === "coder") {
+        const projectIds = await Project.distinct("_id", {
+          assignees: { $elemMatch: { $in: regexes } }
+        });
+        taskFilter = {
+          $or: [
+            ...candidates.flatMap((c) => [
               { assignees: { $elemMatch: { $regex: new RegExp(`^${escapeRegExp(c)}$`, "i") } } },
               { assignee: { $regex: new RegExp(`^${escapeRegExp(c)}$`, "i") } }
-            ])
-          };
-          projectFilter = { assignees: { $elemMatch: { $in: regexes } } };
-        }
+            ]),
+            { projectId: { $in: projectIds } }
+          ]
+        };
+        projectFilter = { assignees: { $elemMatch: { $in: regexes } } };
       } else {
-        taskFilter = { _id: null };
-        projectFilter = { _id: null };
+        const projectIds = await Project.distinct("_id", {
+          $or: [
+            { teamLead: { $in: regexes } },
+            { assignees: { $elemMatch: { $in: regexes } } }
+          ]
+        });
+        taskFilter = {
+          $or: [
+            ...candidates.flatMap((c) => [
+              { teamLead: { $regex: new RegExp(`^${escapeRegExp(c)}$`, "i") } },
+              { assignee: { $regex: new RegExp(`^${escapeRegExp(c)}$`, "i") } },
+              { assignees: { $elemMatch: { $regex: new RegExp(`^${escapeRegExp(c)}$`, "i") } } }
+            ]),
+            { projectId: { $in: projectIds } }
+          ]
+        };
+        projectFilter = {
+          $or: [
+            { teamLead: { $in: regexes } },
+            { assignees: { $elemMatch: { $in: regexes } } }
+          ]
+        };
       }
+    } else {
+      taskFilter = { _id: null };
+      projectFilter = { _id: null };
     }
 
     const [

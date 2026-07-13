@@ -490,6 +490,14 @@ const port = Number(process.env.PORT || 5000);
 
 connectDb()
   .then(async () => {
+    // Run S3 to Local Server migration script
+    try {
+      const { migrateS3ToLocalServer } = require("./utils/s3Migration");
+      migrateS3ToLocalServer().catch((err) => console.error("[S3 Migration Startup Error]:", err));
+    } catch (migErr) {
+      console.error("[S3 Migration Startup Import Error]:", migErr);
+    }
+
     // Initialize Redis cache (graceful — falls back to memory if unavailable)
     await initRedis();
     

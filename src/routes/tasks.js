@@ -177,44 +177,34 @@ function canAccessTask(user, task) {
   const name = String(user?.name || "").trim();
   const fullName = String(user?.fullName || "").trim();
 
-  if (role === "super-admin" || role === "admin" || role === "manager" || role === "team-lead") return true;
-  if (role === "employee") {
-    const assignees = Array.isArray(task?.assignees) ? task.assignees : [];
+  const assignees = Array.isArray(task?.assignees) ? task.assignees : [];
+  const normalizedAssignees = [...assignees, task.assignee, task.employee, task.teamLead]
+    .filter((a) => typeof a === "string")
+    .map((a) => a.trim().toLowerCase())
+    .filter(Boolean);
 
-    const identCandidates = [username, name, fullName]
-      .map((v) => String(v || "").trim())
-      .filter(Boolean);
+  const identCandidates = [username, name, fullName]
+    .map((v) => String(v || "").trim())
+    .filter(Boolean);
 
-    if (identCandidates.length === 0) return false;
+  if (identCandidates.length === 0) return false;
 
-    const normalizedAssignees = assignees
-      .filter((a) => typeof a === "string")
-      .map((a) => a.trim().toLowerCase())
-      .filter(Boolean);
-
-    // Allow match by username OR name/fullName since admin might save either.
-    return identCandidates.some((cand) => normalizedAssignees.includes(cand.toLowerCase()));
-  }
-
-  return false;
+  return identCandidates.some((cand) =>
+    normalizedAssignees.some((a) => a.includes(cand.toLowerCase()) || cand.toLowerCase().includes(a))
+  );
 }
 
 async function canAccessTaskAsync(user, task) {
   const role = String(user?.role || "").trim().toLowerCase();
 
-  if (role === "super-admin" || role === "admin" || role === "manager" || role === "team-lead") return true;
-  if (role !== "employee") return false;
-
   const legacyAssignee = typeof task?.assignee === "string" ? task.assignee : "";
   const legacyEmployee = typeof task?.employee === "string" ? task.employee : "";
 
   const assignees = Array.isArray(task?.assignees) ? task.assignees : [];
-  const normalizedAssignees = [...assignees, legacyAssignee, legacyEmployee]
+  const normalizedAssignees = [...assignees, legacyAssignee, legacyEmployee, task.teamLead]
     .filter((a) => typeof a === "string")
     .map((a) => a.trim().toLowerCase())
     .filter(Boolean);
-
-  if (normalizedAssignees.length === 0) return false;
 
   const candidates = [];
   const pushCandidate = (v) => {
@@ -259,13 +249,27 @@ async function canAccessTaskAsync(user, task) {
 
   if (allCandidates.length === 0) return false;
 
-  // Exact match
+  // Exact or fuzzy match against task assignees
   if (allCandidates.some((c) => normalizedAssignees.includes(c))) return true;
+  if (allCandidates.some((c) => normalizedAssignees.some((a) => a.includes(c) || c.includes(a)))) return true;
 
-  // Fuzzy match: allow partial contains in either direction (handles "ali raza" vs "ali")
-  return allCandidates.some((c) =>
-    normalizedAssignees.some((a) => a.includes(c) || c.includes(a)),
-  );
+  // Check project assignment/lead access
+  if (task.projectId) {
+    try {
+      const project = await Project.findById(task.projectId).lean();
+      if (project) {
+        const isProjectAssignee = (project.assignees || []).some(
+          (a) => allCandidates.includes(a.toLowerCase())
+        );
+        const isProjectLead = allCandidates.includes((project.teamLead || "").toLowerCase());
+        if (isProjectAssignee || isProjectLead) return true;
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  return false;
 }
 
 // Helper to log activity
@@ -311,39 +315,30 @@ router.get("/", requireAuth, async (req, res, next) => {
     const fullName = String(req.user?.fullName || "").trim();
     const candidates = [username, name, fullName].filter(Boolean);
 
-    // 1. Accessibility Filter for Employees and Managers
-    // Managers should only see tasks where they are the teamLead or assigned to them
-    if (role !== "admin" && role !== "super-admin") {
-      if (candidates.length === 0) {
-        return res.json(paginatedResponse([], 0, page, limit));
-      }
-
-      // For managers and team-leads, filter by teamLead field
-      if (role === "manager" || role === "team-lead") {
-        conditions.push({
-          $or: candidates.flatMap((c) => [
-            { teamLead: { $regex: new RegExp(`^${escapeRegExp(c)}$`, "i") } },
-            { assignees: { $elemMatch: { $regex: new RegExp(`^${escapeRegExp(c)}$`, "i") } } },
-          ])
-        });
-      } else {
-        // Find projects where the user is an assignee
-        const assignedProjects = await Project.find({
-          assignees: { $elemMatch: { $regex: new RegExp(`^(${candidates.map(escapeRegExp).join("|")})$`, "i") } }
-        }).select("_id").lean();
-        const assignedProjectIds = assignedProjects.map(p => p._id);
-
-        conditions.push({
-          $or: [
-            ...candidates.flatMap((c) => [
-              { assignees: { $elemMatch: { $regex: new RegExp(`^${escapeRegExp(c)}$`, "i") } } },
-              { assignee: { $regex: new RegExp(`^${escapeRegExp(c)}$`, "i") } }, // Legacy
-            ]),
-            { projectId: { $in: assignedProjectIds } }
-          ]
-        });
-      }
+    // 1. Accessibility Filter for All Roles
+    if (candidates.length === 0) {
+      return res.json(paginatedResponse([], 0, page, limit));
     }
+
+    const regexList = candidates.map(escapeRegExp).join("|");
+    const assignedProjects = await Project.find({
+      $or: [
+        { teamLead: { $regex: new RegExp(`^(${regexList})$`, "i") } },
+        { assignees: { $elemMatch: { $regex: new RegExp(`^(${regexList})$`, "i") } } }
+      ]
+    }).select("_id").lean();
+    const assignedProjectIds = assignedProjects.map(p => p._id);
+
+    conditions.push({
+      $or: [
+        ...candidates.flatMap((c) => [
+          { teamLead: { $regex: new RegExp(`^${escapeRegExp(c)}$`, "i") } },
+          { assignee: { $regex: new RegExp(`^${escapeRegExp(c)}$`, "i") } }, // Legacy
+          { assignees: { $elemMatch: { $regex: new RegExp(`^${escapeRegExp(c)}$`, "i") } } },
+        ]),
+        { projectId: { $in: assignedProjectIds } }
+      ]
+    });
 
     // 2. Project Filter
     if (projectIdQ) {
