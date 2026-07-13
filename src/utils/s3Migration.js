@@ -2,15 +2,34 @@ const path = require("path");
 const fs = require("fs");
 const mongoose = require("mongoose");
 
+// Simple schema to track whether the S3 migration has already completed
+const migrationSchema = new mongoose.Schema({
+  key: { type: String, unique: true, required: true },
+  completedAt: { type: Date, default: Date.now },
+  migratedCount: { type: Number, default: 0 },
+  failedCount: { type: Number, default: 0 },
+});
+const Migration = mongoose.models.Migration || mongoose.model("Migration", migrationSchema);
+
 /**
- * Startup migration utility to copy legacy AWS S3 files locally
+ * One-time startup migration utility to copy legacy AWS S3 files locally
  * and update their database references.
  *
  * Uses the authenticated AWS SDK (via getFromS3) instead of plain HTTP,
  * so private S3 buckets are fully supported.
+ *
+ * Runs ONCE — after completing, it writes a flag to the database
+ * and skips on all future server restarts.
  */
 async function migrateS3ToLocalServer() {
-  console.log("[S3 Migration] Starting automated scan of database records...");
+  // Check if migration already ran
+  const existing = await Migration.findOne({ key: "s3-to-local-v1" });
+  if (existing) {
+    console.log(`[S3 Migration] Already completed on ${existing.completedAt.toISOString()} (${existing.migratedCount} files migrated). Skipping.`);
+    return;
+  }
+
+  console.log("[S3 Migration] Starting one-time automated scan of database records...");
 
   const { getFromS3, extractS3Key } = require("../lib/s3");
 
@@ -20,6 +39,9 @@ async function migrateS3ToLocalServer() {
     let totalFailed = 0;
 
     for (const modelName of modelNames) {
+      // Skip the Migration tracking collection itself
+      if (modelName === "Migration") continue;
+
       const Model = mongoose.model(modelName);
 
       // Fetch all documents from this collection
@@ -110,7 +132,15 @@ async function migrateS3ToLocalServer() {
       }
     }
 
-    console.log(`[S3 Migration] Complete. Migrated ${totalMigrated} files, ${totalFailed} failed.`);
+    // Mark migration as complete so it never runs again
+    await Migration.create({
+      key: "s3-to-local-v1",
+      completedAt: new Date(),
+      migratedCount: totalMigrated,
+      failedCount: totalFailed,
+    });
+
+    console.log(`[S3 Migration] Complete. Migrated ${totalMigrated} files, ${totalFailed} failed. Will not run again.`);
   } catch (err) {
     console.error("[S3 Migration] Error during migration run:", err);
   }
