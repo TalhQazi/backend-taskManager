@@ -722,14 +722,19 @@ async function archiveEmployeeById(employeeId, archivedBy) {
       const targets = [employee.name, employee.email].filter(Boolean);
       if (targets.length > 0) {
         if (Task) {
-          const deleteResult = await Task.deleteMany({
-            $or: [
-              { assignees: { $in: targets } },
-              { assignee: { $in: targets } },
-              { employee: { $in: targets } }
-            ]
-          });
-          console.log(`[Archive Cleanup] Deleted ${deleteResult.deletedCount} tasks assigned to archived employee.`);
+          const pullResult = await Task.updateMany(
+            { assignees: { $in: targets } },
+            { $pull: { assignees: { $in: targets } } }
+          );
+          const clearAssigneeResult = await Task.updateMany(
+            { assignee: { $in: targets } },
+            { $set: { assignee: "" } }
+          );
+          const clearEmployeeResult = await Task.updateMany(
+            { employee: { $in: targets } },
+            { $set: { employee: "" } }
+          );
+          console.log(`[Archive Cleanup] Pulled targets from task assignees and cleared single assignee/employee fields.`);
         }
         if (Project) {
           await Project.updateMany({ assignees: { $in: targets } }, { $pull: { assignees: { $in: targets } } });

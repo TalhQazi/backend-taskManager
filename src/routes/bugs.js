@@ -74,6 +74,10 @@ router.post("/", requireAuth, async (req, res, next) => {
 
 router.get("/:id", requireAuth, async (req, res, next) => {
   try {
+    const role = String(req.user?.role || "").toLowerCase();
+    if (role !== "super-admin" && role !== "coder") {
+      return res.status(403).json({ error: { message: "Forbidden" } });
+    }
     const item = await BugReport.findById(req.params.id).lean();
     if (!item) return res.status(404).json({ error: { message: "Bug not found" } });
     return res.json({ item: withId(item) });
@@ -88,7 +92,10 @@ router.put("/:id", requireAuth, async (req, res, next) => {
     if (!bug) return res.status(404).json({ error: { message: "Bug not found" } });
 
     const role = String(req.user?.role || "").toLowerCase();
-    const isAdmin = role === "admin" || role === "super-admin";
+    if (role !== "super-admin" && role !== "coder") {
+      return res.status(403).json({ error: { message: "Forbidden" } });
+    }
+    const isAdmin = role === "super-admin";
 
     const patch = {};
     if (typeof req.body?.status === "string") {
@@ -139,8 +146,12 @@ router.put("/:id", requireAuth, async (req, res, next) => {
   }
 });
 
-router.get("/", requireAuth, async (_req, res, next) => {
+router.get("/", requireAuth, async (req, res, next) => {
   try {
+    const role = String(req.user?.role || "").toLowerCase();
+    if (role !== "super-admin" && role !== "coder") {
+      return res.status(403).json({ error: { message: "Forbidden" } });
+    }
     const items = await BugReport.find().select("-attachments").sort({ createdAt: -1 }).lean();
     res.json({ items: items.map(withId) });
   } catch (err) {

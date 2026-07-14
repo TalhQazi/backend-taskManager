@@ -4,7 +4,8 @@ const mongoose = require("mongoose");
 // All money values are stored as integer cents to avoid floating point errors.
 const CostSheetSchema = new mongoose.Schema(
   {
-    projectId: { type: String, required: true, index: true, unique: true },
+    projectId: { type: String, required: false, index: true },
+    taskId: { type: String, required: false, index: true },
     name: { type: String, default: "Project Cost Sheet" },
     currency: { type: String, default: "USD" },
     // Manual entry: money currently available for purchasing.

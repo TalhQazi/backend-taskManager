@@ -376,7 +376,7 @@ function requireEditor(req, res) {
 
 // ---------- routes ----------
 
-// GET /api/cost-manager/projects/:projectId — get-or-create the project cost sheet.
+// GET /api/cost-manager/projects/:projectId — get the project cost sheet.
 router.get("/projects/:projectId", requireAuth, async (req, res, next) => {
   try {
     const { projectId } = req.params;
@@ -388,21 +388,141 @@ router.get("/projects/:projectId", requireAuth, async (req, res, next) => {
 
     let sheet = await CostSheet.findOne({ projectId });
     if (!sheet) {
-      sheet = await CostSheet.create({
-        projectId,
-        name: `${project.name} — Cost Sheet`,
-        createdByUserId: req.user?.id || "",
-        createdByUsername: req.user?.username || req.user?.name || "",
-      });
-      await CostSection.insertMany(
-        DEFAULT_SECTIONS.map((name, idx) => ({ costSheetId: sheet._id, name, sortOrder: idx }))
-      );
-      await writeAudit(req, "cost_sheet", sheet._id, projectId, "create", null, { name: sheet.name });
+      return res.json(null);
     }
 
     const payload = await loadSheetPayload(sheet);
     void maybeSendBudgetAlert(req, sheet, payload.summary);
     res.json(payload);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /api/cost-manager/tasks/:taskId — get the task cost sheet.
+router.get("/tasks/:taskId", requireAuth, async (req, res, next) => {
+  try {
+    const { taskId } = req.params;
+    if (!mongoose.isValidObjectId(taskId)) {
+      return res.status(400).json({ error: { message: "Invalid task id" } });
+    }
+    const task = await Task.findById(taskId).select("title").lean();
+    if (!task) return res.status(404).json({ error: { message: "Task not found" } });
+
+    let sheet = await CostSheet.findOne({ taskId });
+    if (!sheet) {
+      return res.json(null);
+    }
+
+    const payload = await loadSheetPayload(sheet);
+    void maybeSendBudgetAlert(req, sheet, payload.summary);
+    res.json(payload);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /api/cost-manager/sheets — get all cost sheets
+router.get("/sheets", requireAuth, async (req, res, next) => {
+  try {
+    const sheets = await CostSheet.find({}).sort({ createdAt: -1 }).lean();
+    res.json({ items: sheets });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /api/cost-manager/sheets — create a new cost sheet
+router.post("/sheets", requireAuth, async (req, res, next) => {
+  try {
+    if (!requireEditor(req, res)) return;
+    const { name, availableBudgetCents } = req.body;
+    if (!name) return res.status(400).json({ error: { message: "Name is required" } });
+
+    const sheet = await CostSheet.create({
+      name,
+      availableBudgetCents: Number(availableBudgetCents) || 0,
+      createdByUserId: req.user?.id || "",
+      createdByUsername: req.user?.username || req.user?.name || "",
+    });
+
+    await CostSection.insertMany(
+      DEFAULT_SECTIONS.map((sectionName, idx) => ({ costSheetId: sheet._id, name: sectionName, sortOrder: idx }))
+    );
+
+    await writeAudit(req, "cost_sheet", sheet._id, null, "create", null, { name: sheet.name });
+    res.status(201).json(sheet);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /api/cost-manager/sheets/:sheetId — fetch a cost sheet payload by ID
+router.get("/sheets/:sheetId", requireAuth, async (req, res, next) => {
+  try {
+    const sheet = await CostSheet.findById(req.params.sheetId);
+    if (!sheet) return res.status(404).json({ error: { message: "Cost sheet not found" } });
+
+    const payload = await loadSheetPayload(sheet);
+    void maybeSendBudgetAlert(req, sheet, payload.summary);
+    res.json(payload);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// PATCH /api/cost-manager/sheets/:sheetId/attach — link/unlink a cost sheet to a project or task
+router.patch("/sheets/:sheetId/attach", requireAuth, async (req, res, next) => {
+  try {
+    const role = String(req.user?.role || "").toLowerCase();
+    if (role !== "super-admin" && role !== "admin") {
+      return res.status(403).json({ error: { message: "Only admins or super-admins can attach expense sheets" } });
+    }
+
+    const sheet = await CostSheet.findById(req.params.sheetId);
+    if (!sheet) return res.status(404).json({ error: { message: "Cost sheet not found" } });
+
+    const projectId = req.body.projectId || null;
+    const taskId = req.body.taskId || null;
+
+    // Detach from previous project/task if any
+    const oldProject = sheet.projectId;
+    const oldTask = sheet.taskId;
+
+    sheet.projectId = projectId;
+    sheet.taskId = taskId;
+    await sheet.save();
+
+    // Also update all line items and certifications associated with this sheet
+    await CostLineItem.updateMany({ costSheetId: sheet._id }, { $set: { projectId, taskId } });
+    await CertificationRequirement.updateMany({ costSheetId: sheet._id }, { $set: { projectId } });
+
+    await writeAudit(req, "cost_sheet", sheet._id, projectId, "attach", { projectId: oldProject, taskId: oldTask }, { projectId, taskId });
+
+    res.json({ success: true, item: sheet });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// DELETE /api/cost-manager/sheets/:sheetId — delete a cost sheet, sections, line items, and certifications
+router.delete("/sheets/:sheetId", requireAuth, async (req, res, next) => {
+  try {
+    const role = String(req.user?.role || "").toLowerCase();
+    if (role !== "super-admin" && role !== "admin") {
+      return res.status(403).json({ error: { message: "Only admins or super-admins can delete expense sheets" } });
+    }
+
+    const sheet = await CostSheet.findById(req.params.sheetId);
+    if (!sheet) return res.status(404).json({ error: { message: "Cost sheet not found" } });
+
+    await CostSection.deleteMany({ costSheetId: sheet._id });
+    await CostLineItem.deleteMany({ costSheetId: sheet._id });
+    await CertificationRequirement.deleteMany({ costSheetId: sheet._id });
+    await sheet.deleteOne();
+
+    await writeAudit(req, "cost_sheet", sheet._id, sheet.projectId, "delete", { name: sheet.name }, null);
+    res.json({ success: true });
   } catch (err) {
     next(err);
   }

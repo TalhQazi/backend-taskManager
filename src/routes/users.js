@@ -227,10 +227,22 @@ router.post("/:id/archive", requireAuth, requireRole(["super-admin", "admin"]), 
       { assignees: { $in: identifiers } },
       { $pull: { assignees: { $in: identifiers } } }
     );
+    await Project.updateMany(
+      { teamLead: { $in: identifiers } },
+      { $set: { teamLead: "" } }
+    );
 
     await Task.updateMany(
       { assignees: { $in: identifiers } },
       { $pull: { assignees: { $in: identifiers } } }
+    );
+    await Task.updateMany(
+      { assignee: { $in: identifiers } },
+      { $set: { assignee: "" } }
+    );
+    await Task.updateMany(
+      { employee: { $in: identifiers } },
+      { $set: { employee: "" } }
     );
 
     await cacheDel("tasks:list:*");
