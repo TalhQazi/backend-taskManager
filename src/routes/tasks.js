@@ -317,17 +317,23 @@ router.get("/", requireAuth, async (req, res, next) => {
     const fullName = String(req.user?.fullName || "").trim();
     const candidates = [username, name, fullName].filter(Boolean);
 
-    // 1. Accessibility Filter (Skip for super-admin and admin)
-    if (role !== "super-admin" && role !== "admin") {
-      if (candidates.length === 0) {
+    // 1. Accessibility Filter — only super-admin sees everything. Every other
+    //    role (admin included) sees just their own tasks: assigned to them,
+    //    led by them, in a project they belong to, or created by them.
+    if (role !== "super-admin") {
+      const userSub = String(req.user?.sub || "").trim();
+      if (candidates.length === 0 && !userSub) {
         return res.json(paginatedResponse([], 0, page, limit));
       }
 
       const regexList = candidates.map(escapeRegExp).join("|");
       const assignedProjects = await Project.find({
         $or: [
-          { teamLead: { $regex: new RegExp(`^(${regexList})$`, "i") } },
-          { assignees: { $elemMatch: { $regex: new RegExp(`^(${regexList})$`, "i") } } }
+          ...(candidates.length > 0 ? [
+            { teamLead: { $regex: new RegExp(`^(${regexList})$`, "i") } },
+            { assignees: { $elemMatch: { $regex: new RegExp(`^(${regexList})$`, "i") } } },
+          ] : []),
+          ...(userSub ? [{ createdByUserId: userSub }] : []),
         ]
       }).select("_id").lean();
       const assignedProjectIds = assignedProjects.map(p => p._id);
@@ -338,7 +344,9 @@ router.get("/", requireAuth, async (req, res, next) => {
             { teamLead: { $regex: new RegExp(`^${escapeRegExp(c)}$`, "i") } },
             { assignee: { $regex: new RegExp(`^${escapeRegExp(c)}$`, "i") } }, // Legacy
             { assignees: { $elemMatch: { $regex: new RegExp(`^${escapeRegExp(c)}$`, "i") } } },
+            { "createdBy.name": { $regex: new RegExp(`^${escapeRegExp(c)}$`, "i") } },
           ]),
+          ...(userSub ? [{ "createdBy.userId": userSub }] : []),
           { projectId: { $in: assignedProjectIds } }
         ]
       });

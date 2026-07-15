@@ -458,10 +458,12 @@ router.get("/me/dashboard", requireAuth, async (req, res, next) => {
     // they are part of. The stat cards must count the same set, otherwise an
     // employee who only has project-membership tasks sees a full list but 0 stats.
     const Project = require("../models/Project");
+    const selfUserId = String(user?.sub || employee._id || "").trim();
     const assignedProjects = await Project.find({
       $or: [
         { teamLead: { $in: candidateRegexes } },
         { assignees: { $elemMatch: { $in: candidateRegexes } } },
+        ...(selfUserId ? [{ createdByUserId: selfUserId }] : []),
       ],
     })
       .select("_id")
@@ -475,6 +477,7 @@ router.get("/me/dashboard", requireAuth, async (req, res, next) => {
           { assignees: { $in: candidateRegexes } },
           { assignee: { $in: candidates } },
           { assignee: { $in: candidateRegexes } },
+          ...(selfUserId ? [{ "createdBy.userId": selfUserId }] : []),
           ...(assignedProjectIds.length > 0 ? [{ projectId: { $in: assignedProjectIds } }] : []),
         ],
       })

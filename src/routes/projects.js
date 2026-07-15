@@ -320,12 +320,16 @@ router.get("/", requireAuth, async (req, res, next) => {
     const name = String(req.user?.name || "").trim();
     const candidates = [username, name].filter(Boolean);
 
-    if (role !== "super-admin" && role !== "admin") {
-      if (candidates.length === 0) {
+    // Only super-admin sees every project. Every other role (admin included)
+    // sees just their own: projects they lead, belong to, have tasks in, or created.
+    if (role !== "super-admin") {
+      const userSub = String(req.user?.sub || "").trim();
+      if (candidates.length === 0 && !userSub) {
         return res.json(paginatedResponse([], 0, page, limit));
       }
 
       const regexes = candidates.map((c) => new RegExp(`^${escapeRegExp(c)}$`, "i"));
+      const creatorOr = userSub ? [{ createdByUserId: userSub }] : [];
 
       if (role === "employee" || role === "coder") {
         const taskProjectIds = await Task.distinct("projectId", {
@@ -338,17 +342,19 @@ router.get("/", requireAuth, async (req, res, next) => {
           $match: {
             $or: [
               { assignees: { $elemMatch: { $in: regexes } } },
-              { _id: { $in: taskProjectIds } }
+              { _id: { $in: taskProjectIds } },
+              ...creatorOr
             ]
           }
         });
       } else {
-        // Manager, Team-Lead
+        // Admin, Manager, Team-Lead
         matchStages.push({
           $match: {
             $or: [
               { teamLead: { $in: regexes } },
-              { assignees: { $elemMatch: { $in: regexes } } }
+              { assignees: { $elemMatch: { $in: regexes } } },
+              ...creatorOr
             ]
           }
         });
