@@ -668,8 +668,23 @@ router.post("/", requireAuth, async (req, res, next) => {
     const lastTask = await Task.findOne().sort({ taskNumber: -1 }).select("taskNumber").lean();
     const nextTaskNumber = (lastTask?.taskNumber || 0) + 1;
 
+    // Seed timer fields when a task is created directly in a started/closed state,
+    // so the timeline can show an accurate start time and running duration.
+    const actorName = String(req.user?.name || req.user?.username || "Unknown");
+    const timerFields = {};
+    if (data.status === "in-progress") {
+      const now = new Date();
+      timerFields.startedAt = now;
+      timerFields.firstStartedAt = now;
+      timerFields.startedByName = actorName;
+    } else if (data.status === "completed") {
+      timerFields.completedAt = new Date();
+      timerFields.completedByName = actorName;
+    }
+
     const created = await Task.create({
       ...data,
+      ...timerFields,
       taskNumber: nextTaskNumber,
       createdAt,
       dueDate,
@@ -1645,9 +1660,13 @@ router.put("/:id", requireAuth, async (req, res, next) => {
       const existing = await Task.findById(req.params.id).select("status firstStartedAt").lean();
       if (existing) {
         const actorName = String(req.user?.name || req.user?.username || "Unknown");
-        if (patch.status === "in-progress" && !existing.firstStartedAt) {
-          patch.firstStartedAt = new Date();
-          patch.startedByName = actorName;
+        if (patch.status === "in-progress" && existing.status !== "in-progress") {
+          patch.startedAt = new Date();
+          // Permanent "first started" history — only set once
+          if (!existing.firstStartedAt) {
+            patch.firstStartedAt = new Date();
+            patch.startedByName = actorName;
+          }
         }
         if (patch.status === "completed" && existing.status !== "completed") {
           patch.completedAt = new Date();
