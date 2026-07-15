@@ -320,46 +320,8 @@ router.get("/", requireAuth, async (req, res, next) => {
     const name = String(req.user?.name || "").trim();
     const candidates = [username, name].filter(Boolean);
 
-    // Only super-admin sees every project. Every other role (admin included)
-    // sees just their own: projects they lead, belong to, have tasks in, or created.
-    if (role !== "super-admin") {
-      const userSub = String(req.user?.sub || "").trim();
-      if (candidates.length === 0 && !userSub) {
-        return res.json(paginatedResponse([], 0, page, limit));
-      }
-
-      const regexes = candidates.map((c) => new RegExp(`^${escapeRegExp(c)}$`, "i"));
-      const creatorOr = userSub ? [{ createdByUserId: userSub }] : [];
-
-      if (role === "employee" || role === "coder") {
-        const taskProjectIds = await Task.distinct("projectId", {
-          $or: [
-            { assignee: { $in: regexes } },
-            { assignees: { $elemMatch: { $in: regexes } } }
-          ]
-        });
-        matchStages.push({
-          $match: {
-            $or: [
-              { assignees: { $elemMatch: { $in: regexes } } },
-              { _id: { $in: taskProjectIds } },
-              ...creatorOr
-            ]
-          }
-        });
-      } else {
-        // Admin, Manager, Team-Lead
-        matchStages.push({
-          $match: {
-            $or: [
-              { teamLead: { $in: regexes } },
-              { assignees: { $elemMatch: { $in: regexes } } },
-              ...creatorOr
-            ]
-          }
-        });
-      }
-    }
+    // Accessibility: intentionally unrestricted — every role (super-admin,
+    // admin, manager, employee) sees every project.
 
     if (searchQ) {
       const searchRegex = new RegExp(escapeRegExp(searchQ), "i");

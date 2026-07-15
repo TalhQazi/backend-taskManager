@@ -172,6 +172,10 @@ function normalizeAssignees(input) {
 }
 
 function canAccessTask(user, task) {
+  // Visibility is intentionally unrestricted: every role (super-admin, admin,
+  // manager, employee) can see and act on every task.
+  return true;
+  /* eslint-disable no-unreachable */
   const role = String(user?.role || "").trim().toLowerCase();
   if (role === "super-admin" || role === "admin") return true;
   const username = String(user?.username || "").trim();
@@ -196,6 +200,10 @@ function canAccessTask(user, task) {
 }
 
 async function canAccessTaskAsync(user, task) {
+  // Visibility is intentionally unrestricted: every role (super-admin, admin,
+  // manager, employee) can see and act on every task.
+  return true;
+  /* eslint-disable no-unreachable */
   const role = String(user?.role || "").trim().toLowerCase();
   if (role === "super-admin" || role === "admin") return true;
 
@@ -317,40 +325,8 @@ router.get("/", requireAuth, async (req, res, next) => {
     const fullName = String(req.user?.fullName || "").trim();
     const candidates = [username, name, fullName].filter(Boolean);
 
-    // 1. Accessibility Filter — only super-admin sees everything. Every other
-    //    role (admin included) sees just their own tasks: assigned to them,
-    //    led by them, in a project they belong to, or created by them.
-    if (role !== "super-admin") {
-      const userSub = String(req.user?.sub || "").trim();
-      if (candidates.length === 0 && !userSub) {
-        return res.json(paginatedResponse([], 0, page, limit));
-      }
-
-      const regexList = candidates.map(escapeRegExp).join("|");
-      const assignedProjects = await Project.find({
-        $or: [
-          ...(candidates.length > 0 ? [
-            { teamLead: { $regex: new RegExp(`^(${regexList})$`, "i") } },
-            { assignees: { $elemMatch: { $regex: new RegExp(`^(${regexList})$`, "i") } } },
-          ] : []),
-          ...(userSub ? [{ createdByUserId: userSub }] : []),
-        ]
-      }).select("_id").lean();
-      const assignedProjectIds = assignedProjects.map(p => p._id);
-
-      conditions.push({
-        $or: [
-          ...candidates.flatMap((c) => [
-            { teamLead: { $regex: new RegExp(`^${escapeRegExp(c)}$`, "i") } },
-            { assignee: { $regex: new RegExp(`^${escapeRegExp(c)}$`, "i") } }, // Legacy
-            { assignees: { $elemMatch: { $regex: new RegExp(`^${escapeRegExp(c)}$`, "i") } } },
-            { "createdBy.name": { $regex: new RegExp(`^${escapeRegExp(c)}$`, "i") } },
-          ]),
-          ...(userSub ? [{ "createdBy.userId": userSub }] : []),
-          { projectId: { $in: assignedProjectIds } }
-        ]
-      });
-    }
+    // 1. Accessibility: intentionally unrestricted — every role (super-admin,
+    //    admin, manager, employee) sees every task.
 
     // 2. Project Filter
     if (projectIdQ) {

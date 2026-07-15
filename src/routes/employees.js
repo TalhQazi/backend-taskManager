@@ -453,34 +453,11 @@ router.get("/me/dashboard", requireAuth, async (req, res, next) => {
 
     const { start, end } = getDayRange(new Date());
 
-    // Mirror the task-list accessibility scope (see routes/tasks.js): an employee
-    // can see tasks assigned directly to them AND tasks that belong to projects
-    // they are part of. The stat cards must count the same set, otherwise an
-    // employee who only has project-membership tasks sees a full list but 0 stats.
-    const Project = require("../models/Project");
-    const selfUserId = String(user?.sub || employee._id || "").trim();
-    const assignedProjects = await Project.find({
-      $or: [
-        { teamLead: { $in: candidateRegexes } },
-        { assignees: { $elemMatch: { $in: candidateRegexes } } },
-        ...(selfUserId ? [{ createdByUserId: selfUserId }] : []),
-      ],
-    })
-      .select("_id")
-      .lean();
-    const assignedProjectIds = assignedProjects.map((p) => p._id);
-
+    // Mirror the task-list accessibility scope (see routes/tasks.js): task
+    // visibility is intentionally unrestricted, so the stat cards count every
+    // task — matching exactly what the Tasks screen shows.
     const [tasks, schedule, todayEntry, unreadMessages] = await Promise.all([
-      Task.find({
-        $or: [
-          { assignees: { $in: candidates } },
-          { assignees: { $in: candidateRegexes } },
-          { assignee: { $in: candidates } },
-          { assignee: { $in: candidateRegexes } },
-          ...(selfUserId ? [{ "createdBy.userId": selfUserId }] : []),
-          ...(assignedProjectIds.length > 0 ? [{ projectId: { $in: assignedProjectIds } }] : []),
-        ],
-      })
+      Task.find({})
         .sort({ updatedAt: -1 })
         .lean(),
       Event.find({ assignee: employee.name }).sort({ createdAt: -1 }).limit(10).lean(),
