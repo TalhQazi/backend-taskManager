@@ -1,29 +1,34 @@
 # Knowledge Vault v2 — module guide
 
 Enterprise Knowledge Vault built on your existing MongoDB/Mongoose stack.
-**Additive and feature-flagged** — off by default, so it cannot affect the running
-system until you turn it on. See `ARCHITECTURE.md` for the full design.
+**Additive and always on** — the v2 API mounts automatically and the frontend
+screen appears for admin/super-admin. No env flags required. See `ARCHITECTURE.md`
+for the full design.
 
-## Enable
+## Configuration (all optional)
 
 ```bash
-# .env
-KV_V2_ENABLED=true          # mounts /api/knowledge/v2 (off by default)
-# optional
+# .env — optional tuning only
 KV_EMBED_DIM=256            # embedding dimensionality (local provider)
 KV_AI_PROVIDER=local        # 'local' (offline, default). Wire Anthropic/OpenAI later.
 ```
 
-## Migrate (safe, idempotent)
+Nothing needs to be set for the module to work — it runs on the same MongoDB
+connection and JWT auth as the rest of the app.
+
+## One-time migration (recommended, not required)
 
 ```bash
-node src/migrations/knowledge/001_indexes.js   # build all KV indexes (background)
-node src/migrations/knowledge/002_backfill.js  # backfill ownerId/searchText/contentHash/version
-# or:
+# Makes EXISTING notes fully searchable/AI-ready. New notes are handled
+# automatically by the model's save hook, so this is a backfill for old data.
+node src/migrations/knowledge/002_backfill.js
+# or run everything (also ensures indexes, though Mongoose autoIndex builds them too):
 node src/migrations/knowledge/run.js all
 ```
 
 The original `notes` collection, its `$text` index, and `/api/notes` are untouched.
+Indexes for the new collections are built automatically by Mongoose on startup;
+`001_indexes` just lets you build them as a controlled step on a large dataset.
 
 ## What ships
 
