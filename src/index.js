@@ -421,6 +421,17 @@ app.use("/api/team-lead-mappings", requireClearHire, teamLeadMappingsRoutes);
 app.use("/api/task-permissions", requireClearHire, taskPermissionsRoutes);
 app.use("/api/founder-messages", requireClearHire, founderMessagesRoutes);
 app.use("/api/notes", requireClearHire, notesRoutes);
+
+// Knowledge Vault v2 — additive, feature-flagged. Off by default so it can never
+// affect the running system until explicitly enabled (KV_V2_ENABLED=true).
+if (String(process.env.KV_V2_ENABLED || "").toLowerCase() === "true") {
+  try {
+    app.use("/api/knowledge/v2", requireClearHire, require("./routes/knowledge"));
+    console.log("[Knowledge Vault] v2 API mounted at /api/knowledge/v2");
+  } catch (err) {
+    console.error("[Knowledge Vault] failed to mount v2 API:", err.message);
+  }
+}
 app.use("/api/asset-library", requireClearHire, assetLibraryRoutes);
 app.use("/api/contributors", requireClearHire, contributorsRoutes);
 app.use("/api/ui-preferences", requireClearHire, uiPreferencesRoutes);
