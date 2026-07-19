@@ -157,6 +157,10 @@ function withId(doc) {
     attachmentFileName: doc.attachmentFileName,
     attachmentNote: doc.attachmentNote,
     startedAt: doc.startedAt,
+    firstStartedAt: doc.firstStartedAt,
+    startedByName: doc.startedByName,
+    completedAt: doc.completedAt,
+    completedByName: doc.completedByName,
     totalTimeSpent: doc.totalTimeSpent || 0,
     executionPriority: doc.executionPriority,
   };

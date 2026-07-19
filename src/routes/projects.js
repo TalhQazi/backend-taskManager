@@ -567,6 +567,12 @@ router.get("/:id", requireAuth, async (req, res, next) => {
                   dueTime: 1,
                   location: 1,
                   createdAt: 1,
+                  startedAt: 1,
+                  firstStartedAt: 1,
+                  startedByName: 1,
+                  completedAt: 1,
+                  completedByName: 1,
+                  totalTimeSpent: 1,
                   attachmentFileName: 1,
                   attachmentNote: 1,
                   attachment: {
