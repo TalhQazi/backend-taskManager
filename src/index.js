@@ -67,6 +67,7 @@ const userStatusRoutes = require("./routes/userStatus");
 const itinerariesRoutes = require("./routes/itineraries");
 const followUpsRoutes = require("./routes/followUps");
 const newHireReportsRoutes = require("./routes/newHireReports");
+const globalSearchRoutes = require("./routes/globalSearch");
 
 const legalCaseRoutes = require("./routes/LegalCase");
 const legalCourtRoutes = require("./routes/LegalCourt");
@@ -480,6 +481,7 @@ app.use("/api/video", requireClearHire, videoMessagesRoutes);
 app.use("/api/user", requireClearHire, videoUserHistoryRoutes);
 app.use("/api/atlasbook", requireClearHire, atlasbookRoutes);
 app.use("/api/personal-budget", requireClearHire, personalBudgetRoutes);
+app.use("/api/global-search", requireClearHire, globalSearchRoutes);
 app.use("/api/health", healthRoutes);
 
 // --- WIP Dashboard ---------------------------------------------------------

@@ -690,42 +690,10 @@ router.get("/:id", requireAuth, async (req, res, next) => {
       return res.status(404).json({ error: { message: "Project not found" } });
     }
 
-    const role = String(req.user?.role || "").trim().toLowerCase();
     const cloned = JSON.parse(JSON.stringify(cached));
 
-    const username = String(req.user?.username || "").trim().toLowerCase();
-    const name = String(req.user?.name || "").trim().toLowerCase();
-    const candidates = [username, name].filter(Boolean);
-
-    const isProjectAssignee = (cloned.assignees || []).some(
-      (a) => candidates.includes(a.toLowerCase())
-    );
-    const isProjectLead = candidates.includes((cloned.teamLead || "").toLowerCase());
-
-    if (role === "admin" || role === "super-admin" || role === "manager" || role === "team-lead") {
-      if (role !== "super-admin" && role !== "admin") {
-        if (!isProjectAssignee && !isProjectLead) {
-          return res.status(403).json({ error: { message: "Access denied to this project" } });
-        }
-      }
-    } else {
-      // Employee
-      if (!isProjectAssignee) {
-        cloned.tasks = (cloned.tasks || []).filter((t) => {
-          const taskAssignees = (t.assignees || []).map(a => a.toLowerCase());
-          const legacyAssignee = t.assignee ? t.assignee.toLowerCase() : "";
-          const isTaskAssignee = taskAssignees.some(a => candidates.includes(a)) || candidates.includes(legacyAssignee);
-          return isTaskAssignee;
-        });
-
-        if (cloned.tasks.length === 0) {
-          return res.status(403).json({ error: { message: "Access denied to this project" } });
-        }
-        
-        cloned.taskCount = cloned.tasks.length;
-      }
-    }
-
+    // Accessibility: intentionally unrestricted — every role (super-admin,
+    // admin, manager, employee) can see every project and all its tasks without limitation.
     return res.json({ item: cloned });
   } catch (err) {
     return next(err);
