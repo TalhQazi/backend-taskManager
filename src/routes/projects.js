@@ -846,6 +846,41 @@ router.put("/:id", requireAuth, async (req, res, next) => {
   }
 });
 
+// Close project & all associated tasks endpoint (accessible to all roles: admin, manager, employee)
+router.post("/:id/close", requireAuth, async (req, res, next) => {
+  try {
+    const project = await Project.findById(req.params.id);
+    if (!project) {
+      return res.status(404).json({ error: { message: "Project not found" } });
+    }
+
+    const actorName = String(req.user?.name || req.user?.username || "Unknown");
+    const now = new Date();
+
+    // Mark all tasks under this project as completed
+    await Task.updateMany(
+      { projectId: project._id },
+      { $set: { status: "completed", completedAt: now, completedByName: actorName } }
+    );
+
+    void cacheDel(`project:${req.params.id}`);
+    void cacheDel("tasks:list:*");
+
+    await logActivity(
+      req,
+      "PROJECT_CLOSE",
+      "project",
+      project._id,
+      project.name,
+      `Closed project and all associated tasks: ${project.name}`
+    );
+
+    return res.json({ ok: true, message: "Project and all associated tasks marked as completed" });
+  } catch (err) {
+    return next(err);
+  }
+});
+
 // Reassign project endpoint
 router.put("/:id/reassign", requireAuth, async (req, res, next) => {
   try {
