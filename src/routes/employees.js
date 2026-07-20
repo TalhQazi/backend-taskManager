@@ -1123,12 +1123,18 @@ router.get("/me/eod-reports", requireAuth, async (req, res, next) => {
   try {
     const ctx = await requireEmployeeSelf(req, res);
     if (!ctx) return;
-    const { user } = ctx;
+    const { employee, user } = ctx;
 
     const { from, to, page = 1, limit = 50 } = req.query;
     const skip = (Number(page) - 1) * Number(limit);
 
-    const matchStage = { userId: String(user._id) };
+    const matchStage = {
+      $or: [
+        { userId: String(user._id) },
+        { employeeId: String(employee._id) },
+        { employeeName: new RegExp(`^${employee.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i") },
+      ]
+    };
 
     // Date range filter
     if (from || to) {
@@ -1146,16 +1152,53 @@ router.get("/me/eod-reports", requireAuth, async (req, res, next) => {
       EODReport.countDocuments(matchStage),
     ]);
 
-    const items = reports.map((report) => ({
-      id: String(report._id),
-      userId: report.userId,
-      employeeName: report.employeeName,
-      date: report.date,
-      rawInput: report.rawInput,
-      inputType: report.inputType,
-      status: report.status,
-      createdAt: report.updatedAt || report.createdAt,
-    }));
+    const timeEntryIds = reports.map((r) => r.timeEntryId).filter(Boolean);
+    const orConditions = [{ employee: employee.name }];
+    if (timeEntryIds.length > 0) {
+      orConditions.push({ _id: { $in: timeEntryIds } });
+    }
+    const timeEntries = await TimeEntry.find({ $or: orConditions }).lean();
+
+    const timeEntryById = new Map(timeEntries.map((te) => [String(te._id), te]));
+    const timeEntryByDate = new Map();
+    timeEntries.forEach((te) => {
+      if (te.date) {
+        const dateKey = new Date(te.date).toISOString().slice(0, 10);
+        timeEntryByDate.set(dateKey, te);
+      }
+    });
+
+    const formatTime = (date) => {
+      if (!date) return undefined;
+      const d = new Date(date);
+      if (!Number.isFinite(d.getTime())) return undefined;
+      return d.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: true });
+    };
+
+    const items = reports.map((report) => {
+      let timeEntry = report.timeEntryId ? timeEntryById.get(String(report.timeEntryId)) : null;
+      if (!timeEntry && report.date) {
+        const dateKey = new Date(report.date).toISOString().slice(0, 10);
+        timeEntry = timeEntryByDate.get(dateKey);
+      }
+
+      return {
+        id: String(report._id),
+        userId: report.userId,
+        employeeName: report.employeeName,
+        date: report.date,
+        rawInput: report.rawInput,
+        inputType: report.inputType,
+        status: report.status,
+        createdAt: report.updatedAt || report.createdAt,
+        clockIn: timeEntry?.clockIn || formatTime(timeEntry?.clockInAt),
+        clockOut: timeEntry?.clockOut || formatTime(timeEntry?.clockOutAt),
+        clockInAt: timeEntry?.clockInAt || null,
+        clockOutAt: timeEntry?.clockOutAt || null,
+        totalHours: timeEntry?.totalHours,
+        comments: report.comments || [],
+      };
+    });
 
     return res.json({ items, total, page: Number(page), limit: Number(limit) });
   } catch (err) {
