@@ -15,7 +15,27 @@ const CORE_REQ_MAP = {
   appleMaps: "Apple Maps",
   infoEmailSetup: "info@ Email Setup",
   nathanEmailSetup: "nathan@ Email Setup",
+  largeHeaderImage: "Large Header Image",
+  contactInfoSection: "Contact Info Section",
+  adaCompliance: "ADA Compliance",
+  faq: "FAQ Section",
+  contactUsPage: "Contact Us Page",
+  privacyPolicy: "Privacy Policy",
+  seo: "SEO Optimization",
+  siteMap: "Sitemap",
 };
+
+function coreStatusToChecklistStatus(val) {
+  if (val === "green" || val === "completed" || val === "passed") return "completed";
+  if (val === "red" || val === "blocked" || val === "failed") return "blocked";
+  return "pending";
+}
+
+function checklistStatusToCoreStatus(status) {
+  if (status === "completed" || status === "green" || status === "passed") return "green";
+  if (status === "blocked" || status === "red" || status === "failed") return "red";
+  return "none";
+}
 
 async function updateAndGetWebsiteReadinessScore(websiteId) {
   const website = await Website.findById(websiteId);
@@ -26,8 +46,24 @@ async function updateAndGetWebsiteReadinessScore(websiteId) {
     return website.readinessScore;
   }
 
-  const totalItems = await ChecklistItem.countDocuments({ websiteId });
-  const completedItems = await ChecklistItem.countDocuments({ websiteId, status: "completed" });
+  let totalItems = await ChecklistItem.countDocuments({ websiteId });
+
+  if (totalItems === 0) {
+    const coreKeys = Object.keys(CORE_REQ_MAP);
+    const completedCount = coreKeys.filter(k => website[k] === "green" || website[k] === "completed").length;
+    const readinessScore = Math.round((completedCount / coreKeys.length) * 100);
+    if (website.readinessScore !== readinessScore) {
+      website.readinessScore = readinessScore;
+      await website.save();
+    }
+    return readinessScore;
+  }
+
+  const completedItems = await ChecklistItem.countDocuments({
+    websiteId,
+    status: { $in: ["completed", "green", "passed"] },
+  });
+
   const readinessScore = totalItems > 0 ? Math.round((completedItems / totalItems) * 100) : 0;
 
   if (website.readinessScore !== readinessScore) {
@@ -309,7 +345,8 @@ router.put("/:id/compliance/:itemId", requireAuth, async (req, res, next) => {
     // Sync to website core requirement field if item matches a core requirement
     for (const [key, title] of Object.entries(CORE_REQ_MAP)) {
       if (item.title === title) {
-        await Website.findByIdAndUpdate(item.websiteId, { [key]: item.status });
+        const coreVal = checklistStatusToCoreStatus(item.status);
+        await Website.findByIdAndUpdate(item.websiteId, { [key]: coreVal });
       }
     }
 
@@ -427,13 +464,14 @@ router.put("/:id", requireAuth, async (req, res, next) => {
     // Sync any updated core requirements to ChecklistItem collection
     for (const [key, title] of Object.entries(CORE_REQ_MAP)) {
       if (req.body[key] !== undefined) {
-        const itemStatus = req.body[key] === "completed" ? "completed" : "pending";
+        const itemStatus = coreStatusToChecklistStatus(req.body[key]);
+        const isCompleted = itemStatus === "completed";
         await ChecklistItem.findOneAndUpdate(
           { websiteId: website._id, title },
           { 
             status: itemStatus, 
-            completedBy: itemStatus === "completed" ? (req.user?.username || "System") : "", 
-            completedAt: itemStatus === "completed" ? new Date() : undefined 
+            completedBy: isCompleted ? (req.user?.username || "System") : "", 
+            completedAt: isCompleted ? new Date() : undefined 
           },
           { upsert: true }
         );
