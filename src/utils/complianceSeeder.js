@@ -51,10 +51,16 @@ async function initializeComplianceTemplates() {
             ]
           },
           {
-            name: "Compliance",
+            name: "Compliance & Integrations",
             items: [
               { title: "Privacy Policy & Terms Links", description: "Add required legal footer links to the layout.", requiresEvidence: false },
-              { title: "Cookie Consent Banner", description: "Render standard GDPR/CCPA cookie notification banner.", requiresEvidence: false }
+              { title: "Cookie Consent Banner", description: "Render standard GDPR/CCPA cookie notification banner.", requiresEvidence: false },
+              { title: "Stripe Integration", description: "Verify active Stripe payment gateway and webhook handlers.", requiresEvidence: true },
+              { title: "Bug Report Button", description: "Verify functional Bug Report button on the website interface.", requiresEvidence: false },
+              { title: "Google Maps", description: "Verify Google Maps location embed or API integration.", requiresEvidence: false },
+              { title: "Apple Maps", description: "Verify Apple Maps link or MapKit integration.", requiresEvidence: false },
+              { title: "info@ Email Setup", description: "Verify active info@<domain> email account and forwarding for every active website.", requiresEvidence: true },
+              { title: "nathan@ Email Setup", description: "Verify active nathan@<domain> email account and forwarding for every active website.", requiresEvidence: true }
             ]
           },
           {

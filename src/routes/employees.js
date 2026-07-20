@@ -453,17 +453,56 @@ router.get("/me/dashboard", requireAuth, async (req, res, next) => {
 
     const { start, end } = getDayRange(new Date());
 
+    const now = new Date();
+    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0);
+    const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
+
     // Mirror the task-list accessibility scope (see routes/tasks.js): task
     // visibility is intentionally unrestricted, so the stat cards count every
     // task — matching exactly what the Tasks screen shows.
-    const [tasks, schedule, todayEntry, unreadMessages] = await Promise.all([
+    const [tasks, schedule, todayEntry, unreadMessages, monthEntries] = await Promise.all([
       Task.find({})
         .sort({ updatedAt: -1 })
         .lean(),
       Event.find({ assignee: employee.name }).sort({ createdAt: -1 }).limit(10).lean(),
       TimeEntry.findOne({ employee: employee.name, date: { $gte: start, $lte: end } }).sort({ createdAt: -1 }).lean(),
       Message.countDocuments({ type: "direct", recipient: employee.name, status: { $ne: "read" } }),
+      TimeEntry.find({ employee: employee.name, date: { $gte: startOfMonth, $lte: endOfMonth } }).lean(),
     ]);
+
+    // Calculate month hours worked
+    let hoursWorked = 0;
+    monthEntries.forEach((entry) => {
+      let hours = Number(entry.totalHours || 0);
+      if (hours === 0 && (entry.clockInAt || entry.clockIn) && !(entry.clockOutAt || entry.clockOut)) {
+        const startTime = entry.clockInAt ? new Date(entry.clockInAt).getTime() : new Date(entry.date).getTime();
+        const diffMs = Math.max(0, now.getTime() - startTime);
+        hours = Math.round((diffMs / (1000 * 60 * 60)) * 100) / 100;
+      }
+      hoursWorked += hours;
+    });
+    hoursWorked = Math.round(hoursWorked * 100) / 100;
+
+    // Calculate current month earnings based on employee salary (payRate) & payType
+    const payRateVal = Number(String(employee.payRate || "0").replace(/[^0-9.]/g, "")) || 0;
+    const isMonthly = employee.payType === "monthly";
+
+    let earnings = 0;
+    if (isMonthly) {
+      const hourlyEquivalent = payRateVal / 160;
+      const regularHours = Math.min(hoursWorked, 160);
+      const overtimeHours = Math.max(0, hoursWorked - 160);
+      const regularPay = regularHours * hourlyEquivalent;
+      const overtimePay = overtimeHours * (hourlyEquivalent * 1.5);
+      earnings = regularPay + overtimePay;
+    } else {
+      const regularHours = Math.min(hoursWorked, 160);
+      const overtimeHours = Math.max(0, hoursWorked - 160);
+      const regularPay = regularHours * payRateVal;
+      const overtimePay = overtimeHours * (payRateVal * 1.5);
+      earnings = regularPay + overtimePay;
+    }
+    earnings = Math.round(earnings * 100) / 100;
 
     const totalTasks = tasks.length;
     const completedTasks = tasks.filter((t) => String(t.status || "").toLowerCase() === "completed").length;
@@ -472,6 +511,8 @@ router.get("/me/dashboard", requireAuth, async (req, res, next) => {
 
     res.json({
       item: {
+        earnings,
+        hoursWorked,
         tasks: {
           total: totalTasks,
           completed: completedTasks,

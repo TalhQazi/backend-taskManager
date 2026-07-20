@@ -101,6 +101,12 @@ const websiteSchema = new mongoose.Schema(
     privacyPolicy: { type: String, enum: ["green", "red", "none"], default: "none" },
     seo: { type: String, enum: ["green", "red", "none"], default: "none" },
     siteMap: { type: String, enum: ["green", "red", "none"], default: "none" },
+    stripeIntegration: { type: String, enum: ["green", "red", "none"], default: "none" },
+    bugReportButton: { type: String, enum: ["green", "red", "none"], default: "none" },
+    googleMaps: { type: String, enum: ["green", "red", "none"], default: "none" },
+    appleMaps: { type: String, enum: ["green", "red", "none"], default: "none" },
+    infoEmailSetup: { type: String, enum: ["green", "red", "none"], default: "none" },
+    nathanEmailSetup: { type: String, enum: ["green", "red", "none"], default: "none" },
     // System Health Monitoring fields
     healthStatus: { type: String, enum: ["LIVE", "DEGRADED", "DOWN", "UNKNOWN"], default: "UNKNOWN" },
     lastCheckedAt: { type: Date },

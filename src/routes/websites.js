@@ -8,9 +8,43 @@ const { requireAuth } = require("../middleware/auth");
 
 const router = express.Router();
 
+const CORE_REQ_MAP = {
+  stripeIntegration: "Stripe Integration",
+  bugReportButton: "Bug Report Button",
+  googleMaps: "Google Maps",
+  appleMaps: "Apple Maps",
+  infoEmailSetup: "info@ Email Setup",
+  nathanEmailSetup: "nathan@ Email Setup",
+};
+
+async function updateAndGetWebsiteReadinessScore(websiteId) {
+  const website = await Website.findById(websiteId);
+  if (!website) return 0;
+
+  // If admin has set an explicit override reason and score, preserve override
+  if (website.overrideReason && typeof website.readinessScore === "number" && website.readinessScore >= 0) {
+    return website.readinessScore;
+  }
+
+  const totalItems = await ChecklistItem.countDocuments({ websiteId });
+  const completedItems = await ChecklistItem.countDocuments({ websiteId, status: "completed" });
+  const readinessScore = totalItems > 0 ? Math.round((completedItems / totalItems) * 100) : 0;
+
+  if (website.readinessScore !== readinessScore) {
+    website.readinessScore = readinessScore;
+    await website.save();
+  }
+
+  return readinessScore;
+}
+
 // Get all active websites - MUST come before /:id route
 router.get("/active", async (req, res, next) => {
   try {
+    const activeSites = await Website.find({ websiteType: "active" });
+    for (const w of activeSites) {
+      await updateAndGetWebsiteReadinessScore(w._id);
+    }
     const websites = await Website.find({ websiteType: "active" })
       .sort({ createdAt: -1 })
       .lean();
@@ -23,6 +57,10 @@ router.get("/active", async (req, res, next) => {
 // Get all future websites - MUST come before /:id route
 router.get("/future", async (req, res, next) => {
   try {
+    const futureSites = await Website.find({ websiteType: "future" });
+    for (const w of futureSites) {
+      await updateAndGetWebsiteReadinessScore(w._id);
+    }
     const websites = await Website.find({ websiteType: "future" })
       .sort({ createdAt: -1 })
       .lean();
@@ -62,6 +100,10 @@ router.get("/compliance/leaderboard", requireAuth, async (req, res, next) => {
 // Get overall compliance reports - MUST come before /:id
 router.get("/compliance/reports", requireAuth, async (req, res, next) => {
   try {
+    const allWebsites = await Website.find();
+    for (const w of allWebsites) {
+      await updateAndGetWebsiteReadinessScore(w._id);
+    }
     const websites = await Website.find().lean();
     const totalWebsites = websites.length;
     
@@ -134,6 +176,16 @@ router.get("/:id/compliance", requireAuth, async (req, res, next) => {
 
     let items = await ChecklistItem.find({ websiteId: website._id }).sort({ createdAt: 1 }).lean();
 
+    // Mandatory core compliance items for every website
+    const mandatoryItems = [
+      { title: "Stripe Integration", category: "Compliance & Integrations", description: "Verify active Stripe payment gateway and webhook handlers.", requiresEvidence: true },
+      { title: "Bug Report Button", category: "Compliance & Integrations", description: "Verify functional Bug Report button on the website interface.", requiresEvidence: false },
+      { title: "Google Maps", category: "Compliance & Integrations", description: "Verify Google Maps location embed or API integration.", requiresEvidence: false },
+      { title: "Apple Maps", category: "Compliance & Integrations", description: "Verify Apple Maps link or MapKit integration.", requiresEvidence: false },
+      { title: "info@ Email Setup", category: "Email & Routing", description: "Verify active info@ email account and forwarding for every active website.", requiresEvidence: true },
+      { title: "nathan@ Email Setup", category: "Email & Routing", description: "Verify active nathan@ email account and forwarding for every active website.", requiresEvidence: true },
+    ];
+
     // If no items exist, but the website has a complianceTemplate, initialize them!
     if (items.length === 0 && website.complianceTemplate) {
       const template = await ChecklistTemplate.findOne({ key: website.complianceTemplate });
@@ -171,7 +223,27 @@ router.get("/:id/compliance", requireAuth, async (req, res, next) => {
       }
     }
 
-    res.json({ items, website });
+    // Ensure all mandatory items exist for every website
+    const existingTitles = new Set(items.map(i => i.title));
+    const missingMandatory = mandatoryItems.filter(m => !existingTitles.has(m.title));
+    if (missingMandatory.length > 0) {
+      const createdMissing = await ChecklistItem.insertMany(
+        missingMandatory.map(m => ({
+          websiteId: website._id,
+          category: m.category,
+          title: m.title,
+          description: m.description,
+          requiresEvidence: m.requiresEvidence,
+          status: "pending"
+        }))
+      );
+      items = [...items, ...createdMissing.map(i => i.toObject())];
+    }
+
+    await updateAndGetWebsiteReadinessScore(website._id);
+    const updatedWebsite = await Website.findById(website._id).lean();
+
+    res.json({ items, website: updatedWebsite });
   } catch (err) {
     next(err);
   }
@@ -234,12 +306,15 @@ router.put("/:id/compliance/:itemId", requireAuth, async (req, res, next) => {
     });
     await historyLog.save();
 
+    // Sync to website core requirement field if item matches a core requirement
+    for (const [key, title] of Object.entries(CORE_REQ_MAP)) {
+      if (item.title === title) {
+        await Website.findByIdAndUpdate(item.websiteId, { [key]: item.status });
+      }
+    }
+
     // Recalculate Website Readiness Score
-    const totalItems = await ChecklistItem.countDocuments({ websiteId: item.websiteId });
-    const completedItems = await ChecklistItem.countDocuments({ websiteId: item.websiteId, status: "completed" });
-    const readinessScore = totalItems > 0 ? Math.round((completedItems / totalItems) * 100) : 0;
-    
-    await Website.findByIdAndUpdate(item.websiteId, { readinessScore });
+    const readinessScore = await updateAndGetWebsiteReadinessScore(item.websiteId);
 
     res.json({ item, readinessScore });
   } catch (err) {
@@ -349,7 +424,27 @@ router.put("/:id", requireAuth, async (req, res, next) => {
       return res.status(404).json({ error: { message: "Website not found" } });
     }
 
-    res.json({ item: website });
+    // Sync any updated core requirements to ChecklistItem collection
+    for (const [key, title] of Object.entries(CORE_REQ_MAP)) {
+      if (req.body[key] !== undefined) {
+        const itemStatus = req.body[key] === "completed" ? "completed" : "pending";
+        await ChecklistItem.findOneAndUpdate(
+          { websiteId: website._id, title },
+          { 
+            status: itemStatus, 
+            completedBy: itemStatus === "completed" ? (req.user?.username || "System") : "", 
+            completedAt: itemStatus === "completed" ? new Date() : undefined 
+          },
+          { upsert: true }
+        );
+      }
+    }
+
+    // Recalculate readiness score
+    await updateAndGetWebsiteReadinessScore(website._id);
+    const updatedWebsite = await Website.findById(website._id).lean();
+
+    res.json({ item: updatedWebsite });
   } catch (err) {
     next(err);
   }

@@ -33,7 +33,7 @@ const companyRegistrySchema = z.object({
   fein: z.string().optional().default(""),
   phone: z.string().optional().default(""),
   email: z.string().optional().default(""),
-  status: z.enum(["active", "hold", "archived"]).optional().default("active"),
+  status: z.enum(["active", "inactive", "hold", "archived"]).optional().default("active"),
   notes: z.string().optional().default(""),
   colorTag: z.enum(["green", "blue", "yellow", "red", "gray"]).optional().default("blue"),
   attachments: z.array(z.object({

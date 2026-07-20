@@ -142,11 +142,14 @@ function buildMatchQuery(req) {
   if (tabKey === "important") match.priority = { $in: ["high", "critical"] };
   if (tabKey === "archived") match.status = "archived";
   if (tabKey === "emergency") match.emergency = true;
-  if (tabKey === "active" || tabKey === "all" || tabKey === "mine" || tabKey === "unread") {
+  if (tabKey === "active") {
+    if (!status) match.status = { $in: ["active", "scheduled"] };
+  } else if (tabKey === "mine" || tabKey === "unread") {
     if (!status && tabKey !== "archived") {
       match.status = { $in: ["active", "scheduled"] };
     }
   }
+  // tabKey === "all" leaves match.status open so all announcements remain visible until deleted
 
   // Target hints for listing (optional): narrow by location/team label on targetSummary
   const locRx =
@@ -539,6 +542,15 @@ router.post("/", requireAuth, async (req, res) => {
         ? "Everyone"
         : targets.map((t) => t.targetLabel || t.targetId || t.targetType).join(", ");
 
+    const parseValidDate = (val) => {
+      if (!val) return null;
+      const d = new Date(val);
+      return isNaN(d.getTime()) ? null : d;
+    };
+
+    const scheduledDate = parseValidDate(scheduledAt);
+    const expiresDate = parseValidDate(expiresAt);
+
     const announcement = await Announcement.create({
       title,
       body,
@@ -547,9 +559,9 @@ router.post("/", requireAuth, async (req, res) => {
       authorRole: req.user.role || "",
       priority,
       category,
-      status: scheduledAt ? "scheduled" : status,
-      scheduledAt: scheduledAt ? new Date(scheduledAt) : null,
-      expiresAt: expiresAt ? new Date(expiresAt) : null,
+      status: scheduledDate ? "scheduled" : status,
+      scheduledAt: scheduledDate,
+      expiresAt: expiresDate,
       pinned,
       emergency,
       requiresAcknowledgement,
@@ -629,8 +641,14 @@ router.put("/:id", requireAuth, async (req, res) => {
 
     const { targets, ...rest } = req.body;
 
-    if (rest.expiresAt) rest.expiresAt = new Date(rest.expiresAt);
-    if (rest.scheduledAt) rest.scheduledAt = new Date(rest.scheduledAt);
+    const parseValidDate = (val) => {
+      if (!val) return null;
+      const d = new Date(val);
+      return isNaN(d.getTime()) ? null : d;
+    };
+
+    if (rest.expiresAt !== undefined) rest.expiresAt = parseValidDate(rest.expiresAt);
+    if (rest.scheduledAt !== undefined) rest.scheduledAt = parseValidDate(rest.scheduledAt);
     if (rest.targets !== undefined) delete rest.targets;
 
     if (targets !== undefined) {
