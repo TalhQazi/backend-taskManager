@@ -431,6 +431,19 @@ try {
 } catch (err) {
   console.error("[Knowledge Vault] failed to mount v2 API:", err.message);
 }
+
+// Task Management multi-view upgrade — additive routes for the new views.
+// Reuses existing /api/tasks; these add dependencies, capacity, saved views and
+// read-only analytics. Wrapped so a load error can't crash startup.
+try {
+  app.use("/api/task-dependencies", requireClearHire, require("./routes/taskDependencies"));
+  app.use("/api/employee-capacity", requireClearHire, require("./routes/employeeCapacity"));
+  app.use("/api/task-saved-views", requireClearHire, require("./routes/taskSavedViews"));
+  app.use("/api/task-analytics", requireClearHire, require("./routes/taskAnalytics"));
+  console.log("[Task Views] analytics/dependencies/capacity/saved-views mounted");
+} catch (err) {
+  console.error("[Task Views] failed to mount routes:", err.message);
+}
 app.use("/api/asset-library", requireClearHire, assetLibraryRoutes);
 app.use("/api/contributors", requireClearHire, contributorsRoutes);
 app.use("/api/ui-preferences", requireClearHire, uiPreferencesRoutes);

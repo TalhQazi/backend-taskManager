@@ -332,6 +332,19 @@ router.get("/", requireAuth, async (req, res, next) => {
     // 1. Accessibility: intentionally unrestricted — every role (super-admin,
     //    admin, manager, employee) sees every task.
 
+    // 1b. Optional due-date range (Calendar / Timeline views). Additive — when
+    //     both params are absent the query is unchanged.
+    const dueFromQ = String(req.query.dueFrom || "").trim();
+    const dueToQ = String(req.query.dueTo || "").trim();
+    if (dueFromQ || dueToQ) {
+      const range = {};
+      const from = new Date(dueFromQ);
+      const to = new Date(dueToQ);
+      if (dueFromQ && !isNaN(from.getTime())) range.$gte = from;
+      if (dueToQ && !isNaN(to.getTime())) range.$lte = to;
+      if (Object.keys(range).length) conditions.push({ dueDate: range });
+    }
+
     // 2. Project Filter
     if (projectIdQ) {
       if (projectIdQ === "none") {
@@ -392,7 +405,7 @@ router.get("/", requireAuth, async (req, res, next) => {
 
     const filter = conditions.length > 0 ? { $and: conditions } : {};
 
-    const cacheKey = `tasks:list:${role}:${req.user?.sub || ''}:p${page}:l${limit}:s${searchQ}:st${statusQ}:pr${priorityQ}:so${sortQ}:pid${projectIdQ}:a${assigneeQ}`;
+    const cacheKey = `tasks:list:${role}:${req.user?.sub || ''}:p${page}:l${limit}:s${searchQ}:st${statusQ}:pr${priorityQ}:so${sortQ}:pid${projectIdQ}:a${assigneeQ}:df${dueFromQ}:dt${dueToQ}`;
     const result = await cacheWrap(cacheKey, async () => {
 
       const total = await Task.countDocuments(filter);
