@@ -158,6 +158,10 @@ function withId(doc) {
     attachmentFileName: doc.attachmentFileName,
     attachmentNote: doc.attachmentNote,
     startedAt: doc.startedAt,
+    firstStartedAt: doc.firstStartedAt,
+    startedByName: doc.startedByName,
+    completedAt: doc.completedAt,
+    completedByName: doc.completedByName,
     totalTimeSpent: doc.totalTimeSpent || 0,
     executionPriority: doc.executionPriority,
   };
@@ -173,49 +177,49 @@ function normalizeAssignees(input) {
 }
 
 function canAccessTask(user, task) {
+  // Visibility is intentionally unrestricted: every role (super-admin, admin,
+  // manager, employee) can see and act on every task.
+  return true;
+  /* eslint-disable no-unreachable */
   const role = String(user?.role || "").trim().toLowerCase();
+  if (role === "super-admin" || role === "admin") return true;
   const username = String(user?.username || "").trim();
   const name = String(user?.name || "").trim();
   const fullName = String(user?.fullName || "").trim();
 
-  if (role === "super-admin" || role === "admin" || role === "manager" || role === "team-lead") return true;
-  if (role === "employee") {
-    const assignees = Array.isArray(task?.assignees) ? task.assignees : [];
+  const assignees = Array.isArray(task?.assignees) ? task.assignees : [];
+  const normalizedAssignees = [...assignees, task.assignee, task.employee, task.teamLead]
+    .filter((a) => typeof a === "string")
+    .map((a) => a.trim().toLowerCase())
+    .filter(Boolean);
 
-    const identCandidates = [username, name, fullName]
-      .map((v) => String(v || "").trim())
-      .filter(Boolean);
+  const identCandidates = [username, name, fullName]
+    .map((v) => String(v || "").trim())
+    .filter(Boolean);
 
-    if (identCandidates.length === 0) return false;
+  if (identCandidates.length === 0) return false;
 
-    const normalizedAssignees = assignees
-      .filter((a) => typeof a === "string")
-      .map((a) => a.trim().toLowerCase())
-      .filter(Boolean);
-
-    // Allow match by username OR name/fullName since admin might save either.
-    return identCandidates.some((cand) => normalizedAssignees.includes(cand.toLowerCase()));
-  }
-
-  return false;
+  return identCandidates.some((cand) =>
+    normalizedAssignees.some((a) => a.includes(cand.toLowerCase()) || cand.toLowerCase().includes(a))
+  );
 }
 
 async function canAccessTaskAsync(user, task) {
+  // Visibility is intentionally unrestricted: every role (super-admin, admin,
+  // manager, employee) can see and act on every task.
+  return true;
+  /* eslint-disable no-unreachable */
   const role = String(user?.role || "").trim().toLowerCase();
-
-  if (role === "super-admin" || role === "admin" || role === "manager" || role === "team-lead") return true;
-  if (role !== "employee") return false;
+  if (role === "super-admin" || role === "admin") return true;
 
   const legacyAssignee = typeof task?.assignee === "string" ? task.assignee : "";
   const legacyEmployee = typeof task?.employee === "string" ? task.employee : "";
 
   const assignees = Array.isArray(task?.assignees) ? task.assignees : [];
-  const normalizedAssignees = [...assignees, legacyAssignee, legacyEmployee]
+  const normalizedAssignees = [...assignees, legacyAssignee, legacyEmployee, task.teamLead]
     .filter((a) => typeof a === "string")
     .map((a) => a.trim().toLowerCase())
     .filter(Boolean);
-
-  if (normalizedAssignees.length === 0) return false;
 
   const candidates = [];
   const pushCandidate = (v) => {
@@ -260,13 +264,27 @@ async function canAccessTaskAsync(user, task) {
 
   if (allCandidates.length === 0) return false;
 
-  // Exact match
+  // Exact or fuzzy match against task assignees
   if (allCandidates.some((c) => normalizedAssignees.includes(c))) return true;
+  if (allCandidates.some((c) => normalizedAssignees.some((a) => a.includes(c) || c.includes(a)))) return true;
 
-  // Fuzzy match: allow partial contains in either direction (handles "ali raza" vs "ali")
-  return allCandidates.some((c) =>
-    normalizedAssignees.some((a) => a.includes(c) || c.includes(a)),
-  );
+  // Check project assignment/lead access
+  if (task.projectId) {
+    try {
+      const project = await Project.findById(task.projectId).lean();
+      if (project) {
+        const isProjectAssignee = (project.assignees || []).some(
+          (a) => allCandidates.includes(a.toLowerCase())
+        );
+        const isProjectLead = allCandidates.includes((project.teamLead || "").toLowerCase());
+        if (isProjectAssignee || isProjectLead) return true;
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  return false;
 }
 
 // Helper to log activity
@@ -312,38 +330,20 @@ router.get("/", requireAuth, async (req, res, next) => {
     const fullName = String(req.user?.fullName || "").trim();
     const candidates = [username, name, fullName].filter(Boolean);
 
-    // 1. Accessibility Filter for Employees and Managers
-    // Managers should only see tasks where they are the teamLead or assigned to them
-    if (role !== "admin" && role !== "super-admin") {
-      if (candidates.length === 0) {
-        return res.json(paginatedResponse([], 0, page, limit));
-      }
+    // 1. Accessibility: intentionally unrestricted — every role (super-admin,
+    //    admin, manager, employee) sees every task.
 
-      // For managers and team-leads, filter by teamLead field
-      if (role === "manager" || role === "team-lead") {
-        conditions.push({
-          $or: candidates.flatMap((c) => [
-            { teamLead: { $regex: new RegExp(`^${escapeRegExp(c)}$`, "i") } },
-            { assignees: { $elemMatch: { $regex: new RegExp(`^${escapeRegExp(c)}$`, "i") } } },
-          ])
-        });
-      } else {
-        // Find projects where the user is an assignee
-        const assignedProjects = await Project.find({
-          assignees: { $elemMatch: { $regex: new RegExp(`^(${candidates.map(escapeRegExp).join("|")})$`, "i") } }
-        }).select("_id").lean();
-        const assignedProjectIds = assignedProjects.map(p => p._id);
-
-        conditions.push({
-          $or: [
-            ...candidates.flatMap((c) => [
-              { assignees: { $elemMatch: { $regex: new RegExp(`^${escapeRegExp(c)}$`, "i") } } },
-              { assignee: { $regex: new RegExp(`^${escapeRegExp(c)}$`, "i") } }, // Legacy
-            ]),
-            { projectId: { $in: assignedProjectIds } }
-          ]
-        });
-      }
+    // 1b. Optional due-date range (Calendar / Timeline views). Additive — when
+    //     both params are absent the query is unchanged.
+    const dueFromQ = String(req.query.dueFrom || "").trim();
+    const dueToQ = String(req.query.dueTo || "").trim();
+    if (dueFromQ || dueToQ) {
+      const range = {};
+      const from = new Date(dueFromQ);
+      const to = new Date(dueToQ);
+      if (dueFromQ && !isNaN(from.getTime())) range.$gte = from;
+      if (dueToQ && !isNaN(to.getTime())) range.$lte = to;
+      if (Object.keys(range).length) conditions.push({ dueDate: range });
     }
 
     // 2. Project Filter
@@ -406,7 +406,7 @@ router.get("/", requireAuth, async (req, res, next) => {
 
     const filter = conditions.length > 0 ? { $and: conditions } : {};
 
-    const cacheKey = `tasks:list:${role}:${req.user?.sub || ''}:p${page}:l${limit}:s${searchQ}:st${statusQ}:pr${priorityQ}:so${sortQ}:pid${projectIdQ}:a${assigneeQ}`;
+    const cacheKey = `tasks:list:${role}:${req.user?.sub || ''}:p${page}:l${limit}:s${searchQ}:st${statusQ}:pr${priorityQ}:so${sortQ}:pid${projectIdQ}:a${assigneeQ}:df${dueFromQ}:dt${dueToQ}`;
     const result = await cacheWrap(cacheKey, async () => {
 
       const total = await Task.countDocuments(filter);
@@ -670,8 +670,23 @@ router.post("/", requireAuth, async (req, res, next) => {
     const lastTask = await Task.findOne().sort({ taskNumber: -1 }).select("taskNumber").lean();
     const nextTaskNumber = (lastTask?.taskNumber || 0) + 1;
 
+    // Seed timer fields when a task is created directly in a started/closed state,
+    // so the timeline can show an accurate start time and running duration.
+    const actorName = String(req.user?.name || req.user?.username || "Unknown");
+    const timerFields = {};
+    if (data.status === "in-progress") {
+      const now = new Date();
+      timerFields.startedAt = now;
+      timerFields.firstStartedAt = now;
+      timerFields.startedByName = actorName;
+    } else if (data.status === "completed") {
+      timerFields.completedAt = new Date();
+      timerFields.completedByName = actorName;
+    }
+
     const created = await Task.create({
       ...data,
+      ...timerFields,
       taskNumber: nextTaskNumber,
       createdAt,
       dueDate,
@@ -1649,9 +1664,13 @@ router.put("/:id", requireAuth, async (req, res, next) => {
       const existing = await Task.findById(req.params.id).select("status firstStartedAt").lean();
       if (existing) {
         const actorName = String(req.user?.name || req.user?.username || "Unknown");
-        if (patch.status === "in-progress" && !existing.firstStartedAt) {
-          patch.firstStartedAt = new Date();
-          patch.startedByName = actorName;
+        if (patch.status === "in-progress" && existing.status !== "in-progress") {
+          patch.startedAt = new Date();
+          // Permanent "first started" history — only set once
+          if (!existing.firstStartedAt) {
+            patch.firstStartedAt = new Date();
+            patch.startedByName = actorName;
+          }
         }
         if (patch.status === "completed" && existing.status !== "completed") {
           patch.completedAt = new Date();

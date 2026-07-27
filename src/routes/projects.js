@@ -316,44 +316,12 @@ router.get("/", requireAuth, async (req, res, next) => {
 
     const matchStages = [];
 
-    if (role !== "admin" && role !== "super-admin") {
-      const username = String(req.user?.username || "").trim();
-      const name = String(req.user?.name || "").trim();
-      const candidates = [username, name].filter(Boolean);
+    const username = String(req.user?.username || "").trim();
+    const name = String(req.user?.name || "").trim();
+    const candidates = [username, name].filter(Boolean);
 
-      if (candidates.length === 0) {
-        return res.json(paginatedResponse([], 0, page, limit));
-      }
-
-      // For managers and team-leads, filter by teamLead field
-      if (role === "manager" || role === "team-lead") {
-        const regexes = candidates.map((c) => new RegExp(`^${escapeRegExp(c)}$`, "i"));
-        matchStages.push({
-          $match: {
-            $or: [
-              { teamLead: { $in: regexes } },
-              { assignees: { $elemMatch: { $in: regexes } } }
-            ]
-          }
-        });
-      } else {
-        const regexes = candidates.map((c) => new RegExp(`^${escapeRegExp(c)}$`, "i"));
-        const taskProjectIds = await Task.distinct("projectId", {
-          $or: [
-            { assignee: { $in: regexes } },
-            { assignees: { $elemMatch: { $in: regexes } } }
-          ]
-        });
-        matchStages.push({
-          $match: {
-            $or: [
-              { assignees: { $elemMatch: { $in: regexes } } },
-              { _id: { $in: taskProjectIds } }
-            ]
-          }
-        });
-      }
-    }
+    // Accessibility: intentionally unrestricted — every role (super-admin,
+    // admin, manager, employee) sees every project.
 
     if (searchQ) {
       const searchRegex = new RegExp(escapeRegExp(searchQ), "i");
@@ -599,6 +567,12 @@ router.get("/:id", requireAuth, async (req, res, next) => {
                   dueTime: 1,
                   location: 1,
                   createdAt: 1,
+                  startedAt: 1,
+                  firstStartedAt: 1,
+                  startedByName: 1,
+                  completedAt: 1,
+                  completedByName: 1,
+                  totalTimeSpent: 1,
                   attachmentFileName: 1,
                   attachmentNote: 1,
                   attachment: {
@@ -722,32 +696,10 @@ router.get("/:id", requireAuth, async (req, res, next) => {
       return res.status(404).json({ error: { message: "Project not found" } });
     }
 
-    const role = String(req.user?.role || "").trim().toLowerCase();
     const cloned = JSON.parse(JSON.stringify(cached));
 
-    if (role !== "admin" && role !== "super-admin" && role !== "manager" && role !== "team-lead") {
-      const username = String(req.user?.username || "").trim().toLowerCase();
-      const name = String(req.user?.name || "").trim().toLowerCase();
-      
-      const isProjectAssignee = (cloned.assignees || []).some(
-        (a) => a.toLowerCase() === username || a.toLowerCase() === name
-      );
-
-      if (!isProjectAssignee) {
-        cloned.tasks = (cloned.tasks || []).filter((t) => {
-          const taskAssignees = (t.assignees || []).map(a => a.toLowerCase());
-          const legacyAssignee = t.assignee ? t.assignee.toLowerCase() : "";
-          return taskAssignees.includes(username) || taskAssignees.includes(name) || legacyAssignee === username || legacyAssignee === name;
-        });
-
-        if (cloned.tasks.length === 0) {
-          return res.status(403).json({ error: { message: "Access denied to this project" } });
-        }
-        
-        cloned.taskCount = cloned.tasks.length;
-      }
-    }
-
+    // Accessibility: intentionally unrestricted — every role (super-admin,
+    // admin, manager, employee) can see every project and all its tasks without limitation.
     return res.json({ item: cloned });
   } catch (err) {
     return next(err);
@@ -896,6 +848,41 @@ router.put("/:id", requireAuth, async (req, res, next) => {
     return res.json({ item: withId(updated) });
   } catch (err) {
     console.error("Project Update Error:", err);
+    return next(err);
+  }
+});
+
+// Close project & all associated tasks endpoint (accessible to all roles: admin, manager, employee)
+router.post("/:id/close", requireAuth, async (req, res, next) => {
+  try {
+    const project = await Project.findById(req.params.id);
+    if (!project) {
+      return res.status(404).json({ error: { message: "Project not found" } });
+    }
+
+    const actorName = String(req.user?.name || req.user?.username || "Unknown");
+    const now = new Date();
+
+    // Mark all tasks under this project as completed
+    await Task.updateMany(
+      { projectId: project._id },
+      { $set: { status: "completed", completedAt: now, completedByName: actorName } }
+    );
+
+    void cacheDel(`project:${req.params.id}`);
+    void cacheDel("tasks:list:*");
+
+    await logActivity(
+      req,
+      "PROJECT_CLOSE",
+      "project",
+      project._id,
+      project.name,
+      `Closed project and all associated tasks: ${project.name}`
+    );
+
+    return res.json({ ok: true, message: "Project and all associated tasks marked as completed" });
+  } catch (err) {
     return next(err);
   }
 });

@@ -58,9 +58,9 @@ function requireRole(roles) {
  */
 function requireClearHire(req, res, next) {
   const proceed = () => {
-    // Exempt admin roles — they manage the system
+    // Exempt super-admin roles — they manage the system
     const role = req.user?.role;
-    if (["super-admin", "admin"].includes(role)) {
+    if (["super-admin"].includes(role)) {
       return next();
     }
 
@@ -69,56 +69,70 @@ function requireClearHire(req, res, next) {
       return res.status(401).json({ error: { message: "Unauthorized" } });
     }
 
-    const Onboarding = require("../models/Onboarding");
-    Onboarding.findOne({ userId })
-      .select("overallStatus")
+    const Employee = require("../models/Employee");
+    Employee.findById(userId)
+      .select("onboardingRequired")
       .lean()
-      .then((onb) => {
-        // If onboarding is approved, let them through directly!
-        if (onb && onb.overallStatus === "approved") {
+      .then((emp) => {
+        if (emp && emp.onboardingRequired === false) {
           return next();
         }
 
-        // Otherwise, enforce ClearHire gates
-        ClearHireProfile.findOne({ userId })
-          .select("status")
+        const Onboarding = require("../models/Onboarding");
+        Onboarding.findOne({ userId })
+          .select("overallStatus")
           .lean()
-          .then((profile) => {
-            if (!profile) {
-              return res.status(403).json({
-                error: {
-                  message: "Background check not completed. Please contact your administrator.",
-                  code: "CLEARHIRE_NOT_FOUND",
-                },
-              });
-            }
-
-            if (profile.status === "GREEN") {
+          .then((onb) => {
+            // If onboarding is approved, let them through directly!
+            if (onb && onb.overallStatus === "approved") {
               return next();
             }
 
-            const messages = {
-              PENDING: "Background check is in progress. Please wait.",
-              YELLOW: "Your account is under review. Awaiting admin approval.",
-              RED: "Access denied. Background check failed.",
-            };
+            // Otherwise, enforce ClearHire gates
+            ClearHireProfile.findOne({ userId })
+              .select("status")
+              .lean()
+              .then((profile) => {
+                if (!profile) {
+                  return res.status(403).json({
+                    error: {
+                      message: "Background check not completed. Please contact your administrator.",
+                      code: "CLEARHIRE_NOT_FOUND",
+                    },
+                  });
+                }
 
-            return res.status(403).json({
-              error: {
-                message: messages[profile.status] || "Access denied.",
-                code: `CLEARHIRE_${profile.status}`,
-                clearHireStatus: profile.status,
-              },
-            });
+                if (profile.status === "GREEN") {
+                  return next();
+                }
+
+                const messages = {
+                  PENDING: "Background check is in progress. Please wait.",
+                  YELLOW: "Your account is under review. Awaiting admin approval.",
+                  RED: "Access denied. Background check failed.",
+                };
+
+                return res.status(403).json({
+                  error: {
+                    message: messages[profile.status] || "Access denied.",
+                    code: `CLEARHIRE_${profile.status}`,
+                    clearHireStatus: profile.status,
+                  },
+                });
+              })
+              .catch((err) => {
+                console.error("[ClearHire Middleware] Error:", err.message);
+                // Fail open for DB errors — don't lock everyone out if DB hiccups
+                return next();
+              });
           })
           .catch((err) => {
-            console.error("[ClearHire Middleware] Error:", err.message);
-            // Fail open for DB errors — don't lock everyone out if DB hiccups
+            console.error("[Onboarding Check Middleware] Error:", err.message);
             return next();
           });
       })
       .catch((err) => {
-        console.error("[Onboarding Check Middleware] Error:", err.message);
+        console.error("[Employee Lookup in Middleware] Error:", err.message);
         return next();
       });
   };

@@ -13,6 +13,7 @@ const TenantSchema = new mongoose.Schema(
     assignedProperty: { type: String },
     assignedUnit: { type: String },
     locationName: { type: String },
+    address: { type: String },
   },
   { timestamps: true }
 );

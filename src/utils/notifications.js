@@ -65,27 +65,125 @@ async function createNotification({
     if (details) content += ` (${details})`;
 
     // Build targeted recipient set based on category
-    const targetSet = new Set();
+    const rawTargetSet = new Set();
 
     if (derivedCategory === "MENTIONED" || derivedCategory === "COMMENT_ADDED") {
       // Notify only the people directly involved — NOT all admins/managers
-      if (actor) targetSet.add(String(actor).trim());
+      if (actor) rawTargetSet.add(String(actor).trim());
       (Array.isArray(assignees) ? assignees : []).forEach((a) => {
-        if (a) targetSet.add(String(a).trim());
+        if (a) rawTargetSet.add(String(a).trim());
       });
     } else {
       // TASK_ASSIGNED, PROJECT_ASSIGNED, TASK_COMPLETED
-      // Admins and managers need to see these business-level events
-      targetSet.add("super-admin");
-      targetSet.add("admin");
-      targetSet.add("manager");
-      if (actor) targetSet.add(String(actor).trim());
+      // Find all active employees with these roles
+      const Employee = require("../models/Employee");
+      const targetRoles = ["super-admin", "admin", "manager"];
+      try {
+        const managersAndAdmins = await Employee.find({
+          status: "active",
+          userRole: { $in: targetRoles }
+        }).select("email name").lean();
+        
+        managersAndAdmins.forEach(u => {
+          if (u.email) rawTargetSet.add(String(u.email).trim());
+          if (u.name) rawTargetSet.add(String(u.name).trim());
+        });
+      } catch (err) {
+        console.error("Failed to query managers and admins for notification:", err);
+      }
+
+      if (actor) rawTargetSet.add(String(actor).trim());
       (Array.isArray(assignees) ? assignees : []).forEach((a) => {
-        if (a) targetSet.add(String(a).trim());
+        if (a) rawTargetSet.add(String(a).trim());
       });
     }
 
+    // Filter recipients based on their Settings webPreferences
+    const Settings = require("../models/Settings");
+    const User = require("../models/User");
+    const Employee = require("../models/Employee");
+
+    const targetSet = new Set();
+    const map = {
+      TASK_ASSIGNED: "taskAssignment",
+      PROJECT_ASSIGNED: "projectAssignment",
+      TASK_COMPLETED: "taskCompleted",
+      MENTIONED: "replyAdded",
+      COMMENT_ADDED: "commentAdded",
+      EOD_MISS_ALERT: "eodMissAlert",
+      EOD_COMMENT: "eodComment",
+      LUNCH_BREAK_ALERT: "lunchBreakAlert",
+    };
+    const prefKey = map[derivedCategory] || "systemAlert";
+
+    function escapeRegex(string) {
+      return string ? String(string).replace(/[/\-\\^$*+?.()|[\]{}]/g, '\\$&') : '';
+    }
+
+    for (const target of rawTargetSet) {
+      try {
+        let emp = await Employee.findOne({
+          $or: [
+            { email: new RegExp(`^${escapeRegex(target)}$`, "i") },
+            { name: new RegExp(`^${escapeRegex(target)}$`, "i") }
+          ]
+        });
+
+        if (!emp) {
+          try {
+            emp = await Employee.findById(target);
+          } catch (_) {
+            /* not an ObjectId */
+          }
+        }
+
+        if (!emp) {
+          // Fallback to User
+          let user = await User.findOne({ username: target });
+          if (!user) {
+            user = await User.findOne({ name: target });
+          }
+          if (!user) {
+            user = await User.findOne({ email: target });
+          }
+          if (!user) {
+            try {
+              user = await User.findById(target);
+            } catch (_) {
+              /* not an ObjectId */
+            }
+          }
+
+          if (user) {
+            emp = await Employee.findOne({
+              $or: [
+                { email: new RegExp(`^${escapeRegex(user.email)}$`, "i") },
+                { name: new RegExp(`^${escapeRegex(user.name || user.username)}$`, "i") }
+              ]
+            });
+          }
+        }
+
+        if (emp) {
+          const settings = await Settings.findOne({ userId: String(emp._id) });
+          const isWebEnabled = settings && settings.webPreferences ? settings.webPreferences[prefKey] : true;
+          if (isWebEnabled !== false) {
+            targetSet.add(target);
+          }
+        } else {
+          targetSet.add(target);
+        }
+      } catch (err) {
+        console.error(`Error checking web preference for target ${target}:`, err);
+        targetSet.add(target);
+      }
+    }
+
     const recipient = Array.from(targetSet).join(",");
+    if (!recipient) {
+      console.log("No recipients remaining for in-app notification after filtering preferences.");
+      return null;
+    }
 
     // Leave meta.link empty for task/project — each panel's frontend computes
     // the correct route from resourceType + resourceId (avoids hardcoding /admin/ paths).

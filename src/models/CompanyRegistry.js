@@ -7,7 +7,7 @@ const companyRegistrySchema = new mongoose.Schema(
     fein: { type: String, default: "" },
     phone: { type: String, default: "" },
     email: { type: String, default: "" },
-    status: { type: String, enum: ["active", "hold", "archived"], default: "active" },
+    status: { type: String, enum: ["active", "inactive", "hold", "archived"], default: "active" },
     notes: { type: String, default: "" },
     attachments: {
       type: [

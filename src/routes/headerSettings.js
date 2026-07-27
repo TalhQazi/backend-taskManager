@@ -2,6 +2,7 @@ const express = require("express");
 const HeaderSettings = require("../models/HeaderSettings");
 const { requireAuth } = require("../middleware/auth");
 const { getResolvedHolidayTheme } = require("../utils/holidayEngine");
+const { base64ToBuffer, uploadToS3 } = require("../lib/s3");
 
 const router = express.Router();
 
@@ -70,8 +71,17 @@ router.put("/", requireAuth, async (req, res, next) => {
     }
 
     if (updateData.imageConfig) {
-      // Only store dataUrl once (url is redundant and doubles the size)
-      if (updateData.imageConfig.dataUrl) {
+      if (updateData.imageConfig.dataUrl && updateData.imageConfig.dataUrl.startsWith("data:")) {
+        try {
+          const { buffer, mimeType } = base64ToBuffer(updateData.imageConfig.dataUrl);
+          const savedUrl = await uploadToS3(buffer, "header-cover.jpg", mimeType, "headers");
+          $set["imageConfig.dataUrl"] = savedUrl;
+          $set["imageConfig.url"] = savedUrl;
+        } catch (err) {
+          console.error("[HeaderSettings] Failed to save custom header image:", err);
+          return res.status(400).json({ error: { message: "Failed to upload header image" } });
+        }
+      } else if (updateData.imageConfig.dataUrl) {
         $set["imageConfig.dataUrl"] = updateData.imageConfig.dataUrl;
         $set["imageConfig.url"] = updateData.imageConfig.dataUrl;
       } else if (updateData.imageConfig.url) {

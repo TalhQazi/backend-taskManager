@@ -501,6 +501,49 @@ router.post("/", requireAuth, async (req, res, next) => {
   }
 });
 
+// Toggle the current user's emoji reaction on a message.
+// Adding the same emoji twice removes it (Slack-style, multiple emojis allowed per user).
+router.post("/:id/react", requireAuth, async (req, res, next) => {
+  try {
+    const schema = z.object({
+      emoji: z.string().min(1).max(16),
+      // Display name of the reacting user (sockets and messages are keyed by display name)
+      username: z.string().min(1).max(120).optional(),
+    });
+    const parsed = schema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: { message: "Invalid payload" } });
+
+    const username = String(
+      parsed.data.username || req.user?.name || req.user?.username || ""
+    ).trim();
+    if (!username) return res.status(400).json({ error: { message: "Cannot identify user" } });
+
+    const message = await Message.findById(req.params.id);
+    if (!message) return res.status(404).json({ error: { message: "Message not found" } });
+
+    const { emoji } = parsed.data;
+    const existingIdx = (message.reactions || []).findIndex(
+      (r) => r.emoji === emoji && r.username === username
+    );
+    if (existingIdx >= 0) {
+      message.reactions.splice(existingIdx, 1);
+    } else {
+      message.reactions.push({ emoji, username });
+    }
+    await message.save();
+
+    const reactions = message.reactions.map((r) => ({ emoji: r.emoji, username: r.username }));
+    const io = global.io;
+    if (io) {
+      io.emit("message-reaction", { messageId: String(message._id), reactions });
+    }
+
+    return res.json({ messageId: String(message._id), reactions });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // Mark a single broadcast notification as read for the current user
 router.post("/:id/mark-read", requireAuth, async (req, res, next) => {
   try {

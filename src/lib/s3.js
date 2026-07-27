@@ -45,36 +45,7 @@ const getMimeType = (filePath) => {
  * @returns {Promise<string>} - The S3 URL or local relative URL of the uploaded file
  */
 async function uploadToS3(buffer, originalName, mimeType, folder = "uploads") {
-  const fileExtension = path.extname(originalName);
-  const uniqueName = `${Date.now()}-${Math.random().toString(36).substring(2, 9)}${fileExtension}`;
-  const fileKey = `${folder}/${uniqueName}`;
-
-  if (!hasAwsConfig) {
-    console.log(`[File System] Saving upload locally (S3 keys missing): ${fileKey}`);
-    const destPath = path.join(__dirname, "../../uploads", folder, uniqueName);
-    
-    await fs.promises.mkdir(path.dirname(destPath), { recursive: true });
-    await fs.promises.writeFile(destPath, buffer);
-    
-    // Return relative URL for static Express serving
-    return `/uploads/${folder}/${uniqueName}`;
-  }
-
-  const bucketName = process.env.AWS_S3_BUCKET_NAME || process.env.AWS_S3_BUCKET;
-  if (!bucketName) {
-    throw new Error("AWS S3 bucket name missing in environment variables");
-  }
-
-  const command = new PutObjectCommand({
-    Bucket: bucketName,
-    Key: fileKey,
-    Body: buffer,
-    ContentType: mimeType,
-  });
-
-  await s3Client.send(command);
-
-  return `https://${bucketName}.s3.${process.env.AWS_REGION || "us-east-1"}.amazonaws.com/${fileKey}`;
+  return saveToServer(buffer, originalName, mimeType, folder);
 }
 
 /**

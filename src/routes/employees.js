@@ -86,6 +86,7 @@ const createSchema = z.object({
   userRole: z.string().optional().default(""),
   userStatus: z.string().optional().default("active"),
   password: z.string().optional(),
+  onboardingRequired: z.boolean().optional(),
 });
 
 const updateSchema = createSchema
@@ -421,14 +422,16 @@ router.post("/me/clock-in", requireAuth, async (req, res, next) => {
     const { employee, user } = ctx;
 
     // Check onboarding status
-    const Onboarding = require("../models/Onboarding");
-    const onboarding = await Onboarding.findOne({ userId: user._id });
-    if (!onboarding || onboarding.overallStatus !== "approved") {
-      return res.status(403).json({
-        error: {
-          message: "Complete onboarding and receive admin approval before clocking in",
-        },
-      });
+    if (employee.onboardingRequired !== false) {
+      const Onboarding = require("../models/Onboarding");
+      const onboarding = await Onboarding.findOne({ userId: user._id });
+      if (!onboarding || onboarding.overallStatus !== "approved") {
+        return res.status(403).json({
+          error: {
+            message: "Complete onboarding and receive admin approval before clocking in",
+          },
+        });
+      }
     }
 
     const { start, end } = getDayRange(new Date());
@@ -520,21 +523,56 @@ router.get("/me/dashboardddd", requireAuth, async (req, res, next) => {
 
     const { start, end } = getDayRange(new Date());
 
-    const [tasks, schedule, todayEntry, unreadMessages] = await Promise.all([
-      Task.find({
-        $or: [
-          { assignees: { $in: candidates } },
-          { assignees: { $in: candidateRegexes } },
-          { assignee: { $in: candidates } },
-          { assignee: { $in: candidateRegexes } },
-        ],
-      })
+    const now = new Date();
+    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0);
+    const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
+
+    // Mirror the task-list accessibility scope (see routes/tasks.js): task
+    // visibility is intentionally unrestricted, so the stat cards count every
+    // task — matching exactly what the Tasks screen shows.
+    const [tasks, schedule, todayEntry, unreadMessages, monthEntries] = await Promise.all([
+      Task.find({})
         .sort({ updatedAt: -1 })
         .lean(),
       Event.find({ assignee: employee.name }).sort({ createdAt: -1 }).limit(10).lean(),
       TimeEntry.findOne({ employee: employee.name, date: { $gte: start, $lte: end } }).sort({ createdAt: -1 }).lean(),
       Message.countDocuments({ type: "direct", recipient: employee.name, status: { $ne: "read" } }),
+      TimeEntry.find({ employee: employee.name, date: { $gte: startOfMonth, $lte: endOfMonth } }).lean(),
     ]);
+
+    // Calculate month hours worked
+    let hoursWorked = 0;
+    monthEntries.forEach((entry) => {
+      let hours = Number(entry.totalHours || 0);
+      if (hours === 0 && (entry.clockInAt || entry.clockIn) && !(entry.clockOutAt || entry.clockOut)) {
+        const startTime = entry.clockInAt ? new Date(entry.clockInAt).getTime() : new Date(entry.date).getTime();
+        const diffMs = Math.max(0, now.getTime() - startTime);
+        hours = Math.round((diffMs / (1000 * 60 * 60)) * 100) / 100;
+      }
+      hoursWorked += hours;
+    });
+    hoursWorked = Math.round(hoursWorked * 100) / 100;
+
+    // Calculate current month earnings based on employee salary (payRate) & payType
+    const payRateVal = Number(String(employee.payRate || "0").replace(/[^0-9.]/g, "")) || 0;
+    const isMonthly = employee.payType === "monthly";
+
+    let earnings = 0;
+    if (isMonthly) {
+      const hourlyEquivalent = payRateVal / 160;
+      const regularHours = Math.min(hoursWorked, 160);
+      const overtimeHours = Math.max(0, hoursWorked - 160);
+      const regularPay = regularHours * hourlyEquivalent;
+      const overtimePay = overtimeHours * (hourlyEquivalent * 1.5);
+      earnings = regularPay + overtimePay;
+    } else {
+      const regularHours = Math.min(hoursWorked, 160);
+      const overtimeHours = Math.max(0, hoursWorked - 160);
+      const regularPay = regularHours * payRateVal;
+      const overtimePay = overtimeHours * (payRateVal * 1.5);
+      earnings = regularPay + overtimePay;
+    }
+    earnings = Math.round(earnings * 100) / 100;
 
     const totalTasks = tasks.length;
     const completedTasks = tasks.filter((t) => String(t.status || "").toLowerCase() === "completed").length;
@@ -543,6 +581,8 @@ router.get("/me/dashboardddd", requireAuth, async (req, res, next) => {
 
     res.json({
       item: {
+        earnings,
+        hoursWorked,
         tasks: {
           total: totalTasks,
           completed: completedTasks,
@@ -840,7 +880,8 @@ router.post("/", requireAuth, async (req, res, next) => {
       passwordHash,
     });
 
-const obj = created.toObject();
+    const obj = created.toObject();
+    const { sendSystemEmail } = require("../lib/email");
     
     // Fire-and-forget side effects
     Promise.allSettled([
@@ -854,6 +895,13 @@ const obj = created.toObject();
         resourceId: String(created._id),
       }),
       cacheDel("employees:list"),
+      created.email
+        ? sendSystemEmail({
+            to: created.email,
+            templateKey: created.userRole === "manager" ? "managerRegistration" : "userRegistration",
+            variables: { name: created.name },
+          }).catch((err) => console.error("Welcome email failed:", err))
+        : Promise.resolve(),
     ]).catch(() => {});
     
     return res.status(201).json({ item: withId(obj) });
@@ -965,11 +1013,28 @@ async function archiveEmployeeById(employeeId, archivedBy) {
       const Project = require('../models/Project');
       const targets = [employee.name, employee.email].filter(Boolean);
       if (targets.length > 0) {
-        if (Task) await Task.updateMany({ assignees: { $in: targets } }, { $pull: { assignees: { $in: targets } } });
-        if (Project) await Project.updateMany({ assignees: { $in: targets } }, { $pull: { assignees: { $in: targets } } });
+        if (Task) {
+          const pullResult = await Task.updateMany(
+            { assignees: { $in: targets } },
+            { $pull: { assignees: { $in: targets } } }
+          );
+          const clearAssigneeResult = await Task.updateMany(
+            { assignee: { $in: targets } },
+            { $set: { assignee: "" } }
+          );
+          const clearEmployeeResult = await Task.updateMany(
+            { employee: { $in: targets } },
+            { $set: { employee: "" } }
+          );
+          console.log(`[Archive Cleanup] Pulled targets from task assignees and cleared single assignee/employee fields.`);
+        }
+        if (Project) {
+          await Project.updateMany({ assignees: { $in: targets } }, { $pull: { assignees: { $in: targets } } });
+          await Project.updateMany({ teamLead: { $in: targets } }, { $set: { teamLead: "" } });
+        }
       }
     } catch (err) {
-      console.error('Failed to unassign employee', err);
+      console.error('Failed to clean up tasks/projects for archived employee', err);
     }
 
   await Employee.findByIdAndDelete(employeeId);
@@ -1553,12 +1618,18 @@ router.get("/me/eod-reports", requireAuth, async (req, res, next) => {
   try {
     const ctx = await requireEmployeeSelf(req, res);
     if (!ctx) return;
-    const { user } = ctx;
+    const { employee, user } = ctx;
 
     const { from, to, page = 1, limit = 50 } = req.query;
     const skip = (Number(page) - 1) * Number(limit);
 
-    const matchStage = { userId: String(user._id) };
+    const matchStage = {
+      $or: [
+        { userId: String(user._id) },
+        { employeeId: String(employee._id) },
+        { employeeName: new RegExp(`^${employee.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i") },
+      ]
+    };
 
     // Date range filter
     if (from || to) {
@@ -1576,16 +1647,53 @@ router.get("/me/eod-reports", requireAuth, async (req, res, next) => {
       EODReport.countDocuments(matchStage),
     ]);
 
-    const items = reports.map((report) => ({
-      id: String(report._id),
-      userId: report.userId,
-      employeeName: report.employeeName,
-      date: report.date,
-      rawInput: report.rawInput,
-      inputType: report.inputType,
-      status: report.status,
-      createdAt: report.updatedAt || report.createdAt,
-    }));
+    const timeEntryIds = reports.map((r) => r.timeEntryId).filter(Boolean);
+    const orConditions = [{ employee: employee.name }];
+    if (timeEntryIds.length > 0) {
+      orConditions.push({ _id: { $in: timeEntryIds } });
+    }
+    const timeEntries = await TimeEntry.find({ $or: orConditions }).lean();
+
+    const timeEntryById = new Map(timeEntries.map((te) => [String(te._id), te]));
+    const timeEntryByDate = new Map();
+    timeEntries.forEach((te) => {
+      if (te.date) {
+        const dateKey = new Date(te.date).toISOString().slice(0, 10);
+        timeEntryByDate.set(dateKey, te);
+      }
+    });
+
+    const formatTime = (date) => {
+      if (!date) return undefined;
+      const d = new Date(date);
+      if (!Number.isFinite(d.getTime())) return undefined;
+      return d.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: true });
+    };
+
+    const items = reports.map((report) => {
+      let timeEntry = report.timeEntryId ? timeEntryById.get(String(report.timeEntryId)) : null;
+      if (!timeEntry && report.date) {
+        const dateKey = new Date(report.date).toISOString().slice(0, 10);
+        timeEntry = timeEntryByDate.get(dateKey);
+      }
+
+      return {
+        id: String(report._id),
+        userId: report.userId,
+        employeeName: report.employeeName,
+        date: report.date,
+        rawInput: report.rawInput,
+        inputType: report.inputType,
+        status: report.status,
+        createdAt: report.updatedAt || report.createdAt,
+        clockIn: timeEntry?.clockIn || formatTime(timeEntry?.clockInAt),
+        clockOut: timeEntry?.clockOut || formatTime(timeEntry?.clockOutAt),
+        clockInAt: timeEntry?.clockInAt || null,
+        clockOutAt: timeEntry?.clockOutAt || null,
+        totalHours: timeEntry?.totalHours,
+        comments: report.comments || [],
+      };
+    });
 
     return res.json({ items, total, page: Number(page), limit: Number(limit) });
   } catch (err) {

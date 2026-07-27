@@ -50,6 +50,8 @@ taxSettings: {
     resetPasswordCode: { type: String, default: null },
     resetPasswordExpires: { type: Date, default: null },
 
+    onboardingRequired: { type: Boolean, default: true },
+
     // Milestone fields
     lastMilestoneTriggered: { type: Date, default: null },
     milestoneLevel: { type: String, enum: ["30d", "90d", "6m", "1y", "2y", "3y", "4y", "5y", "6y", "7y", "8y", "9y", "10y"], default: null },

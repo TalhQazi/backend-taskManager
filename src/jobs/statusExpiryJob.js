@@ -1,6 +1,44 @@
 const Employee = require("../models/Employee");
 const ActivityLog = require("../models/ActivityLog");
 const { cacheDel } = require("../lib/cache");
+const { createNotification } = require("../utils/notifications");
+const { sendEmailNotification } = require("../utils/emailNotifications");
+
+async function notifyAutoExpire(employee, statusType, exceededMinutes) {
+  try {
+    const statusLabel = statusType === "LUNCH" ? "lunch" : "break";
+    const statusUpdate = `Exceeded ${statusLabel} limit (auto-expired)`;
+
+    await createNotification({
+      actor: employee.name,
+      actorRole: "employee",
+      action: `exceeded ${statusLabel} limit (auto-expired)`,
+      resourceType: "status",
+      resourceName: employee.name,
+      details: `overdue by ${exceededMinutes} minute(s)`,
+      category: "LUNCH_BREAK_ALERT",
+    });
+
+    const EmployeeModel = require("../models/Employee");
+    const activeStaff = await EmployeeModel.find({
+      status: "active",
+      userRole: { $in: ["super-admin", "admin", "manager"] }
+    }).select("email").lean();
+
+    const timeStr = new Date().toLocaleString();
+    for (const staff of activeStaff) {
+      if (staff.email) {
+        await sendEmailNotification(staff.email, "lunchBreakAlert", {
+          employeeName: employee.name,
+          statusUpdate: `${statusUpdate} (overdue by ${exceededMinutes} mins)`,
+          time: timeStr,
+        });
+      }
+    }
+  } catch (err) {
+    console.error(`Failed to send auto-expire ${statusType} notifications:`, err);
+  }
+}
 
 async function checkStatusExpiry() {
   try {
@@ -79,6 +117,7 @@ async function checkStatusExpiry() {
           lunch_expected_end: oldExpectedEnd,
         }
       });
+      void notifyAutoExpire(employee, "LUNCH", exceededMinutes);
 
       console.log(`[Status Expiry] Auto-expired lunch status for employee: ${employee.name} (exceeded by ${exceededMinutes}m)`);
     }
@@ -157,6 +196,7 @@ async function checkStatusExpiry() {
             break_start_time: oldStartTime,
           }
         });
+        await notifyAutoExpire(employee, "BREAK", exceededMinutes);
 
         console.log(`[Status Expiry] Auto-expired break status for employee: ${employee.name} (exceeded by ${exceededMinutes}m)`);
       }

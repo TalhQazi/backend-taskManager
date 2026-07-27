@@ -27,6 +27,7 @@ router.get("/incidents", healthController.getIncidents);
 // Phase 3: Server Metrics Endpoints
 router.get("/servers", healthController.getServers);
 router.get("/servers/:id/metrics", healthController.getServerMetrics);
+router.get("/servers/:id/storage-health", healthController.getStorageHealth);
 
 
 router.post("/alerts/test", healthController.testAlert);

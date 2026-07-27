@@ -25,14 +25,20 @@ router.post("/", requireAuth, async (req, res, next) => {
       return res.status(401).json({ error: { message: "User ID not found" } });
     }
 
-    const { title, content, color, isPinned } = req.body;
+    const { title, content, color, isPinned, isFavorite, folder, tags, actionItems, notesList, attachments } = req.body;
     
     const note = await Note.create({
       userId,
       title: title || "",
       content: content || "",
       color: color || "#ffffff",
-      isPinned: !!isPinned
+      isPinned: !!isPinned,
+      isFavorite: !!isFavorite,
+      folder: folder || "",
+      tags: tags || [],
+      actionItems: actionItems || [],
+      notesList: notesList || [],
+      attachments: attachments || []
     });
     
     console.log("Note created:", note._id);

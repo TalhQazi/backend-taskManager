@@ -39,6 +39,7 @@ const systemSettingsSchema = z.object({
     preAdverseAction: templateSchema.optional(),
     finalAdverseAction: templateSchema.optional(),
     patentExpiration: templateSchema.optional(),
+    lunchBreakAlert: templateSchema.optional(),
   }).optional(),
   taskRewardSystemEnabled: z.boolean().optional(),
   scheConfig: z.object({

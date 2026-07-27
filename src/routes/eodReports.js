@@ -35,7 +35,7 @@ router.get("/eod-status", requireAuth, requireRole(["manager", "admin", "super-a
 
     // Get all active employees (same fields as Employee Directory)
     const employees = await Employee.find(
-      { status: "active" },
+      { status: "active", userRole: { $ne: "super-admin" } },
       { name: 1, email: 1, _id: 1 }
     ).lean();
 
@@ -421,8 +421,8 @@ function formatTime(date) {
   return d.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: true });
 }
 
-// POST /eod-reports/:id/comments - Add comment to EOD report (manager/admin/super-admin)
-router.post("/eod-reports/:id/comments", requireAuth, requireRole(["manager", "admin", "super-admin"]), async (req, res, next) => {
+// POST /eod-reports/:id/comments - Add comment to EOD report
+router.post("/eod-reports/:id/comments", requireAuth, async (req, res, next) => {
   try {
     const { id } = req.params;
     const { message } = req.body;
@@ -439,7 +439,7 @@ router.post("/eod-reports/:id/comments", requireAuth, requireRole(["manager", "a
     const newComment = {
       authorUserId: String(req.user.sub || req.user.id || ""),
       authorName: String(req.user.name || req.user.username || "Anonymous"),
-      authorRole: String(req.user.role || ""),
+      authorRole: String(req.user.role || "employee"),
       message: message.trim(),
       createdAt: new Date(),
     };
