@@ -18,8 +18,8 @@ const upsertSchema = z.object({
   allowOverrideAdminAssignments: z.boolean().optional(),
 });
 
-// Admin-only: list mappings
-router.get("/", requireAuth, requireRole(["super-admin", "admin"]), async (req, res, next) => {
+// Admin & Manager: list mappings
+router.get("/", requireAuth, requireRole(["super-admin", "admin", "manager"]), async (req, res, next) => {
   try {
     const teamLead = String(req.query.teamLead || "").trim();
     const filter = teamLead ? { teamLead } : {};
