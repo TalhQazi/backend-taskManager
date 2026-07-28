@@ -131,7 +131,7 @@ exports.getIncidents = async (req, res) => {
 
 async function recordHostTelemetry() {
   try {
-    const hostName = `Host Server (${os.hostname() || "Primary App"})`;
+    const hostName = "Se7en";
     const totalMem = os.totalmem();
     const freeMem = os.freemem();
     const usedMem = Math.max(totalMem - freeMem, 0);
@@ -150,7 +150,7 @@ async function recordHostTelemetry() {
       }
     } catch {}
 
-    let server = await Server.findOne({ name: hostName });
+    let server = await Server.findOne({ $or: [{ name: "Se7en" }, { name: { $regex: /Host Server/i } }] });
     if (!server) {
       server = await Server.create({
         name: hostName,
@@ -160,6 +160,7 @@ async function recordHostTelemetry() {
         lastSeenAt: new Date(),
       });
     } else {
+      server.name = hostName;
       server.lastSeenAt = new Date();
       server.status = cpuUsagePercent > 90 || memoryUsagePercent > 90 ? "DEGRADED" : "LIVE";
       await server.save();
