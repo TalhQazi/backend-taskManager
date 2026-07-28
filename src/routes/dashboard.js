@@ -78,7 +78,7 @@ router.get("/summary", requireAuth, async (req, res, next) => {
       Website.countDocuments({ websiteType: "active" }),
       Website.countDocuments({ websiteType: "future" }),
       Project.countDocuments(projectFilter),
-      require("../models/BugReport").countDocuments({ status: "open" }),
+      require("../models/BugReport").countDocuments({ status: { $nin: ["CLOSED_VERIFIED", "CLOSED_ADMIN_OVERRIDE", "closed", "CLOSED"] } }),
       require("../models/Company").countDocuments({ status: "active" })
     ]);
 
