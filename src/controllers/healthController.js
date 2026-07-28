@@ -129,9 +129,66 @@ exports.getIncidents = async (req, res) => {
   }
 };
 
+async function recordHostTelemetry() {
+  try {
+    const hostName = `Host Server (${os.hostname() || "Primary App"})`;
+    const totalMem = os.totalmem();
+    const freeMem = os.freemem();
+    const usedMem = Math.max(totalMem - freeMem, 0);
+    const memoryUsagePercent = Math.round((usedMem / (totalMem || 1)) * 100);
+    const cpuUsagePercent = getCpuUsage();
+
+    let diskUsagePercent = 0;
+    try {
+      if (typeof fs.promises.statfs === "function") {
+        const targetPath = os.platform() === "win32" ? `${process.cwd().split(":")[0]}:\\` : "/";
+        const s = await fs.promises.statfs(targetPath);
+        const total = s.blocks * s.bsize;
+        const free = s.bavail * s.bsize;
+        const used = Math.max(total - free, 0);
+        diskUsagePercent = Math.round((used / (total || 1)) * 100);
+      }
+    } catch {}
+
+    let server = await Server.findOne({ name: hostName });
+    if (!server) {
+      server = await Server.create({
+        name: hostName,
+        ipAddress: "127.0.0.1 (Local Host)",
+        status: "LIVE",
+        isMonitoringEnabled: true,
+        lastSeenAt: new Date(),
+      });
+    } else {
+      server.lastSeenAt = new Date();
+      server.status = cpuUsagePercent > 90 || memoryUsagePercent > 90 ? "DEGRADED" : "LIVE";
+      await server.save();
+    }
+
+    await ServerMetric.create({
+      serverId: server._id,
+      cpuUsagePercent,
+      memoryUsagePercent,
+      diskUsagePercent,
+      networkInKBps: 0,
+      networkOutKBps: 0,
+    });
+  } catch (err) {
+    // catch telemetry errors silently
+  }
+}
+
+// Automatically record local host metrics every 60 seconds
+setInterval(recordHostTelemetry, 60000);
+setTimeout(recordHostTelemetry, 2000);
+
 exports.getServers = async (req, res) => {
   try {
-    const servers = await Server.find().sort({ name: 1 });
+    let servers = await Server.find().sort({ name: 1 });
+    if (servers.length === 0) {
+      await recordHostTelemetry();
+      servers = await Server.find().sort({ name: 1 });
+    }
     res.json({ servers });
   } catch (err) {
     console.error(err);
@@ -145,8 +202,14 @@ exports.getServerMetrics = async (req, res) => {
     const hours = parseInt(req.query.hours) || 24;
     const since = new Date(Date.now() - hours * 60 * 60 * 1000);
 
-    const metrics = await ServerMetric.find({ serverId: id, recordedAt: { $gte: since } })
+    let metrics = await ServerMetric.find({ serverId: id, recordedAt: { $gte: since } })
       .sort({ recordedAt: 1 });
+
+    if (metrics.length === 0) {
+      await recordHostTelemetry();
+      metrics = await ServerMetric.find({ serverId: id, recordedAt: { $gte: since } })
+        .sort({ recordedAt: 1 });
+    }
     
     res.json({ metrics });
   } catch (err) {
