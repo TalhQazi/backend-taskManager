@@ -90,4 +90,11 @@ const BugReportSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+BugReportSchema.index({ status: 1, lastActivity: -1 });
+BugReportSchema.index({ severity: 1, priority: 1 });
+BugReportSchema.index({ company: 1, module: 1 });
+BugReportSchema.index({ createdByUsername: 1 });
+BugReportSchema.index({ assignedDeveloperName: 1 });
+BugReportSchema.index({ createdAt: -1 });
+
 module.exports = mongoose.model("BugReport", BugReportSchema);

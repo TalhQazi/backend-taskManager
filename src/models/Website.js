@@ -93,6 +93,7 @@ const websiteSchema = new mongoose.Schema(
     readinessScore: { type: Number, default: 0 },
     overrideReason: { type: String, default: "" },
     // Core requirements checkmark fields
+    humanVerification: { type: String, enum: ["green", "red", "none"], default: "none" },
     largeHeaderImage: { type: String, enum: ["green", "red", "none"], default: "none" },
     contactInfoSection: { type: String, enum: ["green", "red", "none"], default: "none" },
     adaCompliance: { type: String, enum: ["green", "red", "none"], default: "none" },
@@ -107,6 +108,17 @@ const websiteSchema = new mongoose.Schema(
     appleMaps: { type: String, enum: ["green", "red", "none"], default: "none" },
     infoEmailSetup: { type: String, enum: ["green", "red", "none"], default: "none" },
     nathanEmailSetup: { type: String, enum: ["green", "red", "none"], default: "none" },
+    // Social Media Compliance Checklist fields
+    youtubeCompliance: { type: String, enum: ["green", "red", "none"], default: "none" },
+    rumbleCompliance: { type: String, enum: ["green", "red", "none"], default: "none" },
+    libertySocialCompliance: { type: String, enum: ["green", "red", "none"], default: "none" },
+    facebookCompliance: { type: String, enum: ["green", "red", "none"], default: "none" },
+    xCompliance: { type: String, enum: ["green", "red", "none"], default: "none" },
+    instagramCompliance: { type: String, enum: ["green", "red", "none"], default: "none" },
+    tikTokCompliance: { type: String, enum: ["green", "red", "none"], default: "none" },
+    yelpCompliance: { type: String, enum: ["green", "red", "none"], default: "none" },
+    truthSocialCompliance: { type: String, enum: ["green", "red", "none"], default: "none" },
+    threadsCompliance: { type: String, enum: ["green", "red", "none"], default: "none" },
     // System Health Monitoring fields
     healthStatus: { type: String, enum: ["LIVE", "DEGRADED", "DOWN", "UNKNOWN"], default: "UNKNOWN" },
     lastCheckedAt: { type: Date },

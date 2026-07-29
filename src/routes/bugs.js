@@ -234,7 +234,14 @@ router.post("/", requireAuth, async (req, res, next) => {
 // Analytics Dashboard Endpoint
 router.get("/analytics", requireAuth, async (req, res, next) => {
   try {
-    const all = await BugReport.find().lean();
+    const all = await BugReport.find({}, {
+      status: 1,
+      "resolution.submittedAt": 1,
+      createdAt: 1,
+      module: 1,
+      assignedDeveloperName: 1,
+      createdByUsername: 1,
+    }).lean();
 
     const total = all.length;
     const pendingBugs = all.filter(b => ["OPEN", "TRIAGED", "IN_PROGRESS", "NEEDS_INFO", "REOPENED", "open"].includes(b.status)).length;
@@ -294,10 +301,14 @@ router.get("/analytics", requireAuth, async (req, res, next) => {
   }
 });
 
-// List Bugs with Filters
+// List Bugs with Filters & Pagination (25 items per page default)
 router.get("/", requireAuth, async (req, res, next) => {
   try {
-    const { company, module, severity, priority, status, developer, reporter, q } = req.query;
+    const { company, module, severity, priority, status = "open", developer, reporter, q, page: rawPage, limit: rawLimit } = req.query;
+
+    const page = Math.max(1, parseInt(rawPage, 10) || 1);
+    const limit = Math.max(1, Math.min(100, parseInt(rawLimit, 10) || 25));
+    const skip = (page - 1) * limit;
 
     const filter = {};
 
@@ -327,8 +338,27 @@ router.get("/", requireAuth, async (req, res, next) => {
       ];
     }
 
-    const items = await BugReport.find(filter).sort({ lastActivity: -1, createdAt: -1 }).lean();
-    return res.json({ items: items.map(withId) });
+    const [totalItems, items] = await Promise.all([
+      BugReport.countDocuments(filter),
+      BugReport.find(filter)
+        .sort({ lastActivity: -1, createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .select("title description status severity priority company module taskTitle createdByUsername createdByRole assignedDeveloperName createdAt source attachments.fileName attachments.url attachments.mimeType attachments.size")
+        .lean(),
+    ]);
+
+    const totalPages = Math.ceil(totalItems / limit) || 1;
+
+    return res.json({
+      items: items.map(withId),
+      pagination: {
+        totalItems,
+        totalPages,
+        currentPage: page,
+        limit,
+      },
+    });
   } catch (err) {
     return next(err);
   }
