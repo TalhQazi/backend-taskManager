@@ -538,13 +538,22 @@ router.get("/:id/attachment", requireAuth, async (req, res, next) => {
 // Get task attachment by index from attachments array
 router.get("/:id/attachments/:index", requireAuth, async (req, res, next) => {
   try {
-    const task = await Task.findById(req.params.id).select("attachments").lean();
+    const task = await Task.findById(req.params.id).select("attachments attachment").lean();
     if (!task) return res.status(404).json({ error: { message: "Task not found" } });
     const idx = parseInt(req.params.index, 10);
     const attachments = Array.isArray(task.attachments) ? task.attachments : [];
-    const attachment = attachments[idx];
+
+    // Index -1 (and 0 when the array is empty) addresses the legacy single attachment
+    let attachment = null;
+    if ((idx === -1 || (idx === 0 && attachments.length === 0)) && task.attachment) {
+      attachment = task.attachment;
+    } else if (idx >= 0 && idx < attachments.length) {
+      attachment = attachments[idx];
+    }
+
     if (!attachment) return res.status(404).json({ error: { message: "Attachment not found" } });
-    res.json({ url: attachment.url || "" });
+    // Clients read `attachment.url`; `url` is kept for older callers.
+    res.json({ attachment, url: attachment.url || "" });
   } catch (err) {
     next(err);
   }
