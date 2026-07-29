@@ -1947,9 +1947,9 @@ router.get("/:id/attachments/:index/download", requireAuth, async (req, res, nex
     const idx = parseInt(req.params.index, 10);
     const attachments = Array.isArray(task.attachments) ? task.attachments : [];
     
-    // Support legacy single attachment at index -1
+    // Support legacy single attachment at index -1 or index 0 fallback
     let attachment = null;
-    if (idx === -1 && task.attachment) {
+    if ((idx === -1 || (idx === 0 && attachments.length === 0)) && task.attachment) {
       attachment = task.attachment;
     } else if (idx >= 0 && idx < attachments.length) {
       attachment = attachments[idx];
@@ -1993,12 +1993,13 @@ router.get("/:id/attachments/:index/download", requireAuth, async (req, res, nex
       return res.redirect(url);
     }
 
-    // If no URL but has fileName, try to serve from uploads folder
-    if (attachment.fileName) {
-      const filePath = path.join(uploadsDir, attachment.fileName);
+    // If no URL or local upload URL, try to serve from uploads folder
+    const targetFile = attachment.fileName || (url ? path.basename(url) : "");
+    if (targetFile) {
+      const filePath = path.join(uploadsDir, targetFile);
       if (fs.existsSync(filePath)) {
         res.setHeader("Content-Type", attachment.mimeType || "application/octet-stream");
-        res.setHeader("Content-Disposition", `attachment; filename="${attachment.fileName}"`);
+        res.setHeader("Content-Disposition", `attachment; filename="${targetFile}"`);
         return res.sendFile(filePath);
       }
     }
