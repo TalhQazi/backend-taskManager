@@ -147,59 +147,156 @@ async function collectRaid(diagnostics) {
   else if (await hasCommand("perccli")) tool = "perccli";
   else if (await hasCommand("storcli64")) tool = "storcli64";
   else if (await hasCommand("perccli64")) tool = "perccli64";
+  else if (await hasCommand("ssacli")) tool = "ssacli";
+  else if (await hasCommand("hpssacli")) tool = "hpssacli";
+  else if (await hasCommand("mdadm")) tool = "mdadm";
+  else if (await hasCommand("zpool")) tool = "zpool";
 
   diagnostics.storcli = tool ? `found (${tool})` : "not installed";
-  if (!tool) return null;
 
-  const vd = await run(`${tool} /c0/vall show 2>/dev/null`);
-  const pd = await run(`${tool} /c0/eall/sall show 2>/dev/null`);
-  const encl = await run(`${tool} /c0/eall show all 2>/dev/null`);
+  // Check hardware PCI bus for hardware RAID controllers (MegaRAID, PERC, Smart Array, Adaptec)
+  let pciRaidDetected = false;
+  let pciRaidName = "";
+  if (os.platform() === "linux" && await hasCommand("lspci")) {
+    const lspciRes = await run("lspci -v | grep -i -E 'raid|storage|lsi|perc|smart array' 2>/dev/null");
+    if (lspciRes.ok && lspciRes.out.trim()) {
+      pciRaidDetected = true;
+      pciRaidName = lspciRes.out.split("\n")[0].replace(/^.*:\s*/, "").trim();
+      diagnostics.notes.push(`Hardware RAID Controller detected on PCI bus: ${pciRaidName}`);
+      diagnostics.hardwareRaidDetected = true;
+    }
+  }
 
-  const levelMatch = vd.out.match(/RAID[- ]?(\d+)/i);
+  if (!tool) {
+    if (pciRaidDetected) {
+      return {
+        tool: "pci-hardware",
+        name: pciRaidName || "Hardware RAID Controller",
+        level: "Hardware RAID",
+        slotCount: 0,
+        drives: [],
+        bbuStatus: "N/A",
+        cacheStatus: "N/A",
+        firmwareVersion: null,
+        rebuildPercent: null,
+        raidRaw: true,
+        hardwareDetected: true,
+        hardwareNotice: `RAID hardware detected (${pciRaidName}). Install perccli/storcli for drive telemetry.`,
+      };
+    }
+    return null;
+  }
 
-  // Enclosure slot count → number of physical bays on the backplane.
-  const slotMatch =
-    encl.out.match(/Slot Count\s*[=:]\s*(\d+)/i) ||
-    encl.out.match(/Number of Slots\s*[=:]\s*(\d+)/i);
-  const slotCount = slotMatch ? Number(slotMatch[1]) : 0;
+  // --- 1. MegaRAID / PERC (storcli / perccli)
+  if (tool.includes("storcli") || tool.includes("perccli")) {
+    const vd = await run(`${tool} /c0/vall show 2>/dev/null`);
+    const pd = await run(`${tool} /c0/eall/sall show 2>/dev/null`);
+    const encl = await run(`${tool} /c0/eall show all 2>/dev/null`);
+    const ctrl = await run(`${tool} /c0 show all 2>/dev/null`);
 
-  // Parse the physical-drive summary table. Rows look like:
-  //   252:0     9 Onln   0 558.406 GB SAS  HDD N   N  512B ST600MM0006     U  -
-  // columns: EID:Slt DID State DG Size(2 tok) Intf Med SED PI SeSz Model Sp Type
-  const drives = [];
-  pd.out.split("\n").forEach((line) => {
-    const t = line.trim().split(/\s+/);
-    if (!/^\d+:\d+$/.test(t[0]) || t.length < 8) return;
-    const [eid, slot] = t[0].split(":");
-    const did = Number(t[1]);
-    const state = t[2];
-    const capacityGB = parseSizeToGB(`${t[4]} ${t[5]}`);
-    const intf = t[6];
-    const med = t[7];
-    // Model sits just before the trailing "Sp" and "Type" columns.
-    const model = t.length >= 3 ? t[t.length - 3] : "Unknown";
-    drives.push({
-      enclosure: eid,
-      slot: Number(slot),
-      did: Number.isFinite(did) ? did : null,
-      state,
-      capacityGB,
-      intf,
-      med,
-      model,
+    const levelMatch = vd.out.match(/RAID[- ]?(\d+)/i);
+    const slotMatch =
+      encl.out.match(/Slot Count\s*[=:]\s*(\d+)/i) ||
+      encl.out.match(/Number of Slots\s*[=:]\s*(\d+)/i);
+    const slotCount = slotMatch ? Number(slotMatch[1]) : 0;
+
+    // Model & BBU info
+    const modelMatch = ctrl.out.match(/Model\s*=\s*(.+)/i) || ctrl.out.match(/Product Name\s*=\s*(.+)/i);
+    const fwMatch = ctrl.out.match(/FW Version\s*=\s*(.+)/i);
+    const bbuMatch = ctrl.out.match(/BBU Status\s*=\s*(.+)/i) || ctrl.out.match(/Battery Status\s*=\s*(.+)/i);
+
+    const controllerName = modelMatch ? modelMatch[1].trim() : "MegaRAID / PERC Controller";
+    const bbuStatus = bbuMatch ? bbuMatch[1].trim() : "Optimal";
+    const firmwareVersion = fwMatch ? fwMatch[1].trim() : null;
+
+    const drives = [];
+    pd.out.split("\n").forEach((line) => {
+      const t = line.trim().split(/\s+/);
+      if (!/^\d+:\d+$/.test(t[0]) || t.length < 8) return;
+      const [eid, slot] = t[0].split(":");
+      const did = Number(t[1]);
+      const state = t[2];
+      const capacityGB = parseSizeToGB(`${t[4]} ${t[5]}`);
+      const intf = t[6];
+      const med = t[7];
+      const model = t.length >= 3 ? t[t.length - 3] : "Unknown";
+      drives.push({
+        enclosure: eid,
+        slot: Number(slot),
+        did: Number.isFinite(did) ? did : null,
+        state,
+        capacityGB,
+        intf,
+        med,
+        model,
+      });
     });
-  });
 
-  const rebuild = pd.out.match(/Rebuild.*?(\d+(?:\.\d+)?)\s*%/i);
+    const rebuild = pd.out.match(/Rebuild.*?(\d+(?:\.\d+)?)\s*%/i);
 
-  return {
-    tool,
-    level: levelMatch ? `RAID-${levelMatch[1]}` : null,
-    slotCount,
-    drives,
-    rebuildPercent: rebuild ? Math.round(Number(rebuild[1])) : null,
-    raidRaw: vd.ok || pd.ok,
-  };
+    return {
+      tool,
+      name: controllerName,
+      level: levelMatch ? `RAID-${levelMatch[1]}` : "RAID",
+      slotCount,
+      drives,
+      bbuStatus,
+      cacheStatus: "Optimal",
+      firmwareVersion,
+      rebuildPercent: rebuild ? Math.round(Number(rebuild[1])) : null,
+      raidRaw: vd.ok || pd.ok,
+      hardwareDetected: true,
+    };
+  }
+
+  // --- 2. Linux Software RAID (mdadm)
+  if (tool === "mdadm") {
+    const mdstat = await run("cat /proc/mdstat 2>/dev/null");
+    const detail = await run("mdadm --detail /dev/md* 2>/dev/null");
+
+    const levelMatch = mdstat.out.match(/raid(\d+)/i) || detail.out.match(/Raid Level\s*:\s*raid(\d+)/i);
+    const stateMatch = detail.out.match(/State\s*:\s*(.+)/i);
+    const activeMatch = detail.out.match(/Active Devices\s*:\s*(\d+)/i);
+    const rebuildMatch = mdstat.out.match(/recovery\s*=\s*([\d.]+)%/i) || mdstat.out.match(/rebuild\s*=\s*([\d.]+)%/i);
+
+    return {
+      tool,
+      name: "Linux Software RAID (mdadm)",
+      level: levelMatch ? `RAID-${levelMatch[1]}` : "Software RAID",
+      slotCount: activeMatch ? Number(activeMatch[1]) : 0,
+      drives: [],
+      bbuStatus: "N/A (Software RAID)",
+      cacheStatus: "System RAM",
+      firmwareVersion: null,
+      rebuildPercent: rebuildMatch ? Math.round(Number(rebuildMatch[1])) : null,
+      raidRaw: mdstat.ok,
+      hardwareDetected: false,
+    };
+  }
+
+  // --- 3. ZFS RAID (zpool)
+  if (tool === "zpool") {
+    const statusRes = await run("zpool status 2>/dev/null");
+    const poolMatch = statusRes.out.match(/pool:\s*(.+)/i);
+    const stateMatch = statusRes.out.match(/state:\s*(.+)/i);
+    const rebuildMatch = statusRes.out.match(/resilvered\s*in.+?([\d.]+)%/i) || statusRes.out.match(/resilver\s*in\s*progress.+?([\d.]+)%/i);
+
+    return {
+      tool,
+      name: poolMatch ? `ZFS Pool (${poolMatch[1].trim()})` : "ZFS Storage Pool",
+      level: statusRes.out.includes("raidz2") ? "RAID-Z2" : statusRes.out.includes("raidz") ? "RAID-Z1" : "ZFS Mirror",
+      slotCount: 0,
+      drives: [],
+      bbuStatus: "N/A (ZFS ARC)",
+      cacheStatus: "ZFS ARC",
+      firmwareVersion: null,
+      rebuildPercent: rebuildMatch ? Math.round(Number(rebuildMatch[1])) : null,
+      raidRaw: statusRes.ok,
+      hardwareDetected: false,
+    };
+  }
+
+  return null;
 }
 
 // Convert a storcli/perccli size string ("558.406 GB", "1.090 TB") to GB.
@@ -410,6 +507,7 @@ async function collectReal(serverId) {
     diskUsagePercent,
     diagnostics,
     hasRaidController,
+    raid,
   });
 }
 
@@ -495,6 +593,17 @@ function finalize(serverId, drives, meta) {
       diskUsagePercent: meta.diskUsagePercent,
       source: meta.source,
       mode: meta.mode || "physical",
+      raidController: meta.raid ? {
+        name: meta.raid.name || "RAID Controller",
+        tool: meta.raid.tool,
+        status: raidStatus,
+        level: meta.raidLevel,
+        bbuStatus: meta.raid.bbuStatus || "Optimal",
+        cacheStatus: meta.raid.cacheStatus || "Optimal",
+        firmwareVersion: meta.raid.firmwareVersion || null,
+        hardwareDetected: meta.raid.hardwareDetected || false,
+        hardwareNotice: meta.raid.hardwareNotice || null,
+      } : null,
     },
     diagnostics: meta.diagnostics,
     drives,
