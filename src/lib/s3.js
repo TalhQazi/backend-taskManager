@@ -165,8 +165,12 @@ async function getFromS3(key) {
  */
 function extractS3Key(url) {
   if (!url) return null;
-  if (url.startsWith("/uploads/")) {
-    return url.replace(/^\/uploads\//, "");
+  if (url.includes("/uploads/")) {
+    const idx = url.indexOf("/uploads/");
+    return url.substring(idx + "/uploads/".length);
+  }
+  if (url.startsWith("uploads/")) {
+    return url.replace(/^uploads\//, "");
   }
   if (!url.includes("amazonaws.com")) return null;
   const bucketName = process.env.AWS_S3_BUCKET_NAME || process.env.AWS_S3_BUCKET;
