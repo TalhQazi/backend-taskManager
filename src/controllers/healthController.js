@@ -8,8 +8,30 @@ const WebsiteIncident = require("../models/WebsiteIncident");
 const { dispatchAlert } = require("../utils/alertManager");
 const { getStorageHealth } = require("../utils/storageTelemetry");
 
+async function deduplicateServers() {
+  try {
+    const servers = await Server.find().sort({ updatedAt: -1, createdAt: -1 });
+    if (servers.length > 1) {
+      const primary = servers[0];
+      primary.name = "Se7en";
+      primary.ipAddress = "127.0.0.1 (Local Host)";
+      primary.status = "LIVE";
+      primary.isMonitoringEnabled = true;
+      await primary.save();
+
+      const duplicateIds = servers.slice(1).map(s => s._id);
+      await Server.deleteMany({ _id: { $in: duplicateIds } });
+      await ServerMetric.deleteMany({ serverId: { $in: duplicateIds } });
+      console.log(`[Server Health] Cleaned up ${duplicateIds.length} duplicate server records.`);
+    }
+  } catch (err) {
+    console.error("[Server Health] Error deduplicating servers:", err);
+  }
+}
+
 exports.getOverview = async (req, res) => {
   try {
+    await deduplicateServers();
     const servers = await Server.find({ isMonitoringEnabled: true });
     const websites = await Website.find({ websiteType: "active", isMonitoringEnabled: { $ne: false }, url: { $exists: true, $ne: "" } });
     
@@ -131,6 +153,7 @@ exports.getIncidents = async (req, res) => {
 
 async function recordHostTelemetry() {
   try {
+    await deduplicateServers();
     const hostName = "Se7en";
     const totalMem = os.totalmem();
     const freeMem = os.freemem();
@@ -185,6 +208,7 @@ setTimeout(recordHostTelemetry, 2000);
 
 exports.getServers = async (req, res) => {
   try {
+    await deduplicateServers();
     let servers = await Server.find().sort({ name: 1 });
     if (servers.length === 0) {
       await recordHostTelemetry();
