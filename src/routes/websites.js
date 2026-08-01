@@ -9,6 +9,7 @@ const { requireAuth } = require("../middleware/auth");
 const router = express.Router();
 
 const CORE_REQ_MAP = {
+  googleAnalytics: "Google Analytics",
   stripeIntegration: "Stripe Integration",
   bugReportButton: "Bug Report Button",
   googleMaps: "Google Maps",

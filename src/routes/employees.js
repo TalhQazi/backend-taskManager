@@ -565,10 +565,13 @@ async function logActivity(req, action, resourceType, resourceId, resourceName, 
   }
 }
 
-router.get("/", requireAuth, async (_req, res, next) => {
+router.get("/", requireAuth, async (req, res, next) => {
   try {
-    const result = await cacheWrap('employees:list', async () => {
-      const items = await Employee.find().sort({ name: 1 }).lean();
+    const includeInactive = req.query?.includeInactive === "true";
+    const cacheKey = `employees:list:${includeInactive}`;
+    const result = await cacheWrap(cacheKey, async () => {
+      const query = includeInactive ? {} : { status: { $ne: "inactive" }, userStatus: { $ne: "inactive" } };
+      const items = await Employee.find(query).sort({ name: 1 }).lean();
 
       // Resolve avatars from Settings keyed by Employee._id
       const empIds = items.map((e) => String(e._id));

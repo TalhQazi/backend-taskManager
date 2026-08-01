@@ -390,7 +390,7 @@ router.put("/:id", requireAuth, async (req, res, next) => {
     if (!bug) return res.status(404).json({ error: { message: "Bug not found" } });
 
     const role = getUserRole(req);
-    const isAdmin = ["admin", "super-admin"].includes(role);
+    const isPrivileged = ["admin", "super-admin", "manager"].includes(role);
     const isReporter = bug.createdByUserId === getUserId(req) || bug.createdByUsername === getUserName(req);
 
     const patch = { lastActivity: new Date() };
@@ -421,8 +421,8 @@ router.put("/:id", requireAuth, async (req, res, next) => {
     if (typeof req.body?.status === "string") {
       const nextStatus = req.body.status.toUpperCase();
 
-      // Developers must NEVER directly close a bug!
-      if (["CLOSED_VERIFIED", "CLOSED"].includes(nextStatus) && !isAdmin && !isReporter) {
+      // Developers must NEVER directly close a bug unless they are admin/manager or original reporter
+      if (["CLOSED_VERIFIED", "CLOSED", "CLOSED_ADMIN_OVERRIDE"].includes(nextStatus) && !isPrivileged && !isReporter) {
         return res.status(403).json({
           error: { message: "Developers cannot directly close a bug. Please submit resolution for reporter confirmation." },
         });
@@ -432,7 +432,7 @@ router.put("/:id", requireAuth, async (req, res, next) => {
       await logBugEvent(bug._id, req, "STATUS_CHANGED", `Status changed to ${nextStatus}`);
     }
 
-    if (isAdmin && (req.body?.title || req.body?.description)) {
+    if (isPrivileged && (req.body?.title || req.body?.description)) {
       if (req.body.title) patch.title = req.body.title.trim();
       if (req.body.description) patch.description = req.body.description.trim();
     }
@@ -440,6 +440,33 @@ router.put("/:id", requireAuth, async (req, res, next) => {
     const updated = await BugReport.findByIdAndUpdate(req.params.id, patch, { new: true }).lean();
 
     return res.json({ item: withId(updated) });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// Dedicated Close Bug Endpoint
+router.put("/:id/close", requireAuth, async (req, res, next) => {
+  try {
+    const bug = await BugReport.findById(req.params.id);
+    if (!bug) return res.status(404).json({ error: { message: "Bug report not found" } });
+
+    const role = getUserRole(req);
+    const isPrivileged = ["admin", "super-admin", "manager"].includes(role);
+    const isReporter = bug.createdByUserId === getUserId(req) || bug.createdByUsername === getUserName(req);
+
+    if (!isPrivileged && !isReporter) {
+      return res.status(403).json({
+        error: { message: "Only administrators, managers, or the original reporter can close this bug." },
+      });
+    }
+
+    bug.status = "CLOSED_VERIFIED";
+    bug.lastActivity = new Date();
+    await bug.save();
+
+    await logBugEvent(bug._id, req, "STATUS_CHANGED", `Bug was closed by ${getUserName(req)}.`);
+    return res.json({ item: withId(bug) });
   } catch (err) {
     return next(err);
   }

@@ -93,6 +93,7 @@ const websiteSchema = new mongoose.Schema(
     readinessScore: { type: Number, default: 0 },
     overrideReason: { type: String, default: "" },
     // Core requirements checkmark fields
+    googleAnalytics: { type: String, enum: ["green", "red", "none"], default: "none" },
     humanVerification: { type: String, enum: ["green", "red", "none"], default: "none" },
     largeHeaderImage: { type: String, enum: ["green", "red", "none"], default: "none" },
     contactInfoSection: { type: String, enum: ["green", "red", "none"], default: "none" },

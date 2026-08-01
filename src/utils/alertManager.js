@@ -11,8 +11,8 @@ const AlertRule = require("../models/AlertRule");
  */
 async function dispatchAlert(subject, body, condition) {
   try {
-    // If it's not a RECOVERED alert, check if the rule is enabled
-    if (condition !== "RECOVERED") {
+    // Check alert rule enablement if specified, but always permit critical DOWN or RECOVERED alerts
+    if (condition !== "RECOVERED" && condition !== "DOWN") {
       const rule = await AlertRule.findOne({ condition, isEnabled: true });
       if (!rule) {
         console.log(`Alert ignored: No active rule for condition ${condition}`);
@@ -102,8 +102,11 @@ async function dispatchAlert(subject, body, condition) {
       }).lean();
       
       // Default websiteDownAlert:
-      // - false for all users/roles. Only enabled if explicitly turned on in settings.
-      let isEnabled = false;
+      // - true for admins/super-admins by default
+      // - check explicitly configured preference if available
+      const isAdminRole = ["admin", "super-admin"].includes(String(u.role || "").toLowerCase());
+      let isEnabled = isAdminRole;
+
       if (settings && settings.emailPreferences && typeof settings.emailPreferences.websiteDownAlert === "boolean") {
         isEnabled = settings.emailPreferences.websiteDownAlert;
       }

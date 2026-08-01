@@ -390,6 +390,13 @@ router.get("/", requireAuth, async (req, res, next) => {
       } else {
         conditions.push({ _id: null });
       }
+    } else if (assignment && assignment !== "all") {
+      conditions.push({
+        $or: [
+          { assignees: { $elemMatch: { $regex: new RegExp(`^${escapeRegExp(assignment)}$`, "i") } } },
+          { assignee: { $regex: new RegExp(`^${escapeRegExp(assignment)}$`, "i") } }
+        ]
+      });
     }
 
     // 5. Priority Filter
@@ -496,7 +503,26 @@ router.get("/assignee-stats", requireAuth, async (req, res, next) => {
 
 router.get("/:id", requireAuth, async (req, res, next) => {
   try {
-    const task = await Task.findById(req.params.id).lean();
+    let task = await Task.findById(req.params.id).lean();
+    let isArchived = false;
+
+    if (!task) {
+      const Archive = require("../models/Archive");
+      const isValidObjId = mongoose.Types.ObjectId.isValid(req.params.id);
+      const archivedRecord = await Archive.findOne({
+        $or: [
+          { originalId: req.params.id },
+          ...(isValidObjId ? [{ _id: req.params.id }, { "data._id": new mongoose.Types.ObjectId(req.params.id) }] : []),
+          { "data._id": req.params.id }
+        ]
+      }).lean();
+
+      if (archivedRecord && archivedRecord.data) {
+        task = { ...archivedRecord.data, isArchived: true, status: "completed" };
+        isArchived = true;
+      }
+    }
+
     if (!task) {
       return res.status(404).json({ error: { message: "Task not found" } });
     }
@@ -518,7 +544,7 @@ router.get("/:id", requireAuth, async (req, res, next) => {
       return res.status(403).json({ error: { message: "Forbidden" } });
     }
 
-    return res.json({ item: withId(task) });
+    return res.json({ item: { ...withId(task), isArchived } });
   } catch (err) {
     return next(err);
   }
