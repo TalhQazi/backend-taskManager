@@ -79,6 +79,13 @@ TaskSchema.index({ projectId: 1, status: 1 });
 TaskSchema.index({ assignees: 1, status: 1 });
 TaskSchema.index({ createdAt: -1, status: 1 });
 TaskSchema.index({ projectId: 1, createdAt: -1 });
+// Covers the dashboard summary aggregation: it groups over exactly these three
+// fields, so Mongo can satisfy it from the index alone instead of fetching whole
+// task documents (which carry description, attachments and contributionHistory).
+TaskSchema.index({ status: 1, dueDate: 1, category: 1 }, { name: "dashboard_summary_cover" });
+// Serves the Day-Ahead / 7-Day views, which filter on a due-date window and
+// exclude completed tasks.
+TaskSchema.index({ dueDate: 1, status: 1 }, { name: "due_window_status" });
 // Text index for search queries (replaces regex scans)
 TaskSchema.index({ title: "text", description: "text" });
 

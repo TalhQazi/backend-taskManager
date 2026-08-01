@@ -40,13 +40,86 @@ function requireRole(roles) {
   };
 }
 
+const CLEARHIRE_MESSAGES = {
+  PENDING: "Background check is in progress. Please wait.",
+  YELLOW: "Your account is under review. Awaiting admin approval.",
+  RED: "Access denied. Background check failed.",
+};
+
+/**
+ * Resolve the gate decision with one parallel round-trip instead of three
+ * sequential ones.
+ *
+ * This is a pure latency change: the same three lookups run, the same
+ * precedence is applied to their results, and the same fail-open-on-error
+ * contract holds. No decision is cached — the gate is an authorization check,
+ * and a stale allow/deny is not an acceptable trade for a few milliseconds
+ * against a Docker-local database.
+ *
+ * @returns {Promise<{allow: boolean, code?: string, message?: string, clearHireStatus?: string}>}
+ */
+async function resolveClearHireGate(userId) {
+  const Employee = require("../models/Employee");
+  const Onboarding = require("../models/Onboarding");
+
+  const [empRes, onbRes, profileRes] = await Promise.allSettled([
+    Employee.findById(userId).select("onboardingRequired").lean(),
+    Onboarding.findOne({ userId }).select("overallStatus").lean(),
+    ClearHireProfile.findOne({ userId }).select("status").lean(),
+  ]);
+
+  // Original behaviour: any lookup error falls open rather than locking users out.
+  if (empRes.status === "rejected") {
+    console.error("[Employee Lookup in Middleware] Error:", empRes.reason?.message);
+    return { allow: true };
+  }
+  if (onbRes.status === "rejected") {
+    console.error("[Onboarding Check Middleware] Error:", onbRes.reason?.message);
+    return { allow: true };
+  }
+  if (profileRes.status === "rejected") {
+    console.error("[ClearHire Middleware] Error:", profileRes.reason?.message);
+    return { allow: true };
+  }
+
+  const emp = empRes.value;
+  if (emp && emp.onboardingRequired === false) {
+    return { allow: true };
+  }
+
+  const onb = onbRes.value;
+  if (onb && onb.overallStatus === "approved") {
+    return { allow: true };
+  }
+
+  const profile = profileRes.value;
+  if (!profile) {
+    return {
+      allow: false,
+      code: "CLEARHIRE_NOT_FOUND",
+      message: "Background check not completed. Please contact your administrator.",
+    };
+  }
+
+  if (profile.status === "GREEN") {
+    return { allow: true };
+  }
+
+  return {
+    allow: false,
+    code: `CLEARHIRE_${profile.status}`,
+    clearHireStatus: profile.status,
+    message: CLEARHIRE_MESSAGES[profile.status] || "Access denied.",
+  };
+}
+
 /**
  * ClearHire® Hard Gate Middleware
  * ───────────────────────────────
  * Blocks access for users whose ClearHire status is not GREEN.
- * 
+ *
  * Exemptions:
- *   - super-admin, admin: they manage the ClearHire system itself
+ *   - super-admin: they manage the ClearHire system itself
  *   - Routes can opt out by not using this middleware
  *
  * Status behavior:
@@ -57,8 +130,8 @@ function requireRole(roles) {
  *   No profile → 403 "Background check not completed"
  */
 function requireClearHire(req, res, next) {
-  const proceed = () => {
-    // Exempt super-admin roles — they manage the system
+  const proceed = async () => {
+    // Exempt super-admin roles — they manage the system. No DB work at all.
     const role = req.user?.role;
     if (["super-admin"].includes(role)) {
       return next();
@@ -69,79 +142,29 @@ function requireClearHire(req, res, next) {
       return res.status(401).json({ error: { message: "Unauthorized" } });
     }
 
-    const Employee = require("../models/Employee");
-    Employee.findById(userId)
-      .select("onboardingRequired")
-      .lean()
-      .then((emp) => {
-        if (emp && emp.onboardingRequired === false) {
-          return next();
-        }
+    const decision = await resolveClearHireGate(userId);
 
-        const Onboarding = require("../models/Onboarding");
-        Onboarding.findOne({ userId })
-          .select("overallStatus")
-          .lean()
-          .then((onb) => {
-            // If onboarding is approved, let them through directly!
-            if (onb && onb.overallStatus === "approved") {
-              return next();
-            }
+    if (decision.allow) {
+      return next();
+    }
 
-            // Otherwise, enforce ClearHire gates
-            ClearHireProfile.findOne({ userId })
-              .select("status")
-              .lean()
-              .then((profile) => {
-                if (!profile) {
-                  return res.status(403).json({
-                    error: {
-                      message: "Background check not completed. Please contact your administrator.",
-                      code: "CLEARHIRE_NOT_FOUND",
-                    },
-                  });
-                }
+    const error = { message: decision.message, code: decision.code };
+    if (decision.clearHireStatus) error.clearHireStatus = decision.clearHireStatus;
+    return res.status(403).json({ error });
+  };
 
-                if (profile.status === "GREEN") {
-                  return next();
-                }
-
-                const messages = {
-                  PENDING: "Background check is in progress. Please wait.",
-                  YELLOW: "Your account is under review. Awaiting admin approval.",
-                  RED: "Access denied. Background check failed.",
-                };
-
-                return res.status(403).json({
-                  error: {
-                    message: messages[profile.status] || "Access denied.",
-                    code: `CLEARHIRE_${profile.status}`,
-                    clearHireStatus: profile.status,
-                  },
-                });
-              })
-              .catch((err) => {
-                console.error("[ClearHire Middleware] Error:", err.message);
-                // Fail open for DB errors — don't lock everyone out if DB hiccups
-                return next();
-              });
-          })
-          .catch((err) => {
-            console.error("[Onboarding Check Middleware] Error:", err.message);
-            return next();
-          });
-      })
-      .catch((err) => {
-        console.error("[Employee Lookup in Middleware] Error:", err.message);
-        return next();
-      });
+  const run = () => {
+    proceed().catch((err) => {
+      // Belt-and-braces: preserve the fail-open contract even on unexpected throws.
+      console.error("[ClearHire Middleware] Unexpected error:", err?.message);
+      return next();
+    });
   };
 
   if (!req.user) {
-    return requireAuth(req, res, proceed);
+    return requireAuth(req, res, run);
   }
-  return proceed();
+  return run();
 }
 
 module.exports = { requireAuth, requireRole, requireClearHire };
-

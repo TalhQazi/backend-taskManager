@@ -56,8 +56,70 @@ router.get("/summary", requireAuth, async (req, res, next) => {
     const taskFilter = {};
     const projectFilter = {};
 
+    // Task counts are derived server-side in a single aggregation pass. The
+    // previous implementation pulled every Task document into Node just to
+    // count four things — cost grew linearly with the collection and dominated
+    // this endpoint. The $cond expressions below reproduce the old JS
+    // predicates exactly, including their case-insensitive status matching.
+    const isCompletedExpr = { $eq: [{ $toLower: { $ifNull: ["$status", ""] } }, "completed"] };
+    const isOverdueStatusExpr = { $eq: [{ $toLower: { $ifNull: ["$status", ""] } }, "overdue"] };
+    const hasDueDateExpr = { $ne: [{ $ifNull: ["$dueDate", null] }, null] };
+
+    const taskCountsPipeline = [
+      { $match: taskFilter },
+      {
+        $group: {
+          _id: null,
+          activeTasks: { $sum: { $cond: [isCompletedExpr, 0, 1] } },
+          dueToday: {
+            $sum: {
+              $cond: [
+                {
+                  $and: [
+                    hasDueDateExpr,
+                    { $gte: ["$dueDate", start] },
+                    { $lte: ["$dueDate", end] },
+                  ],
+                },
+                1,
+                0,
+              ],
+            },
+          },
+          overdueTasks: {
+            $sum: {
+              $cond: [
+                {
+                  $and: [
+                    { $not: [isCompletedExpr] },
+                    {
+                      $or: [
+                        isOverdueStatusExpr,
+                        { $and: [hasDueDateExpr, { $lt: ["$dueDate", start] }] },
+                      ],
+                    },
+                  ],
+                },
+                1,
+                0,
+              ],
+            },
+          },
+          pendingBugTasks: {
+            $sum: {
+              $cond: [
+                { $and: [{ $eq: ["$category", "bug"] }, { $not: [isCompletedExpr] }] },
+                1,
+                0,
+              ],
+            },
+          },
+        },
+      },
+    ];
+
     const [
-      tasks,
+      taskCountsRows,
       employeeTotal,
       entriesToday,
       vehicleTotal,
@@ -69,9 +131,12 @@ router.get("/summary", requireAuth, async (req, res, next) => {
       openBugReports,
       companyTotal
     ] = await Promise.all([
-      Task.find(taskFilter).lean(),
+      Task.aggregate(taskCountsPipeline),
       Employee.countDocuments({ status: "active" }),
-      TimeEntry.find({ date: { $gte: start, $lte: end } }).lean(),
+      // Projection only — the four fields the reducers below actually read.
+      TimeEntry.find({ date: { $gte: start, $lte: end } })
+        .select("status clockOut totalHours employee")
+        .lean(),
       Vehicle.countDocuments(),
       Patent.countDocuments({ patentType: "filed" }),
       Patent.countDocuments({ patentType: "pending" }),
@@ -82,28 +147,15 @@ router.get("/summary", requireAuth, async (req, res, next) => {
       require("../models/Company").countDocuments({ status: "active" })
     ]);
 
-    const isCompletedTask = (t) => String(t?.status || "").toLowerCase() === "completed";
-    const isOverdueStatus = (t) => String(t?.status || "").toLowerCase() === "overdue";
+    const taskCounts = taskCountsRows[0] || {
+      activeTasks: 0,
+      dueToday: 0,
+      overdueTasks: 0,
+      pendingBugTasks: 0,
+    };
 
-    const activeTasks = tasks.filter((t) => !isCompletedTask(t)).length;
-
-    const dueToday = tasks.filter((t) => {
-      if (!t?.dueDate) return false;
-      const due = new Date(t.dueDate);
-      return due >= start && due <= end;
-    }).length;
-
-    const overdueTasks = tasks.filter((t) => {
-      if (isCompletedTask(t)) return false;
-      if (isOverdueStatus(t)) return true;
-      if (!t?.dueDate) return false;
-      const due = new Date(t.dueDate);
-      return due < start;
-    }).length;
-
-    const pendingBugs = tasks.filter((t) =>
-      t.category === "bug" && !isCompletedTask(t)
-    ).length + openBugReports;
+    const { activeTasks, dueToday, overdueTasks } = taskCounts;
+    const pendingBugs = taskCounts.pendingBugTasks + openBugReports;
 
     const employeesWorkingSet = new Set(
       entriesToday

@@ -322,17 +322,28 @@ app.use(
   })
 );
 
+// Timing first so it measures the full middleware chain, not just the handler.
+const { requestTiming } = require("./middleware/requestTiming");
+app.use(requestTiming);
+
+// Gzip compression — reduces response sizes by 60-80%.
+// Registered ahead of the body parser so it also wraps responses from routes
+// that short-circuit before parsing (static assets, early 4xx).
+app.use(compression());
+
+const jsonParser = express.json({ limit: "100mb" });
 app.use((req, res, next) => {
   const ct = req.headers['content-type'] || '';
   if (ct.includes('multipart/form-data')) {
     return next();
   }
+  // Methods without a body never need the parser — skip the work entirely.
+  if (req.method === "GET" || req.method === "HEAD") {
+    return next();
+  }
   // For other requests, use JSON parser
-  express.json({ limit: "100mb" })(req, res, next);
+  jsonParser(req, res, next);
 });
-
-// Gzip compression — reduces response sizes by 60-80%
-app.use(compression());
 
 // Only log in development (morgan is noisy in production)
 if (isDev) {
@@ -549,14 +560,22 @@ connectDb()
       const completedTasks = await Task.find({ status: "completed" }).lean();
       if (completedTasks.length > 0) {
         console.log(`[Startup Migration] Archiving ${completedTasks.length} existing completed tasks...`);
-        for (const task of completedTasks) {
-          await Archive.create({
-            itemType: "task",
-            originalId: task._id,
-            archivedBy: "system",
-            data: task
-          });
-          await Task.findByIdAndDelete(task._id);
+        // Batched rather than two round-trips per task. Same end state, but
+        // startup no longer scales linearly with the completed-task backlog —
+        // the server was previously unreachable for the whole loop.
+        const BATCH = 500;
+        for (let i = 0; i < completedTasks.length; i += BATCH) {
+          const chunk = completedTasks.slice(i, i + BATCH);
+          await Archive.insertMany(
+            chunk.map((task) => ({
+              itemType: "task",
+              originalId: task._id,
+              archivedBy: "system",
+              data: task,
+            })),
+            { ordered: false }
+          );
+          await Task.deleteMany({ _id: { $in: chunk.map((t) => t._id) } });
         }
         console.log(`[Startup Migration] Finished archiving completed tasks.`);
       }

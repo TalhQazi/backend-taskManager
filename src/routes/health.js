@@ -32,4 +32,28 @@ router.get("/servers/:id/storage-health", healthController.getStorageHealth);
 
 router.post("/alerts/test", healthController.testAlert);
 
+/**
+ * Performance snapshot: slowest routes, MongoDB command timings, cache hit
+ * ratio and process memory. Admin-gated by the router.use above.
+ */
+router.get("/performance", (req, res) => {
+  const { getTimingStats, SLOW_REQUEST_MS } = require("../middleware/requestTiming");
+  const { getQueryStats } = require("../lib/db");
+  const { getCacheStats } = require("../lib/cache");
+
+  const mem = process.memoryUsage();
+  res.json({
+    uptimeSeconds: Math.round(process.uptime()),
+    slowRequestThresholdMs: SLOW_REQUEST_MS,
+    routes: getTimingStats(Number(req.query.limit) || 25),
+    mongo: getQueryStats(),
+    cache: getCacheStats(),
+    memory: {
+      rssMb: Number((mem.rss / 1024 / 1024).toFixed(1)),
+      heapUsedMb: Number((mem.heapUsed / 1024 / 1024).toFixed(1)),
+      heapTotalMb: Number((mem.heapTotal / 1024 / 1024).toFixed(1)),
+    },
+  });
+});
+
 module.exports = router;
