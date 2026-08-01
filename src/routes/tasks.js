@@ -1498,7 +1498,29 @@ router.post("/:id/archive", requireAuth, async (req, res, next) => {
 
 router.patch("/:id/status", requireAuth, async (req, res, next) => {
   try {
-    const task = await Task.findById(req.params.id).lean();
+    let task = await Task.findById(req.params.id).lean();
+    let isFromArchive = false;
+    let archivedDoc = null;
+
+    if (!task) {
+      const Archive = require("../models/Archive");
+      const isValidObjId = mongoose.Types.ObjectId.isValid(req.params.id);
+      archivedDoc = await Archive.findOne({
+        $or: [
+          { originalId: req.params.id },
+          ...(isValidObjId ? [{ _id: req.params.id }, { "data._id": new mongoose.Types.ObjectId(req.params.id) }] : []),
+          { "data._id": req.params.id },
+          { "itemData.originalId": req.params.id }
+        ]
+      });
+
+      if (archivedDoc) {
+        const rawData = archivedDoc.data || archivedDoc.itemData || {};
+        task = { ...rawData, _id: rawData._id || archivedDoc.originalId || req.params.id };
+        isFromArchive = true;
+      }
+    }
+
     if (!task) {
       return res.status(404).json({ error: { message: "Task not found" } });
     }
@@ -1545,6 +1567,22 @@ router.patch("/:id/status", requireAuth, async (req, res, next) => {
       // Task re-opened — clear the completion record
       update.completedAt = null;
       update.completedByName = "";
+    }
+
+    if (isFromArchive) {
+      const Archive = require("../models/Archive");
+      const taskDataToRestore = {
+        ...task,
+        ...update,
+        status,
+      };
+      delete taskDataToRestore.isArchived;
+      delete taskDataToRestore.__v;
+      const restored = await Task.create(taskDataToRestore);
+      if (archivedDoc) {
+        await Archive.deleteOne({ _id: archivedDoc._id });
+      }
+      return res.json({ item: withId(restored.toObject()) });
     }
 
     const updated = await Task.findByIdAndUpdate(req.params.id, update, { new: true }).lean();

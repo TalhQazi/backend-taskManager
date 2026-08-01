@@ -36,8 +36,8 @@ async function checkPatentExpirations() {
         console.log(`[Expiry Job] Patent '${patent.patentName}' marked as Expired.`);
       }
 
-      // Only send email alerts at 7 days and 1 day before expiry
-      const thresholds = [1, 7];
+      // Send email & push alerts at 60 days and 30 days before expiry
+      const thresholds = [30, 60];
       let triggeredThreshold = null;
 
       for (const t of thresholds) {

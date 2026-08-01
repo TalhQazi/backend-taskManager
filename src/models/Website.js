@@ -86,6 +86,8 @@ const websiteSchema = new mongoose.Schema(
       default: "System",
     },
     launchDate: { type: Date },
+    originalPurchaseDate: { type: Date },
+    expirationDate: { type: Date },
     businessUnit: { type: String, default: "Marketing" }, // e.g. 'Marketing', 'SaaS', 'E-Commerce', 'Operations'
     environment: { type: String, default: "Production" }, // e.g. 'Production', 'Staging', 'Development'
     leadDeveloper: { type: String, default: "" }, // username
