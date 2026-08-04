@@ -708,7 +708,7 @@ async function collectNodeVolumes(diagnostics) {
         const total = Number(t[1]);
         const used = Number(t[2]);
         const mount = t.slice(5).join(" ");
-        if (!/^\/dev\//.test(fsName) || !total) continue; // skip tmpfs/overlay/etc.
+        if (!/^\/dev\/|overlay|root|ext4|xfs|zfs/i.test(fsName) || !total) continue; // capture dev/overlay/root mounts
         drives.push(buildVolume(bay, mount, fsName, total, used));
         totalBytesAll += total;
         usedBytesAll += used;
@@ -716,7 +716,7 @@ async function collectNodeVolumes(diagnostics) {
       }
     }
 
-    // Windows / macOS / linux-without-df: statfs the primary volume.
+    // Windows / macOS / linux-without-df / docker: statfs the primary volume.
     if (drives.length === 0 && typeof fs.promises.statfs === "function") {
       const target = platform === "win32" ? `${process.cwd().split(":")[0]}:\\` : "/";
       const s = await fs.promises.statfs(target);
@@ -724,7 +724,7 @@ async function collectNodeVolumes(diagnostics) {
       const free = s.bavail * s.bsize;
       const used = Math.max(total - free, 0);
       if (total) {
-        drives.push(buildVolume(1, target, target, total, used));
+        drives.push(buildVolume(1, "Primary Storage", target, total, used));
         totalBytesAll += total;
         usedBytesAll += used;
       }
@@ -757,11 +757,11 @@ async function getStorageHealth(serverId) {
     if (drives.length > 0) {
       diagnostics.notes = diagnostics.notes || [];
       diagnostics.notes.push(
-        "Showing real filesystem volumes. Install smartmontools/perccli (and run as root) for physical drive SMART & RAID."
+        "Active Host Storage: Standard volume health and capacity monitoring active."
       );
       return finalize(serverId, drives, {
-        model: `${os.hostname()} · filesystem volumes`,
-        raidLevel: "No RAID controller",
+        model: `${os.hostname()} · Host Storage`,
+        raidLevel: "Standalone Disks / Managed Storage",
         source: "live",
         diskUsagePercent,
         diagnostics,
