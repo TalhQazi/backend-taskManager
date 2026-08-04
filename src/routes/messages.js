@@ -3,7 +3,9 @@ const { z } = require("zod");
 const multer = require("multer");
 
 const Message = require("../models/Message");
+const ChatGroup = require("../models/ChatGroup");
 const Employee = require("../models/Employee");
+const Task = require("../models/Task");
 const Settings = require("../models/Settings");
 const { requireAuth } = require("../middleware/auth");
 const { encrypt, decrypt } = require("../lib/encryption");
@@ -52,12 +54,32 @@ const attachmentSchema = z
 const createSchema = z.object({
   sender: z.string().min(1),
   senderAvatar: z.string().optional().default(""),
-  recipient: z.string().min(1),
+  recipient: z.string().optional().default(""),
+  groupId: z.string().optional().nullable(),
+  parentMessageId: z.string().optional().nullable(),
   content: z.string().optional().default(""),
   timestamp: z.string().min(1),
-  type: z.enum(["direct", "broadcast"]),
+  type: z.enum(["direct", "broadcast", "group", "task_card", "voice_note", "system"]).optional().default("direct"),
   status: z.enum(["sent", "delivered", "read"]).optional(),
   attachment: attachmentSchema,
+  attachments: z.array(attachmentSchema).optional().default([]),
+  voiceNote: z.object({
+    url: z.string().optional().default(""),
+    duration: z.number().optional().default(0),
+    waveform: z.array(z.number()).optional().default([]),
+  }).optional(),
+  taskCard: z.object({
+    taskId: z.string().optional().default(""),
+    title: z.string().optional().default(""),
+    status: z.string().optional().default(""),
+    priority: z.string().optional().default(""),
+    dueDate: z.string().optional().default(""),
+    assignees: z.array(z.string()).optional().default([]),
+  }).optional(),
+  mentions: z.array(z.object({
+    username: z.string(),
+    type: z.enum(["user", "department", "everyone"]).optional().default("user"),
+  })).optional().default([]),
 });
 
 const updateSchema = createSchema.partial();
@@ -65,7 +87,7 @@ const updateSchema = createSchema.partial();
 const storage = multer.memoryStorage();
 const upload = multer({
   storage,
-  limits: { fileSize: 16 * 1024 * 1024 },
+  limits: { fileSize: 25 * 1024 * 1024 }, // 25MB limit
 });
 
 router.post("/upload", requireAuth, upload.single("file"), async (req, res, next) => {
@@ -89,6 +111,36 @@ router.post("/upload", requireAuth, upload.single("file"), async (req, res, next
         size: file.size,
       },
     });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Multi-file upload route (up to 10 files, max 25MB each)
+router.post("/upload-multiple", requireAuth, upload.array("files", 10), async (req, res, next) => {
+  try {
+    const files = req.files;
+    if (!files || files.length === 0) return res.status(400).json({ error: { message: "No files provided" } });
+
+    const uploaded = await Promise.all(
+      files.map(async (file) => {
+        let url = "";
+        try {
+          url = await uploadToS3(file.buffer, file.originalname, file.mimetype, "messages");
+        } catch (err) {
+          const base64Data = file.buffer.toString("base64");
+          url = `data:${file.mimetype};base64,${base64Data}`;
+        }
+        return {
+          fileName: file.originalname,
+          url,
+          mimeType: file.mimetype,
+          size: file.size,
+        };
+      })
+    );
+
+    return res.json({ attachments: uploaded });
   } catch (err) {
     next(err);
   }
@@ -655,6 +707,336 @@ router.delete("/:id", requireAuth, async (req, res, next) => {
     await cacheDel("messages:list:*").catch(() => {});
     
     res.status(204).send();
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// ENTERPRISE GROUP CHAT ENDPOINTS
+// ---------------------------------------------------------------------------
+
+// Create a new Chat Group (Restricted to Super Admin & Admin)
+router.post("/groups", requireAuth, async (req, res, next) => {
+  try {
+    const role = String(req.user?.role || "").trim().toLowerCase();
+    if (!["super-admin", "admin"].includes(role)) {
+      return res.status(403).json({ error: { message: "Only Admins and Super Admins can create groups" } });
+    }
+
+    const schema = z.object({
+      name: z.string().min(1),
+      description: z.string().optional().default(""),
+      avatarUrl: z.string().optional().default(""),
+      groupType: z.enum(["custom", "department", "project", "task"]).optional().default("custom"),
+      isPrivate: z.boolean().optional().default(false),
+      announcementOnly: z.boolean().optional().default(false),
+      members: z.array(z.string()).min(1),
+      department: z.string().optional().default(""),
+      projectId: z.string().optional().nullable(),
+      taskId: z.string().optional().nullable(),
+    });
+
+    const parsed = schema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: { message: "Invalid group payload" } });
+
+    const currentUser = String(req.user?.name || req.user?.username || "Admin").trim();
+    const membersList = [...new Set([currentUser, ...parsed.data.members])];
+
+    const group = await ChatGroup.create({
+      ...parsed.data,
+      createdBy: currentUser,
+      creatorRole: role,
+      members: membersList,
+      admins: [currentUser],
+    });
+
+    const io = global.io;
+    if (io) {
+      membersList.forEach((m) => io.to(m).emit("new-group-created", withId(group.toObject())));
+    }
+
+    return res.status(201).json({ item: withId(group.toObject()) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// List Groups for current user
+router.get("/groups", requireAuth, async (req, res, next) => {
+  try {
+    const currentUser = String(req.user?.name || req.user?.username || "").trim();
+    const groups = await ChatGroup.find({
+      members: currentUser,
+      isArchived: false,
+    }).sort({ updatedAt: -1 }).lean();
+
+    return res.json({ items: groups.map(withId) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Get single group details with members
+router.get("/groups/:id", requireAuth, async (req, res, next) => {
+  try {
+    const group = await ChatGroup.findById(req.params.id).lean();
+    if (!group) return res.status(404).json({ error: { message: "Group not found" } });
+    return res.json({ item: withId(group) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Get Group Messages with pagination
+router.get("/groups/:id/messages", requireAuth, async (req, res, next) => {
+  try {
+    const { page, limit, skip } = parsePagination(req.query);
+    const messages = await Message.find({
+      groupId: req.params.id,
+      parentMessageId: null, // main channel messages only
+    })
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit)
+      .lean();
+
+    const total = await Message.countDocuments({ groupId: req.params.id, parentMessageId: null });
+    const enriched = messages.reverse().map((x) => withId(decryptOut(x)));
+
+    return res.json(paginatedResponse(enriched, total, page, limit));
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Update group settings / announcement mode
+router.put("/groups/:id", requireAuth, async (req, res, next) => {
+  try {
+    const group = await ChatGroup.findById(req.params.id);
+    if (!group) return res.status(404).json({ error: { message: "Group not found" } });
+
+    const currentUser = String(req.user?.name || req.user?.username || "").trim();
+    const role = String(req.user?.role || "").trim().toLowerCase();
+    const isGroupAdmin = group.admins.includes(currentUser) || ["super-admin", "admin"].includes(role);
+
+    if (!isGroupAdmin) {
+      return res.status(403).json({ error: { message: "Forbidden: Only Group Admins can modify settings" } });
+    }
+
+    const { name, description, avatarUrl, announcementOnly, isPrivate } = req.body;
+    if (name) group.name = name;
+    if (description !== undefined) group.description = description;
+    if (avatarUrl !== undefined) group.avatarUrl = avatarUrl;
+    if (announcementOnly !== undefined) group.announcementOnly = announcementOnly;
+    if (isPrivate !== undefined) group.isPrivate = isPrivate;
+
+    await group.save();
+    return res.json({ item: withId(group.toObject()) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Add / Remove group members
+router.post("/groups/:id/members", requireAuth, async (req, res, next) => {
+  try {
+    const { action, memberName } = req.body;
+    if (!memberName) return res.status(400).json({ error: { message: "memberName required" } });
+
+    const group = await ChatGroup.findById(req.params.id);
+    if (!group) return res.status(404).json({ error: { message: "Group not found" } });
+
+    if (action === "add") {
+      if (!group.members.includes(memberName)) group.members.push(memberName);
+    } else if (action === "remove") {
+      group.members = group.members.filter((m) => m !== memberName);
+      group.admins = group.admins.filter((a) => a !== memberName);
+    }
+
+    await group.save();
+    return res.json({ item: withId(group.toObject()) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// THREADS, CONVERT-TO-TASK, PINS, STARS, & MEDIA VAULT ENDPOINTS
+// ---------------------------------------------------------------------------
+
+// Get thread replies for a message
+router.get("/:id/thread", requireAuth, async (req, res, next) => {
+  try {
+    const replies = await Message.find({ parentMessageId: req.params.id })
+      .sort({ createdAt: 1 })
+      .lean();
+    return res.json({ items: replies.map((r) => withId(decryptOut(r))) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Post a reply to a thread
+router.post("/:id/reply", requireAuth, async (req, res, next) => {
+  try {
+    const parent = await Message.findById(req.params.id);
+    if (!parent) return res.status(404).json({ error: { message: "Parent message not found" } });
+
+    const { content, sender, attachments } = req.body;
+    const reply = await Message.create({
+      sender: sender || req.user?.name || "User",
+      recipient: parent.recipient,
+      groupId: parent.groupId,
+      parentMessageId: parent._id,
+      content: encrypt(content || ""),
+      timestamp: new Date().toISOString(),
+      type: parent.type,
+      attachments: attachments || [],
+    });
+
+    parent.replyCount = (parent.replyCount || 0) + 1;
+    parent.lastReplyAt = new Date();
+    await parent.save();
+
+    const finalData = withId(decryptOut(reply.toObject()));
+    const io = global.io;
+    if (io) {
+      if (parent.groupId) {
+        io.to(`group-${parent.groupId}`).emit("thread-reply", { parentId: String(parent._id), reply: finalData });
+      } else {
+        io.to(parent.sender).to(parent.recipient).emit("thread-reply", { parentId: String(parent._id), reply: finalData });
+      }
+    }
+
+    return res.status(201).json({ item: finalData });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Pin / Unpin message
+router.post("/:id/pin", requireAuth, async (req, res, next) => {
+  try {
+    const message = await Message.findById(req.params.id);
+    if (!message) return res.status(404).json({ error: { message: "Message not found" } });
+
+    const currentUser = String(req.user?.name || req.user?.username || "").trim();
+    message.isPinned = !message.isPinned;
+    message.pinnedBy = message.isPinned ? currentUser : "";
+    await message.save();
+
+    return res.json({ item: withId(decryptOut(message.toObject())) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Star / Unstar message
+router.post("/:id/star", requireAuth, async (req, res, next) => {
+  try {
+    const message = await Message.findById(req.params.id);
+    if (!message) return res.status(404).json({ error: { message: "Message not found" } });
+
+    const currentUser = String(req.user?.name || req.user?.username || "").trim();
+    const idx = (message.starredBy || []).indexOf(currentUser);
+    if (idx >= 0) {
+      message.starredBy.splice(idx, 1);
+    } else {
+      message.starredBy.push(currentUser);
+    }
+    await message.save();
+
+    return res.json({ item: withId(decryptOut(message.toObject())) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Convert Message to Task (1-Click)
+router.post("/:id/convert-to-task", requireAuth, async (req, res, next) => {
+  try {
+    const message = await Message.findById(req.params.id);
+    if (!message) return res.status(404).json({ error: { message: "Message not found" } });
+
+    const decContent = decryptOut(message.toObject()).content || "Task from Chat";
+    const title = decContent.length > 50 ? decContent.slice(0, 50) + "..." : decContent;
+
+    const newTask = await Task.create({
+      title: title || "Task from Message",
+      description: decContent,
+      priority: req.body.priority || "medium",
+      status: "pending",
+      assignees: req.body.assignees || [message.sender],
+      createdBy: {
+        userId: String(req.user?.sub || req.user?.id || ""),
+        name: String(req.user?.name || "Admin"),
+        email: String(req.user?.email || ""),
+        role: String(req.user?.role || "admin"),
+      },
+    });
+
+    return res.status(201).json({ item: newTask, message: "Task created successfully from message" });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Shared Media Vault
+router.get("/media-vault", requireAuth, async (req, res, next) => {
+  try {
+    const { groupId, recipient } = req.query;
+    let query = {};
+    if (groupId) {
+      query.groupId = groupId;
+    } else if (recipient) {
+      const currentUser = String(req.user?.name || req.user?.username || "").trim();
+      query = {
+        type: "direct",
+        $or: [
+          { sender: currentUser, recipient },
+          { sender: recipient, recipient: currentUser },
+        ],
+      };
+    }
+    query.$or = [
+      { "attachment.url": { $ne: "" } },
+      { "attachments.0": { $exists: true } },
+      { "voiceNote.url": { $ne: "" } },
+    ];
+
+    const messages = await Message.find(query).sort({ createdAt: -1 }).limit(100).lean();
+    return res.json({ items: messages.map((m) => withId(decryptOut(m))) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Global Search across Messages
+router.get("/search", requireAuth, async (req, res, next) => {
+  try {
+    const q = String(req.query.q || "").trim();
+    if (!q) return res.json({ items: [] });
+
+    const rx = new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
+    const currentUser = String(req.user?.name || req.user?.username || "").trim();
+
+    const myGroups = await ChatGroup.find({ members: currentUser }).select("_id").lean();
+    const groupIds = myGroups.map((g) => g._id);
+
+    const messages = await Message.find({
+      $or: [
+        { sender: currentUser },
+        { recipient: currentUser },
+        { groupId: { $in: groupIds } },
+      ],
+      content: { $regex: rx },
+    })
+      .sort({ createdAt: -1 })
+      .limit(50)
+      .lean();
+
+    return res.json({ items: messages.map((m) => withId(decryptOut(m))) });
   } catch (err) {
     next(err);
   }

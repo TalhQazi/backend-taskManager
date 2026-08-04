@@ -227,6 +227,49 @@ io.on("connection", (socket) => {
     }
   });
 
+  // Join group room
+  socket.on("join-group", (groupId) => {
+    if (groupId) {
+      socket.join(`group-${groupId}`);
+      console.log(`Socket ${socket.id} joined group-${groupId}`);
+    }
+  });
+
+  // Leave group room
+  socket.on("leave-group", (groupId) => {
+    if (groupId) {
+      socket.leave(`group-${groupId}`);
+      console.log(`Socket ${socket.id} left group-${groupId}`);
+    }
+  });
+
+  // Handle group typing indicator
+  socket.on("group-typing", ({ groupId, username }) => {
+    if (groupId) {
+      socket.to(`group-${groupId}`).emit("group-typing", { groupId, username });
+    }
+  });
+
+  // Handle group stop typing indicator
+  socket.on("stop-group-typing", ({ groupId, username }) => {
+    if (groupId) {
+      socket.to(`group-${groupId}`).emit("stop-group-typing", { groupId, username });
+    }
+  });
+
+  // Handle direct message typing indicator
+  socket.on("direct-typing", ({ recipient, username }) => {
+    if (recipient) {
+      socket.to(recipient).emit("direct-typing", { username });
+    }
+  });
+
+  socket.on("stop-direct-typing", ({ recipient, username }) => {
+    if (recipient) {
+      socket.to(recipient).emit("stop-direct-typing", { username });
+    }
+  });
+
   // Join task-specific room for receiving real-time comments
   socket.on("join-task", (taskId) => {
     if (taskId) {

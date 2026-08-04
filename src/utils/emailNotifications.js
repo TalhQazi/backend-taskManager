@@ -60,6 +60,14 @@ async function sendEmailNotification(usernameOrId, templateKey, variables = {}) 
             { name: new RegExp(`^${escapeRegex(user.name || user.username)}$`, "i") }
           ]
         });
+
+        if (!employee && user.email) {
+          employee = {
+            _id: user._id,
+            email: user.email,
+            name: user.name || user.username || "Admin User",
+          };
+        }
       }
     }
 

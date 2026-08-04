@@ -253,9 +253,55 @@ async function listSessions(actor, query = {}) {
   });
 
   const [res] = await WorkSession.aggregate(pipeline).allowDiskUse(false);
+  let items = res?.items || [];
+  let total = res?.total?.[0]?.count || 0;
+
+  // Dynamic Fallback: If no explicit WorkSession records exist, map in-progress Tasks
+  if (items.length === 0 && (!query.status || query.status.includes("working"))) {
+    const Task = require("../models/Task");
+    const activeTasks = await Task.find({ status: "in-progress" })
+      .populate("projectId", "name")
+      .limit(limit)
+      .lean();
+
+    if (activeTasks.length > 0) {
+      items = activeTasks.map((t) => {
+        const startedAt = t.startedAt || t.firstStartedAt || t.createdAt || new Date();
+        const elapsed = Math.max(0, Math.floor((Date.now() - new Date(startedAt).getTime()) / 1000));
+        return {
+          _id: t._id,
+          employeeId: t.assignees?.[0] || t.teamLead || "dynamic-user",
+          employeeName: t.assignees?.[0] || t.teamLead || t.startedByName || "Assigned Staff",
+          employeeAvatar: "",
+          department: t.category || "General",
+          taskId: t._id,
+          taskTitle: t.title,
+          taskPriority: t.priority || "medium",
+          taskDueDate: t.dueDate,
+          projectId: t.projectId?._id || t.projectId,
+          projectName: t.projectId?.name || "General Project",
+          status: "working",
+          startedAt: startedAt,
+          pausedAt: null,
+          pausedTotalSeconds: 0,
+          elapsedSeconds: elapsed,
+          progressPercent: 50,
+          laborCostCents: 0,
+          locationId: null,
+          locationName: "Main Office",
+          lastActivityAt: t.updatedAt || new Date(),
+          deviceType: "desktop",
+          blocker: null,
+          createdAt: t.createdAt,
+        };
+      });
+      total = items.length;
+    }
+  }
+
   return {
-    items: res?.items || [],
-    total: res?.total?.[0]?.count || 0,
+    items,
+    total,
     page,
     limit,
   };

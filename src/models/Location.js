@@ -21,6 +21,33 @@ const LocationSchema = new mongoose.Schema(
         url: { type: String, default: "" },
       },
     ],
+    complianceChecklist: {
+      water: {
+        status: { type: String, default: "Pending" },
+        notes: { type: String, default: "" },
+      },
+      power: {
+        status: { type: String, default: "Pending" },
+        notes: { type: String, default: "" },
+      },
+      townPermitDemo: {
+        status: { type: String, default: "Pending" },
+        notes: { type: String, default: "" },
+      },
+      townPermitRenovations: {
+        status: { type: String, default: "Pending" },
+        notes: { type: String, default: "" },
+      },
+      sitePlanReview: {
+        option: { type: String, default: "Needed" }, // "Needed" | "Not Needed" | "Approved" | "Pending"
+        notes: { type: String, default: "" },
+      },
+      certificateOfOccupancy: {
+        status: { type: String, default: "Pending" }, // "Obtained" | "Pending" | "In Review" | "N/A"
+        date: { type: String, default: "" },
+        notes: { type: String, default: "" },
+      },
+    },
   },
   { timestamps: true }
 );

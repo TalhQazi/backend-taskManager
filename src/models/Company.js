@@ -64,6 +64,31 @@ const companySchema = new mongoose.Schema(
       trim: true,
       default: "",
     },
+    unemploymentId: {
+      type: String,
+      trim: true,
+      default: "",
+    },
+    salesTaxId: {
+      type: String,
+      trim: true,
+      default: "",
+    },
+    eftpsNumber: {
+      type: String,
+      trim: true,
+      default: "",
+    },
+    registeredInOperatingState: {
+      type: String,
+      trim: true,
+      default: "Registered", // "Registered" | "Pending" | "Not Registered"
+    },
+    operatingStateDetails: {
+      type: String,
+      trim: true,
+      default: "",
+    },
     charterNumber: {
       type: String,
       trim: true,
