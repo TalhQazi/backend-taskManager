@@ -19,9 +19,17 @@ async function sendSystemEmail({ to, templateKey, variables = {} }) {
     }
 
     const { emailConfig, templates } = settings;
-    const template = templates[templateKey];
+    let template = templates ? templates[templateKey] : null;
 
-    if (!template || !template.enabled) {
+    if (!template && templateKey === "patentExpiration") {
+      template = {
+        enabled: true,
+        subject: "ALERT: Patent Expiring - {patentName}",
+        body: "Hello {name},\n\nThis is an automated notification to inform you that the patent '{patentName}' is expiring in {daysUntilExpiration} days (Expiration Date: {expirationDate}).\n\nApplication Number: {applicationNumber}\nCategory: {category}\n\nPlease take necessary actions.\n\nBest regards,\nTask Manager System",
+      };
+    }
+
+    if (!template || template.enabled === false) {
       console.log(`Template ${templateKey} is disabled or does not exist. Skipping email.`);
       return false;
     }
