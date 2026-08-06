@@ -361,6 +361,15 @@ router.post("/clock-in", requireAuth, async (req, res, next) => {
       location: parsed.data.location || "",
     });
 
+    const EmployeePresence = require("../models/EmployeePresence");
+    if (req.user?.sub) {
+      await EmployeePresence.updateOne(
+        { employeeId: req.user.sub },
+        { $set: { clockedIn: true, lastActivityAt: new Date(), employeeName } },
+        { upsert: true }
+      ).catch(() => {});
+    }
+
     cacheDel("time-entries:list:*").catch(() => {});
 
     return res.status(201).json({ item: withId(created.toObject()) });
@@ -504,6 +513,12 @@ router.post("/:id/clock-out", requireAuth, async (req, res, next) => {
     }
 
     await entry.save();
+
+    const EmployeePresence = require("../models/EmployeePresence");
+    await EmployeePresence.updateOne(
+      { $or: [{ employeeId: entry.userId }, { employeeName: entry.employee }] },
+      { $set: { clockedIn: false } }
+    ).catch(() => {});
 
     const refDate = entry.date || new Date();
     const weekStart = startOfWeekISO(refDate);

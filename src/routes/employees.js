@@ -387,6 +387,13 @@ router.post("/me/clock-in", requireAuth, async (req, res, next) => {
       location: employee.location || "",
     });
 
+    const EmployeePresence = require("../models/EmployeePresence");
+    await EmployeePresence.updateOne(
+      { employeeId: user._id },
+      { $set: { clockedIn: true, lastActivityAt: now, employeeName: employee.name, department: employee.department || "" } },
+      { upsert: true }
+    ).catch(() => {});
+
     res.status(201).json({
       item: {
         id: String(created._id),
@@ -405,7 +412,7 @@ router.post("/me/clock-out", requireAuth, async (req, res, next) => {
   try {
     const ctx = await requireEmployeeSelf(req, res);
     if (!ctx) return;
-    const { employee } = ctx;
+    const { employee, user } = ctx;
 
     const { start, end } = getDayRange(new Date());
     const entry = await TimeEntry.findOne({ employee: employee.name, date: { $gte: start, $lte: end } }).sort({ createdAt: -1 });
@@ -423,6 +430,12 @@ router.post("/me/clock-out", requireAuth, async (req, res, next) => {
     entry.clockOut = now.toTimeString().slice(0, 5);
     entry.status = "complete";
     await entry.save();
+
+    const EmployeePresence = require("../models/EmployeePresence");
+    await EmployeePresence.updateOne(
+      { $or: [{ employeeId: user._id }, { employeeId: employee._id }] },
+      { $set: { clockedIn: false } }
+    ).catch(() => {});
 
     res.json({
       item: {

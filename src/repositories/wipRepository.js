@@ -152,26 +152,42 @@ async function getSummary(actor, query = {}) {
 
   const counts = result?.counts?.[0] || {};
 
-  // Clocked-in is payroll presence, deliberately independent of task sessions.
+  const TimeEntry = require("../models/TimeEntry");
+  const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
+  const endOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
+
+  // Clocked-in is payroll presence (EmployeePresence / TimeEntry).
   const presenceMatch = actor.isOwner
     ? { clockedIn: true }
     : actor.isManager && actor.department
     ? { clockedIn: true, department: actor.department }
     : { clockedIn: true, employeeId: actor.employeeId };
-  let employeesClockedIn = await EmployeePresence.countDocuments(presenceMatch);
+  
+  const presences = await EmployeePresence.find(presenceMatch).select("employeeId employeeName").lean();
+  const clockedInIds = new Set(presences.map((p) => String(p.employeeId || p.employeeName)).filter(Boolean));
 
-  // Dynamic Fallback: if WorkSessions / Presences are empty, calculate live metrics from Task, Employee & Project collections
+  // Also query today's active time entries
+  const timeEntriesToday = await TimeEntry.find({ date: { $gte: startOfDay, $lte: endOfDay } })
+    .select("status clockOut clockOutAt employee userId")
+    .lean();
+
+  timeEntriesToday.forEach((e) => {
+    const status = String(e?.status || "").toLowerCase();
+    const clockOut = String(e?.clockOut || "").trim();
+    const clockOutAt = e?.clockOutAt;
+    const isClockedIn = status === "incomplete" || status === "active" || (!clockOut && !clockOutAt);
+    if (isClockedIn) {
+      const empIdentifier = String(e?.userId || e?.employee || "").trim();
+      if (empIdentifier) clockedInIds.add(empIdentifier);
+    }
+  });
+
+  let employeesClockedIn = clockedInIds.size;
+
+  // Dynamic Fallback: if WorkSessions are empty, calculate live metrics from Task & Project collections
   const Task = require("../models/Task");
   const Employee = require("../models/Employee");
   const Project = require("../models/Project");
-
-  if (employeesClockedIn === 0) {
-    employeesClockedIn = await Employee.countDocuments({ status: "active" }).catch(() => 0);
-    if (employeesClockedIn === 0) {
-      const User = require("../models/User");
-      employeesClockedIn = await User.countDocuments({ status: "active" }).catch(() => 0);
-    }
-  }
 
   let currentlyWorking = counts.currentlyWorking || 0;
   if (currentlyWorking === 0) {
