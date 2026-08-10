@@ -19,11 +19,22 @@ const CORE_REQ_MAP = {
   largeHeaderImage: "Large Header Image",
   contactInfoSection: "Contact Info Section",
   adaCompliance: "ADA Compliance",
-  faq: "FAQ Section",
+  faq: "FAQ",
   contactUsPage: "Contact Us Page",
   privacyPolicy: "Privacy Policy",
-  seo: "SEO Optimization",
-  siteMap: "Sitemap",
+  seo: "SEO",
+  siteMap: "Site Map",
+  humanVerification: "Human Verification (Math Puzzle)",
+  youtubeCompliance: "YouTube",
+  rumbleCompliance: "Rumble",
+  libertySocialCompliance: "Liberty Social",
+  facebookCompliance: "Facebook",
+  xCompliance: "X (Twitter)",
+  instagramCompliance: "Instagram",
+  tikTokCompliance: "TikTok",
+  yelpCompliance: "Yelp",
+  truthSocialCompliance: "Truth Social",
+  threadsCompliance: "Threads",
 };
 
 function coreStatusToChecklistStatus(val) {
@@ -83,6 +94,7 @@ router.get("/active", async (req, res, next) => {
       await updateAndGetWebsiteReadinessScore(w._id);
     }
     const websites = await Website.find({ websiteType: "active" })
+      .populate('locations')
       .sort({ createdAt: -1 })
       .lean();
     res.json({ items: websites });
@@ -99,6 +111,7 @@ router.get("/future", async (req, res, next) => {
       await updateAndGetWebsiteReadinessScore(w._id);
     }
     const websites = await Website.find({ websiteType: "future" })
+      .populate('locations')
       .sort({ createdAt: -1 })
       .lean();
     res.json({ items: websites });
@@ -141,7 +154,7 @@ router.get("/compliance/reports", requireAuth, async (req, res, next) => {
     for (const w of allWebsites) {
       await updateAndGetWebsiteReadinessScore(w._id);
     }
-    const websites = await Website.find().lean();
+    const websites = await Website.find().populate('locations').lean();
     const totalWebsites = websites.length;
     
     // Average readiness score
@@ -193,7 +206,7 @@ router.get("/compliance/reports", requireAuth, async (req, res, next) => {
 // Get single website by ID
 router.get("/:id", async (req, res, next) => {
   try {
-    const website = await Website.findById(req.params.id).lean();
+    const website = await Website.findById(req.params.id).populate('locations').lean();
     if (!website) {
       return res.status(404).json({ error: { message: "Website not found" } });
     }
@@ -278,7 +291,7 @@ router.get("/:id/compliance", requireAuth, async (req, res, next) => {
     }
 
     await updateAndGetWebsiteReadinessScore(website._id);
-    const updatedWebsite = await Website.findById(website._id).lean();
+    const updatedWebsite = await Website.findById(website._id).populate('locations').lean();
 
     res.json({ items, website: updatedWebsite });
   } catch (err) {
@@ -481,7 +494,7 @@ router.put("/:id", requireAuth, async (req, res, next) => {
 
     // Recalculate readiness score
     await updateAndGetWebsiteReadinessScore(website._id);
-    const updatedWebsite = await Website.findById(website._id).lean();
+    const updatedWebsite = await Website.findById(website._id).populate('locations').lean();
 
     res.json({ item: updatedWebsite });
   } catch (err) {

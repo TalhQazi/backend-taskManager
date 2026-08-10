@@ -100,8 +100,7 @@ const costManagerRoutes = require("./routes/costManager");
 const atlasbookRoutes = require("./routes/atlasbook");
 const personalBudgetRoutes = require("./routes/personalBudget");
 const healthRoutes = require("./routes/health");
-
-
+const expenseSheetsRoutes = require("./routes/expenseSheets");
 
 //going to express now
 const app = express();
@@ -476,6 +475,7 @@ app.use("/api/team-lead-mappings", requireClearHire, teamLeadMappingsRoutes);
 app.use("/api/task-permissions", requireClearHire, taskPermissionsRoutes);
 app.use("/api/founder-messages", requireClearHire, founderMessagesRoutes);
 app.use("/api/notes", requireClearHire, notesRoutes);
+app.use("/api/expense-sheets", requireClearHire, expenseSheetsRoutes);
 
 // Knowledge Vault v2 — additive module, always mounted. Wrapped in try/catch so
 // a load error could never crash server startup.

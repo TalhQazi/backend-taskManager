@@ -94,6 +94,7 @@ const websiteSchema = new mongoose.Schema(
     complianceTemplate: { type: String, default: "" }, // template key
     readinessScore: { type: Number, default: 0 },
     overrideReason: { type: String, default: "" },
+    locations: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Location' }],
     // Core requirements checkmark fields
     googleAnalytics: { type: String, enum: ["green", "red", "none"], default: "none" },
     humanVerification: { type: String, enum: ["green", "red", "none"], default: "none" },
