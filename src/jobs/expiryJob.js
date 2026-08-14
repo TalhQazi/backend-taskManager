@@ -1,9 +1,14 @@
 const Patent = require("../models/Patent");
 const User = require("../models/User");
+const Employee = require("../models/Employee");
 const { createNotification } = require("../utils/notifications");
 const { sendEmailNotification } = require("../utils/emailNotifications");
 
-const calculateExpiration = (filingDate, filingType) => {
+const calculateExpiration = (filingDate, filingType, customExpiration = null) => {
+  if (customExpiration) {
+    const customDate = new Date(customExpiration);
+    if (!isNaN(customDate.getTime())) return customDate;
+  }
   if (!filingDate) return null;
   const date = new Date(filingDate);
   if (filingType === "Provisional") {
@@ -21,9 +26,7 @@ async function checkPatentExpirations() {
     const today = new Date();
 
     for (const patent of patents) {
-      if (!patent.filingDate) continue;
-
-      const expiration = calculateExpiration(patent.filingDate, patent.filingType);
+      const expiration = calculateExpiration(patent.filingDate, patent.filingType, patent.provisionalExpiration);
       if (!expiration) continue;
 
       const timeDiff = expiration.getTime() - today.getTime();
@@ -74,14 +77,23 @@ async function checkPatentExpirations() {
           link: "/admin/intellectual-property"
         });
 
-        // Send Email Notification to all active super-admins, admins, and managers
-        const usersToNotify = await User.find({
+        // Query active super-admins, admins, and managers from both User and Employee collections
+        const userAdmins = await User.find({
           role: { $in: ["super-admin", "admin", "manager"] },
           status: "active"
-        }).lean();
+        }).select("_id email username name").lean();
 
-        for (const user of usersToNotify) {
-          await sendEmailNotification(String(user._id), "patentExpiration", {
+        const empAdmins = await Employee.find({
+          userRole: { $in: ["super-admin", "admin", "manager"] },
+          userStatus: "active"
+        }).select("_id email name").lean();
+
+        const targets = new Set();
+        userAdmins.forEach((u) => targets.add(String(u._id || u.username || u.email)));
+        empAdmins.forEach((e) => targets.add(String(e._id || e.email)));
+
+        for (const targetId of targets) {
+          await sendEmailNotification(targetId, "patentExpiration", {
             patentName: patent.patentName,
             daysUntilExpiration: String(Math.max(0, daysUntilExpiration)),
             expirationDate: expiration.toISOString().split("T")[0],

@@ -1,11 +1,18 @@
 const express = require("express");
 const Patent = require("../models/Patent");
+const Employee = require("../models/Employee");
+const User = require("../models/User");
+const { sendSystemEmail } = require("../lib/email");
 const { requireAuth } = require("../middleware/auth");
 
 const router = express.Router();
 
-// Helper function to calculate expiration
-const calculateExpiration = (filingDate, filingType) => {
+// Helper function to calculate expiration, honoring custom override if provided
+const calculateExpiration = (filingDate, filingType, customExpiration = null) => {
+  if (customExpiration) {
+    const customDate = new Date(customExpiration);
+    if (!isNaN(customDate.getTime())) return customDate;
+  }
   if (!filingDate) return null;
   const date = new Date(filingDate);
   if (filingType === "Provisional") {
@@ -16,7 +23,7 @@ const calculateExpiration = (filingDate, filingType) => {
   return date;
 };
 
-// Helper function to check if expiring soon
+// Helper function to check if expiring soon (<= 60 days)
 const isExpiringExpiringSoon = (expirationDate) => {
   if (!expirationDate) return false;
   const today = new Date();
@@ -25,6 +32,51 @@ const isExpiringExpiringSoon = (expirationDate) => {
   );
   return daysUntilExpiration <= 60 && daysUntilExpiration > 0;
 };
+
+// Helper to notify all active Admins & Super-Admins when a patent is filed
+async function notifyAdminsAboutFiledPatent(patent) {
+  try {
+    const expiration = calculateExpiration(patent.filingDate, patent.filingType, patent.provisionalExpiration);
+    const expirationStr = expiration ? expiration.toISOString().split("T")[0] : "N/A";
+    const filingDateStr = patent.filingDate ? new Date(patent.filingDate).toISOString().split("T")[0] : "N/A";
+
+    const empAdmins = await Employee.find({
+      userRole: { $in: ["admin", "super-admin"] },
+      userStatus: "active",
+      email: { $exists: true, $ne: "" },
+    }).select("email name").lean();
+
+    const userAdmins = await User.find({
+      role: { $in: ["admin", "super-admin"] },
+      status: "active",
+      email: { $exists: true, $ne: "" },
+    }).select("email name").lean();
+
+    const recipientMap = new Map();
+    empAdmins.forEach((e) => { if (e.email) recipientMap.set(e.email.toLowerCase(), e.name || "Admin"); });
+    userAdmins.forEach((u) => { if (u.email) recipientMap.set(u.email.toLowerCase(), u.name || "Admin"); });
+
+    for (const [email, name] of recipientMap.entries()) {
+      await sendSystemEmail({
+        to: email,
+        templateKey: "patentFiled",
+        variables: {
+          name,
+          patentName: patent.patentName || "N/A",
+          filingType: patent.filingType || "Provisional",
+          filingDate: filingDateStr,
+          expirationDate: expirationStr,
+          applicationNumber: patent.applicationNumber || "N/A",
+          category: patent.category || "N/A",
+          notes: patent.notes || "None",
+          createdBy: patent.createdBy || "System",
+        },
+      });
+    }
+  } catch (err) {
+    console.error("[Patents Route] Error notifying admins about filed patent:", err);
+  }
+}
 
 // Get expiration watch (patents expiring within 180 days) - MUST come before /:id route
 router.get("/expiration-watch", async (req, res, next) => {
@@ -36,7 +88,7 @@ router.get("/expiration-watch", async (req, res, next) => {
     const today = new Date();
     const expiringPatents = patents
       .map((patent) => {
-        const expiration = calculateExpiration(patent.filingDate, patent.filingType);
+        const expiration = calculateExpiration(patent.filingDate, patent.filingType, patent.provisionalExpiration);
         if (!expiration) return null;
 
         const daysUntilExpiration = Math.ceil(
@@ -70,9 +122,8 @@ router.get("/filed", async (req, res, next) => {
       .sort({ patentName: 1 })
       .lean();
 
-    // Calculate expiration for each patent
     const enrichedPatents = patents.map((patent) => {
-      const expiration = calculateExpiration(patent.filingDate, patent.filingType);
+      const expiration = calculateExpiration(patent.filingDate, patent.filingType, patent.provisionalExpiration);
       const isExpiring = isExpiringExpiringSoon(expiration);
 
       return {
@@ -109,7 +160,7 @@ router.get("/:id", async (req, res, next) => {
     }
 
     if (patent.patentType === "filed") {
-      const expiration = calculateExpiration(patent.filingDate, patent.filingType);
+      const expiration = calculateExpiration(patent.filingDate, patent.filingType, patent.provisionalExpiration);
       return res.json({
         item: {
           ...patent,
@@ -132,8 +183,16 @@ router.post("/filed", requireAuth, async (req, res, next) => {
   try {
     const { patentName } = req.body;
     if (!patentName) return res.status(400).json({ error: { message: "patentName is required" } });
+    
+    if (!req.body.provisionalExpiration && req.body.filingDate) {
+      req.body.provisionalExpiration = calculateExpiration(req.body.filingDate, req.body.filingType);
+    }
+
     const newPatent = new Patent({ ...req.body, createdBy: req.user?.username || "System" });
     await newPatent.save();
+
+    notifyAdminsAboutFiledPatent(newPatent);
+
     res.status(201).json({ item: newPatent });
   } catch (err) { next(err); }
 });
@@ -151,9 +210,12 @@ router.post("/pending", requireAuth, async (req, res, next) => {
 
 router.put("/filed/:id", requireAuth, async (req, res, next) => {
   try {
+    if (req.body.filingDate && !req.body.provisionalExpiration) {
+      req.body.provisionalExpiration = calculateExpiration(req.body.filingDate, req.body.filingType);
+    }
     const patent = await Patent.findByIdAndUpdate(req.params.id, req.body, { new: true, runValidators: true });
     if (!patent) return res.status(404).json({ error: { message: "Patent not found" } });
-    const expiration = calculateExpiration(patent.filingDate, patent.filingType);
+    const expiration = calculateExpiration(patent.filingDate, patent.filingType, patent.provisionalExpiration);
     res.json({ item: { ...patent.toObject(), provisionalExpiration: expiration, isExpiringExpiringSoon: isExpiringExpiringSoon(expiration) } });
   } catch (err) { next(err); }
 });
@@ -195,6 +257,10 @@ router.post("/", requireAuth, async (req, res, next) => {
       });
     }
 
+    if (patentType === "filed" && !rest.provisionalExpiration && rest.filingDate) {
+      rest.provisionalExpiration = calculateExpiration(rest.filingDate, rest.filingType);
+    }
+
     const newPatent = new Patent({
       patentName,
       patentType,
@@ -203,6 +269,11 @@ router.post("/", requireAuth, async (req, res, next) => {
     });
 
     await newPatent.save();
+
+    if (patentType === "filed") {
+      notifyAdminsAboutFiledPatent(newPatent);
+    }
+
     res.status(201).json({ item: newPatent });
   } catch (err) {
     next(err);
@@ -212,6 +283,9 @@ router.post("/", requireAuth, async (req, res, next) => {
 // Update patent (requires auth)
 router.put("/:id", requireAuth, async (req, res, next) => {
   try {
+    const existingPatent = await Patent.findById(req.params.id).lean();
+    const wasAlreadyFiled = existingPatent?.patentType === "filed";
+
     const patent = await Patent.findByIdAndUpdate(
       req.params.id,
       req.body,
@@ -223,7 +297,11 @@ router.put("/:id", requireAuth, async (req, res, next) => {
     }
 
     if (patent.patentType === "filed") {
-      const expiration = calculateExpiration(patent.filingDate, patent.filingType);
+      // If converted to filed just now, notify admins
+      if (!wasAlreadyFiled) {
+        notifyAdminsAboutFiledPatent(patent);
+      }
+      const expiration = calculateExpiration(patent.filingDate, patent.filingType, patent.provisionalExpiration);
       return res.json({
         item: {
           ...patent.toObject(),

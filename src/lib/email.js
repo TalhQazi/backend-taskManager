@@ -29,6 +29,22 @@ async function sendSystemEmail({ to, templateKey, variables = {} }) {
       };
     }
 
+    if (!template && templateKey === "forgotPassword") {
+      template = {
+        enabled: true,
+        subject: "Password Reset Code - Task Manager",
+        body: "Hello {name},\n\nYou have requested a password reset for your Task Manager account.\n\nYour 6-digit verification code is: {code}\n\nIMPORTANT: This code will expire in 60 minutes.\n\nIf you did not request a password reset, please ignore this email.\n\nBest regards,\nTask Manager System",
+      };
+    }
+
+    if (!template && templateKey === "patentFiled") {
+      template = {
+        enabled: true,
+        subject: "NEW PATENT FILED: {patentName}",
+        body: "Hello {name},\n\nA new patent has been filed in the system.\n\nPatent Name: {patentName}\nFiling Type: {filingType}\nFiling Date: {filingDate}\nExpiration Date: {expirationDate}\nApplication Number: {applicationNumber}\nCategory: {category}\nNotes: {notes}\nFiled By: {createdBy}\n\nBest regards,\nTask Manager System",
+      };
+    }
+
     if (!template || template.enabled === false) {
       console.log(`Template ${templateKey} is disabled or does not exist. Skipping email.`);
       return false;
