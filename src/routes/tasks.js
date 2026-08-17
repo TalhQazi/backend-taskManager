@@ -2302,6 +2302,16 @@ router.delete("/:id/priority", requireAuth, async (req, res, next) => {
     // Return updated task
     const updatedTask = await Task.findById(id);
 
+    return res.status(200).json({
+      success: true,
+      item: updatedTask,
+      message: "Execution priority removed successfully",
+    });
+  } catch (err) {
+    return next(err);
+  }
+});
+
 // POST /api/tasks/cleanup-orphaned-assignees — clean up removed/non-existent employees from tasks & projects
 router.post("/cleanup-orphaned-assignees", requireAuth, async (req, res, next) => {
   try {
