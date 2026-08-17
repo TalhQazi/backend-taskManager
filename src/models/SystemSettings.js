@@ -90,6 +90,12 @@ const SystemSettingsSchema = new mongoose.Schema(
       switchNeutralSeasonal: { type: Boolean, default: false },
       forceCompanyUnifiedTheme: { type: String, default: "" },
     },
+    patentExpirationConfig: {
+      notificationDays: {
+        type: [Number],
+        default: [1, 7, 15, 30, 60, 90, 120, 180],
+      },
+    },
   },
   { timestamps: true }
 );

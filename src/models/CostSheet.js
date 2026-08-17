@@ -7,6 +7,10 @@ const CostSheetSchema = new mongoose.Schema(
     projectId: { type: String, required: false, index: true },
     taskId: { type: String, required: false, index: true },
     name: { type: String, default: "Project Cost Sheet" },
+    vendorName: { type: String, default: "" },
+    quoteNumber: { type: String, default: "" },
+    isQuote: { type: Boolean, default: false },
+    quoteStatus: { type: String, enum: ["draft", "submitted", "accepted", "rejected", "archived"], default: "draft" },
     currency: { type: String, default: "USD" },
     // Manual entry: money currently available for purchasing.
     availableBudgetCents: { type: Number, default: 0 },

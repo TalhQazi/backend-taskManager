@@ -298,7 +298,12 @@ async function loadSheetPayload(sheet) {
     sheet: {
       id: String(sheet._id),
       projectId: sheet.projectId,
+      taskId: sheet.taskId,
       name: sheet.name,
+      vendorName: sheet.vendorName || "",
+      quoteNumber: sheet.quoteNumber || "",
+      isQuote: !!sheet.isQuote,
+      quoteStatus: sheet.quoteStatus || "draft",
       currency: sheet.currency,
       availableBudgetCents: sheet.availableBudgetCents || 0,
     },
@@ -314,6 +319,10 @@ const moneyCents = z.number().int().min(0).max(1e13);
 
 const sheetPatchSchema = z.object({
   name: z.string().trim().min(1).max(200).optional(),
+  vendorName: z.string().max(200).optional(),
+  quoteNumber: z.string().max(120).optional(),
+  isQuote: z.boolean().optional(),
+  quoteStatus: z.enum(["draft", "submitted", "accepted", "rejected", "archived"]).optional(),
   availableBudgetCents: moneyCents.optional(),
 });
 
@@ -436,11 +445,15 @@ router.get("/sheets", requireAuth, async (req, res, next) => {
 router.post("/sheets", requireAuth, async (req, res, next) => {
   try {
     if (!requireEditor(req, res)) return;
-    const { name, availableBudgetCents } = req.body;
+    const { name, availableBudgetCents, vendorName, quoteNumber, isQuote, quoteStatus } = req.body;
     if (!name) return res.status(400).json({ error: { message: "Name is required" } });
 
     const sheet = await CostSheet.create({
       name,
+      vendorName: vendorName || "",
+      quoteNumber: quoteNumber || "",
+      isQuote: !!isQuote || !!vendorName || !!quoteNumber,
+      quoteStatus: quoteStatus || "draft",
       availableBudgetCents: Number(availableBudgetCents) || 0,
       createdByUserId: req.user?.id || "",
       createdByUsername: req.user?.username || req.user?.name || "",
@@ -450,7 +463,7 @@ router.post("/sheets", requireAuth, async (req, res, next) => {
       DEFAULT_SECTIONS.map((sectionName, idx) => ({ costSheetId: sheet._id, name: sectionName, sortOrder: idx }))
     );
 
-    await writeAudit(req, "cost_sheet", sheet._id, null, "create", null, { name: sheet.name });
+    await writeAudit(req, "cost_sheet", sheet._id, null, "create", null, { name: sheet.name, vendorName: sheet.vendorName });
     res.status(201).json(sheet);
   } catch (err) {
     next(err);
@@ -528,7 +541,7 @@ router.delete("/sheets/:sheetId", requireAuth, async (req, res, next) => {
   }
 });
 
-// PATCH /api/cost-manager/sheets/:sheetId — update name / available budget.
+// PATCH /api/cost-manager/sheets/:sheetId — update name / available budget / vendor / quote info.
 router.patch("/sheets/:sheetId", requireAuth, async (req, res, next) => {
   try {
     if (!requireEditor(req, res)) return;
@@ -538,8 +551,18 @@ router.patch("/sheets/:sheetId", requireAuth, async (req, res, next) => {
     const sheet = await CostSheet.findById(req.params.sheetId);
     if (!sheet) return res.status(404).json({ error: { message: "Cost sheet not found" } });
 
-    const old = { name: sheet.name, availableBudgetCents: sheet.availableBudgetCents };
+    const old = {
+      name: sheet.name,
+      availableBudgetCents: sheet.availableBudgetCents,
+      vendorName: sheet.vendorName,
+      quoteNumber: sheet.quoteNumber,
+      quoteStatus: sheet.quoteStatus,
+    };
     if (parsed.data.name !== undefined) sheet.name = parsed.data.name;
+    if (parsed.data.vendorName !== undefined) sheet.vendorName = parsed.data.vendorName;
+    if (parsed.data.quoteNumber !== undefined) sheet.quoteNumber = parsed.data.quoteNumber;
+    if (parsed.data.isQuote !== undefined) sheet.isQuote = parsed.data.isQuote;
+    if (parsed.data.quoteStatus !== undefined) sheet.quoteStatus = parsed.data.quoteStatus;
     if (parsed.data.availableBudgetCents !== undefined) sheet.availableBudgetCents = parsed.data.availableBudgetCents;
     await sheet.save();
 

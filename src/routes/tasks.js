@@ -2302,10 +2302,79 @@ router.delete("/:id/priority", requireAuth, async (req, res, next) => {
     // Return updated task
     const updatedTask = await Task.findById(id);
 
-    return res.status(200).json({
+// POST /api/tasks/cleanup-orphaned-assignees — clean up removed/non-existent employees from tasks & projects
+router.post("/cleanup-orphaned-assignees", requireAuth, async (req, res, next) => {
+  try {
+    const Employee = require("../models/Employee");
+    const User = require("../models/User");
+
+    const [employees, users] = await Promise.all([
+      Employee.find({ status: { $ne: "inactive" } }).select("name email username _id").lean(),
+      User.find().select("name email username _id").lean(),
+    ]);
+
+    const validTokens = new Set();
+    for (const e of employees) {
+      if (e.name) validTokens.add(e.name.toLowerCase().trim());
+      if (e.email) validTokens.add(e.email.toLowerCase().trim());
+      if (e.username) validTokens.add(e.username.toLowerCase().trim());
+      if (e._id) validTokens.add(String(e._id).toLowerCase().trim());
+    }
+    for (const u of users) {
+      if (u.name) validTokens.add(u.name.toLowerCase().trim());
+      if (u.email) validTokens.add(u.email.toLowerCase().trim());
+      if (u.username) validTokens.add(u.username.toLowerCase().trim());
+      if (u._id) validTokens.add(String(u._id).toLowerCase().trim());
+    }
+
+    const tasks = await Task.find({
+      $or: [
+        { "assignees.0": { $exists: true } },
+        { assignee: { $exists: true, $ne: "" } },
+        { employee: { $exists: true, $ne: "" } },
+      ],
+    });
+
+    let tasksCleaned = 0;
+    for (const t of tasks) {
+      let changed = false;
+
+      if (Array.isArray(t.assignees) && t.assignees.length > 0) {
+        const remaining = t.assignees.filter((a) => {
+          const lower = String(a || "").toLowerCase().trim();
+          return validTokens.has(lower);
+        });
+        if (remaining.length !== t.assignees.length) {
+          t.assignees = remaining;
+          changed = true;
+        }
+      }
+
+      if (t.assignee && !validTokens.has(String(t.assignee).toLowerCase().trim())) {
+        t.assignee = "";
+        changed = true;
+      }
+
+      if (t.employee && !validTokens.has(String(t.employee).toLowerCase().trim())) {
+        t.employee = "";
+        changed = true;
+      }
+
+      if (changed) {
+        await t.save();
+        tasksCleaned++;
+      }
+    }
+
+    await cacheDel("tasks:*");
+    await cacheDel("tasks:list:*");
+    await cacheDel("projects:*");
+    await cacheDel("projects:list:*");
+
+    return res.json({
       success: true,
-      item: updatedTask,
-      message: "Execution priority removed and tasks re-sequenced",
+      message: `Cleaned up ${tasksCleaned} task(s) with orphaned assignees`,
+      tasksCleaned,
     });
   } catch (err) {
     return next(err);

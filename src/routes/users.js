@@ -182,20 +182,25 @@ router.put("/:id", requireAuth, requireRole(["super-admin", "admin"]), async (re
   }
 });
 
-// Delete user (deletes Employee record)
+// Delete user (deletes Employee record & cleans up task/project assignments)
 router.delete("/:id", requireAuth, requireRole(["super-admin", "admin"]), async (req, res, next) => {
   try {
-    const deleted = await Employee.findByIdAndDelete(req.params.id).lean();
-    if (!deleted) {
+    const employee = await Employee.findById(req.params.id).lean();
+    if (!employee) {
       return res.status(404).json({ error: { message: "User not found" } });
     }
+
+    const { cleanupEmployeeAssignments } = require("../utils/employeeCleanup");
+    await cleanupEmployeeAssignments(employee);
+    await Employee.findByIdAndDelete(req.params.id);
+    await cacheDel("employees:list");
 
     await createNotification({
       actor: req.user?.name || req.user?.username || "Admin",
       actorRole: req.user?.role || "admin",
       action: "deleted",
       resourceType: "user",
-      resourceName: deleted.name || deleted.email,
+      resourceName: employee.name || employee.email,
       resourceId: String(req.params.id),
     });
 
@@ -214,41 +219,9 @@ router.post("/:id/archive", requireAuth, requireRole(["super-admin", "admin"]), 
     }
 
     const Archive = require("../models/Archive");
-    const Project = require("../models/Project");
-    const Task = require("../models/Task");
-    const { cacheDel } = require("../lib/cache");
+    const { cleanupEmployeeAssignments } = require("../utils/employeeCleanup");
 
-    const identifiers = [employee.name, employee.email].filter(Boolean);
-
-    const affectedProjects = await Project.find({ assignees: { $in: identifiers } }).select("_id").lean();
-    const projectIds = affectedProjects.map((p) => String(p._id));
-
-    await Project.updateMany(
-      { assignees: { $in: identifiers } },
-      { $pull: { assignees: { $in: identifiers } } }
-    );
-    await Project.updateMany(
-      { teamLead: { $in: identifiers } },
-      { $set: { teamLead: "" } }
-    );
-
-    await Task.updateMany(
-      { assignees: { $in: identifiers } },
-      { $pull: { assignees: { $in: identifiers } } }
-    );
-    await Task.updateMany(
-      { assignee: { $in: identifiers } },
-      { $set: { assignee: "" } }
-    );
-    await Task.updateMany(
-      { employee: { $in: identifiers } },
-      { $set: { employee: "" } }
-    );
-
-    await cacheDel("tasks:list:*");
-    for (const pid of projectIds) {
-      await cacheDel(`project:${pid}`);
-    }
+    await cleanupEmployeeAssignments(employee);
 
     await Archive.create({
       itemType: "user",

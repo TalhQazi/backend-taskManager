@@ -73,14 +73,14 @@ async function sendSystemEmail({ to, templateKey, variables = {} }) {
       tls: { rejectUnauthorized: false },
     });
 
-    let subject = template.subject;
-    let body = template.body;
+    let subject = template.subject || (templateKey === "patentExpiration" ? "ALERT: Patent Expiring - {patentName}" : (templateKey === "patentFiled" ? "NEW PATENT FILED: {patentName}" : "Task Manager Notification"));
+    let body = template.body || (templateKey === "patentExpiration" ? "Hello {name},\n\nThe patent '{patentName}' is expiring in {daysUntilExpiration} days (Expiration Date: {expirationDate}).\n\nApplication Number: {applicationNumber}\nCategory: {category}\n\nTask Manager System" : "Hello {name},\n\nYou have an update in the Task Manager System.");
 
     // Replace variables in subject and body
     Object.keys(variables).forEach((key) => {
       const placeholder = new RegExp(`{${key}}`, "g");
-      subject = subject.replace(placeholder, variables[key]);
-      body = body.replace(placeholder, variables[key]);
+      subject = subject.replace(placeholder, variables[key] ?? "");
+      body = body.replace(placeholder, variables[key] ?? "");
     });
 
     const fromEmail = emailConfig.fromAddress || emailConfig.user;

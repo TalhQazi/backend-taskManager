@@ -769,36 +769,16 @@ async function archiveEmployeeById(employeeId, archivedBy) {
   });
 
   // Remove from Tasks and Projects
-    try {
-      const Task = require('../models/Task');
-      const Project = require('../models/Project');
-      const targets = [employee.name, employee.email].filter(Boolean);
-      if (targets.length > 0) {
-        if (Task) {
-          const pullResult = await Task.updateMany(
-            { assignees: { $in: targets } },
-            { $pull: { assignees: { $in: targets } } }
-          );
-          const clearAssigneeResult = await Task.updateMany(
-            { assignee: { $in: targets } },
-            { $set: { assignee: "" } }
-          );
-          const clearEmployeeResult = await Task.updateMany(
-            { employee: { $in: targets } },
-            { $set: { employee: "" } }
-          );
-          console.log(`[Archive Cleanup] Pulled targets from task assignees and cleared single assignee/employee fields.`);
-        }
-        if (Project) {
-          await Project.updateMany({ assignees: { $in: targets } }, { $pull: { assignees: { $in: targets } } });
-          await Project.updateMany({ teamLead: { $in: targets } }, { $set: { teamLead: "" } });
-        }
-      }
-    } catch (err) {
-      console.error('Failed to clean up tasks/projects for archived employee', err);
-    }
+  try {
+    const { cleanupEmployeeAssignments } = require("../utils/employeeCleanup");
+    await cleanupEmployeeAssignments(employee);
+    console.log(`[Archive Cleanup] Successfully cleaned up tasks and projects for employee ${employee.name}`);
+  } catch (err) {
+    console.error('Failed to clean up tasks/projects for archived employee', err);
+  }
 
   await Employee.findByIdAndDelete(employeeId);
+  await cacheDel("employees:list");
   
   return employee;
 }
