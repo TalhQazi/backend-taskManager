@@ -163,12 +163,14 @@ async function checkPatentExpirations(forceSend = false) {
                 category: patent.category || "N/A"
               }
             });
-            if (sent) {
+            const isSent = Boolean(sent && (typeof sent === "object" ? sent.sent : sent));
+            if (isSent) {
               results.notified++;
               console.log(`[Expiry Job] ✓ Email sent successfully to ${email}`);
             } else {
-              console.warn(`[Expiry Job] ✗ sendSystemEmail returned false for ${email} — check template enabled status or SMTP config.`);
-              results.errors.push(`Email to ${email} returned false`);
+              const reason = (typeof sent === "object" && sent?.reason) ? sent.reason : "unknown reason";
+              console.warn(`[Expiry Job] ✗ sendSystemEmail failed for ${email}: ${reason}`);
+              results.errors.push(`Email to ${email}: ${reason}`);
             }
           } catch (emailErr) {
             console.error(`[Expiry Job] ✗ Failed to send email to ${email}:`, emailErr.message);

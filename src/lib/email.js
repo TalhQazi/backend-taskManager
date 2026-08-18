@@ -15,7 +15,7 @@ async function sendSystemEmail({ to, templateKey, variables = {} }) {
     const settings = await SystemSettings.findOne({ key: "global" });
     if (!settings) {
       console.warn("No system settings found. Cannot send email.");
-      return false;
+      return { sent: false, reason: "No system settings found in database. Please save System Settings first." };
     }
 
     const { emailConfig, templates } = settings;
@@ -46,13 +46,22 @@ async function sendSystemEmail({ to, templateKey, variables = {} }) {
     }
 
     if (!template || template.enabled === false) {
-      console.log(`Template ${templateKey} is disabled or does not exist. Skipping email.`);
-      return false;
+      const msg = `Template '${templateKey}' is ${!template ? "not found" : "disabled"}.`;
+      console.log(msg, "Skipping email.");
+      return { sent: false, reason: msg + " Enable it in System Email Settings." };
     }
 
-    if (!emailConfig.host || !emailConfig.user || !emailConfig.pass) {
-      console.warn("SMTP configuration is incomplete. Cannot send email.");
-      return false;
+    if (!emailConfig || !emailConfig.host || !emailConfig.user || !emailConfig.pass) {
+      const missing = [];
+      if (!emailConfig) { missing.push("entire emailConfig"); }
+      else {
+        if (!emailConfig.host) missing.push("SMTP Host");
+        if (!emailConfig.user) missing.push("SMTP User");
+        if (!emailConfig.pass) missing.push("SMTP Password");
+      }
+      const msg = `SMTP configuration incomplete — missing: ${missing.join(", ")}.`;
+      console.warn(msg);
+      return { sent: false, reason: msg + " Configure these in System Email Settings." };
     }
 
     let decryptedPass;
@@ -97,10 +106,22 @@ async function sendSystemEmail({ to, templateKey, variables = {} }) {
 
     const info = await transporter.sendMail(mailOptions);
     console.log(`Email sent: ${info.messageId}`);
-    return true;
+    return { sent: true, reason: "OK" };
   } catch (err) {
+    let friendlyMsg = err.message || "Unknown SMTP error";
+    if (friendlyMsg.includes("ECONNREFUSED")) {
+      friendlyMsg = "ECONNREFUSED — Cannot connect to SMTP server. Check host and port.";
+    } else if (friendlyMsg.includes("ENOTFOUND")) {
+      friendlyMsg = "SMTP host not found. Check the host address.";
+    } else if (friendlyMsg.includes("self signed")) {
+      friendlyMsg = "SSL certificate error (self-signed). Usually safe for internal servers.";
+    } else if (friendlyMsg.includes("535") || friendlyMsg.includes("Invalid login")) {
+      friendlyMsg = "Authentication failed — check SMTP username/password (use App Password for Gmail/Outlook).";
+    } else if (friendlyMsg.includes("ETIMEDOUT")) {
+      friendlyMsg = "Connection timed out. Check SMTP host, port, and firewall settings.";
+    }
     console.error("Error sending system email:", err);
-    return false;
+    return { sent: false, reason: friendlyMsg };
   }
 }
 

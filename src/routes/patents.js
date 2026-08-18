@@ -229,7 +229,7 @@ router.post("/test-expiration-email", requireAuth, async (req, res, next) => {
     const recipientName = req.user?.name || req.user?.username || "Admin";
 
     // Send using the patentExpiration template with test data
-    const sent = await sendSystemEmail({
+    const result = await sendSystemEmail({
       to: recipientEmail,
       templateKey: "patentExpiration",
       variables: {
@@ -242,12 +242,14 @@ router.post("/test-expiration-email", requireAuth, async (req, res, next) => {
       },
     });
 
-    if (sent) {
+    const isSuccess = Boolean(result && (typeof result === "object" ? result.sent : result));
+    if (isSuccess) {
       res.json({ message: `Test email sent successfully to ${recipientEmail}` });
     } else {
-      res.status(500).json({
+      const reason = (result && result.reason) ? result.reason : "Check SMTP configuration and template status in System Email Settings.";
+      res.status(400).json({
         error: {
-          message: "Email could not be sent. Please check: 1) SMTP settings are configured in System Email Settings, 2) The 'Patent Expiration' email template is enabled.",
+          message: `Email could not be sent: ${reason}`,
         },
       });
     }
