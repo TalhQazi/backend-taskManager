@@ -152,7 +152,144 @@ router.get("/pending", async (req, res, next) => {
   }
 });
 
-// Get single patent by ID
+// ── Notification Settings Endpoints ──
+// IMPORTANT: These named routes MUST be defined BEFORE the /:id catch-all
+
+// Get current patent notification settings
+router.get("/notification-settings", requireAuth, async (req, res, next) => {
+  try {
+    let settings = await SystemSettings.findOne({ key: "global" }).lean();
+    const defaultDays = [1, 7, 15, 30, 60, 90, 120, 180];
+    const notificationDays = settings?.patentExpirationConfig?.notificationDays || defaultDays;
+    const smtpConfigured = Boolean(settings?.emailConfig?.host && settings?.emailConfig?.user && settings?.emailConfig?.pass);
+    const templateEnabled = settings?.templates?.patentExpiration?.enabled !== false;
+
+    res.json({
+      item: {
+        notificationDays: [...notificationDays].sort((a, b) => a - b),
+        smtpConfigured,
+        templateEnabled,
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Update patent notification settings (admin/super-admin only)
+router.put("/notification-settings", requireAuth, async (req, res, next) => {
+  try {
+    const role = req.user?.role;
+    if (!["super-admin", "admin"].includes(role)) {
+      return res.status(403).json({ error: { message: "Only admins and super-admins can update notification settings" } });
+    }
+
+    const { notificationDays } = req.body;
+    if (!Array.isArray(notificationDays) || notificationDays.length === 0) {
+      return res.status(400).json({ error: { message: "notificationDays must be a non-empty array of numbers" } });
+    }
+
+    // Validate all entries are positive integers
+    const cleanDays = notificationDays
+      .map((d) => Math.round(Number(d)))
+      .filter((d) => Number.isFinite(d) && d > 0);
+
+    if (cleanDays.length === 0) {
+      return res.status(400).json({ error: { message: "At least one valid positive number is required" } });
+    }
+
+    // Deduplicate and sort ascending
+    const uniqueDays = [...new Set(cleanDays)].sort((a, b) => a - b);
+
+    await SystemSettings.findOneAndUpdate(
+      { key: "global" },
+      { $set: { "patentExpirationConfig.notificationDays": uniqueDays } },
+      { upsert: true, new: true }
+    );
+
+    res.json({ message: "Notification settings updated", notificationDays: uniqueDays });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Send a test patent expiration email to the requesting admin
+router.post("/test-expiration-email", requireAuth, async (req, res, next) => {
+  try {
+    const role = req.user?.role;
+    if (!["super-admin", "admin"].includes(role)) {
+      return res.status(403).json({ error: { message: "Only admins and super-admins can send test emails" } });
+    }
+
+    const recipientEmail = req.user?.email || req.user?.username;
+    if (!recipientEmail || !String(recipientEmail).includes("@")) {
+      return res.status(400).json({ error: { message: "Your account does not have a valid email address configured" } });
+    }
+
+    const recipientName = req.user?.name || req.user?.username || "Admin";
+
+    // Send using the patentExpiration template with test data
+    const sent = await sendSystemEmail({
+      to: recipientEmail,
+      templateKey: "patentExpiration",
+      variables: {
+        name: recipientName,
+        patentName: "TEST — Sample Patent Notification",
+        daysUntilExpiration: "30",
+        expirationDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split("T")[0],
+        applicationNumber: "TEST-123456",
+        category: "Test Category",
+      },
+    });
+
+    if (sent) {
+      res.json({ message: `Test email sent successfully to ${recipientEmail}` });
+    } else {
+      res.status(500).json({
+        error: {
+          message: "Email could not be sent. Please check: 1) SMTP settings are configured in System Email Settings, 2) The 'Patent Expiration' email template is enabled.",
+        },
+      });
+    }
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Check patent expirations manually / on-demand
+router.post("/check-expirations", requireAuth, async (req, res, next) => {
+  try {
+    const { checkPatentExpirations } = require("../jobs/expiryJob");
+    const results = await checkPatentExpirations(true);
+    res.json({ message: "Patent expiration check completed", ...results });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Reset notifiedDays on a patent so notifications re-trigger
+router.post("/reset-notifications/:id", requireAuth, async (req, res, next) => {
+  try {
+    const role = req.user?.role;
+    if (!["super-admin", "admin"].includes(role)) {
+      return res.status(403).json({ error: { message: "Only admins and super-admins can reset notifications" } });
+    }
+
+    const patent = await Patent.findById(req.params.id);
+    if (!patent) {
+      return res.status(404).json({ error: { message: "Patent not found" } });
+    }
+
+    patent.notifiedDays = [];
+    await patent.save();
+
+    res.json({ message: `Notifications reset for patent '${patent.patentName}'. Next job run will re-send alerts.` });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Get single patent by ID — MUST be after all named routes
 router.get("/:id", async (req, res, next) => {
   try {
     const patent = await Patent.findById(req.params.id).lean();
@@ -172,17 +309,6 @@ router.get("/:id", async (req, res, next) => {
     }
 
     res.json({ item: patent });
-  } catch (err) {
-    next(err);
-  }
-});
-
-// Check patent expirations manually / on-demand
-router.post("/check-expirations", requireAuth, async (req, res, next) => {
-  try {
-    const { checkPatentExpirations } = require("../jobs/expiryJob");
-    const results = await checkPatentExpirations(true);
-    res.json({ message: "Patent expiration check completed", ...results });
   } catch (err) {
     next(err);
   }
@@ -350,130 +476,4 @@ router.delete("/:id", requireAuth, async (req, res, next) => {
     next(err);
   }
 });
-// ── Notification Settings Endpoints ──
-
-// Get current patent notification settings
-router.get("/notification-settings", requireAuth, async (req, res, next) => {
-  try {
-    let settings = await SystemSettings.findOne({ key: "global" }).lean();
-    const defaultDays = [1, 7, 15, 30, 60, 90, 120, 180];
-    const notificationDays = settings?.patentExpirationConfig?.notificationDays || defaultDays;
-    const smtpConfigured = Boolean(settings?.emailConfig?.host && settings?.emailConfig?.user && settings?.emailConfig?.pass);
-    const templateEnabled = settings?.templates?.patentExpiration?.enabled !== false;
-
-    res.json({
-      item: {
-        notificationDays: [...notificationDays].sort((a, b) => a - b),
-        smtpConfigured,
-        templateEnabled,
-      },
-    });
-  } catch (err) {
-    next(err);
-  }
-});
-
-// Update patent notification settings (admin/super-admin only)
-router.put("/notification-settings", requireAuth, async (req, res, next) => {
-  try {
-    const role = req.user?.role;
-    if (!["super-admin", "admin"].includes(role)) {
-      return res.status(403).json({ error: { message: "Only admins and super-admins can update notification settings" } });
-    }
-
-    const { notificationDays } = req.body;
-    if (!Array.isArray(notificationDays) || notificationDays.length === 0) {
-      return res.status(400).json({ error: { message: "notificationDays must be a non-empty array of numbers" } });
-    }
-
-    // Validate all entries are positive integers
-    const cleanDays = notificationDays
-      .map((d) => Math.round(Number(d)))
-      .filter((d) => Number.isFinite(d) && d > 0);
-
-    if (cleanDays.length === 0) {
-      return res.status(400).json({ error: { message: "At least one valid positive number is required" } });
-    }
-
-    // Deduplicate and sort ascending
-    const uniqueDays = [...new Set(cleanDays)].sort((a, b) => a - b);
-
-    await SystemSettings.findOneAndUpdate(
-      { key: "global" },
-      { $set: { "patentExpirationConfig.notificationDays": uniqueDays } },
-      { upsert: true, new: true }
-    );
-
-    res.json({ message: "Notification settings updated", notificationDays: uniqueDays });
-  } catch (err) {
-    next(err);
-  }
-});
-
-// Send a test patent expiration email to the requesting admin
-router.post("/test-expiration-email", requireAuth, async (req, res, next) => {
-  try {
-    const role = req.user?.role;
-    if (!["super-admin", "admin"].includes(role)) {
-      return res.status(403).json({ error: { message: "Only admins and super-admins can send test emails" } });
-    }
-
-    const recipientEmail = req.user?.email || req.user?.username;
-    if (!recipientEmail || !String(recipientEmail).includes("@")) {
-      return res.status(400).json({ error: { message: "Your account does not have a valid email address configured" } });
-    }
-
-    const recipientName = req.user?.name || req.user?.username || "Admin";
-
-    // Send using the patentExpiration template with test data
-    const sent = await sendSystemEmail({
-      to: recipientEmail,
-      templateKey: "patentExpiration",
-      variables: {
-        name: recipientName,
-        patentName: "TEST — Sample Patent Notification",
-        daysUntilExpiration: "30",
-        expirationDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split("T")[0],
-        applicationNumber: "TEST-123456",
-        category: "Test Category",
-      },
-    });
-
-    if (sent) {
-      res.json({ message: `Test email sent successfully to ${recipientEmail}` });
-    } else {
-      res.status(500).json({
-        error: {
-          message: "Email could not be sent. Please check: 1) SMTP settings are configured in System Email Settings, 2) The 'Patent Expiration' email template is enabled.",
-        },
-      });
-    }
-  } catch (err) {
-    next(err);
-  }
-});
-
-// Reset notifiedDays on a patent so notifications re-trigger
-router.post("/reset-notifications/:id", requireAuth, async (req, res, next) => {
-  try {
-    const role = req.user?.role;
-    if (!["super-admin", "admin"].includes(role)) {
-      return res.status(403).json({ error: { message: "Only admins and super-admins can reset notifications" } });
-    }
-
-    const patent = await Patent.findById(req.params.id);
-    if (!patent) {
-      return res.status(404).json({ error: { message: "Patent not found" } });
-    }
-
-    patent.notifiedDays = [];
-    await patent.save();
-
-    res.json({ message: `Notifications reset for patent '${patent.patentName}'. Next job run will re-send alerts.` });
-  } catch (err) {
-    next(err);
-  }
-});
-
 module.exports = router;
-

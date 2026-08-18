@@ -70,10 +70,15 @@ async function checkPatentExpirations(forceSend = false) {
         console.log(`[Expiry Job] Patent '${patent.patentName}' marked as Expired.`);
       }
 
+      // Use per-patent custom reminder days if set, otherwise fall back to global thresholds
+      const patentThresholds = (Array.isArray(patent.customReminderDays) && patent.customReminderDays.length > 0)
+        ? [...patent.customReminderDays].sort((a, b) => a - b)
+        : thresholds;
+
       // Check if any threshold triggers
       let triggeredThreshold = null;
 
-      for (const t of thresholds) {
+      for (const t of patentThresholds) {
         if (daysUntilExpiration <= t && (forceSend || !patent.notifiedDays.includes(t))) {
           triggeredThreshold = t;
           break;
@@ -85,7 +90,7 @@ async function checkPatentExpirations(forceSend = false) {
         console.log(`[Expiry Job] Triggered threshold ${triggeredThreshold}d for patent: ${patent.patentName} (${daysUntilExpiration} days remaining)`);
 
         // Add this threshold and all larger ones to notifiedDays
-        thresholds.forEach((t) => {
+        patentThresholds.forEach((t) => {
           if (t >= triggeredThreshold && !patent.notifiedDays.includes(t)) {
             patent.notifiedDays.push(t);
           }
