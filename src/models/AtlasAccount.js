@@ -15,6 +15,7 @@ const AtlasAccountSchema = new mongoose.Schema(
     currency: { type: String, default: "USD" },
     isActive: { type: Boolean, default: true },
     company: { type: mongoose.Schema.Types.ObjectId, ref: "Company" },
+    companyLocation: { type: mongoose.Schema.Types.ObjectId, ref: "CompanyLocation" },
   },
   { timestamps: true }
 );

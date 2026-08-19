@@ -34,6 +34,7 @@ const systemSettingsSchema = z.object({
     fileAttachment: templateSchema.optional(),
     commentAdded: templateSchema.optional(),
     replyAdded: templateSchema.optional(),
+    newMessage: templateSchema.optional(),
     projectAssignment: templateSchema.optional(),
     projectReassignment: templateSchema.optional(),
     preAdverseAction: templateSchema.optional(),
@@ -120,11 +121,25 @@ router.put("/", requireAuth, requireSuperAdmin, async (req, res, next) => {
       patch.emailConfig.pass = encrypt(patch.emailConfig.pass);
     }
 
+    // Flatten templates into dot-notation paths so MongoDB updates each
+    // template individually instead of replacing the entire 'templates'
+    // subdocument (which would clobber templates not in the Zod schema).
+    const setOps = {};
+    if (patch.templates) {
+      for (const [tplKey, tplValue] of Object.entries(patch.templates)) {
+        setOps[`templates.${tplKey}`] = tplValue;
+      }
+      delete patch.templates;
+    }
+    // Spread remaining top-level fields (emailConfig, scheConfig, etc.)
+    Object.assign(setOps, patch);
+
     const updated = await SystemSettings.findOneAndUpdate(
       { key: "global" },
-      { $set: patch },
+      { $set: setOps },
       { new: true, upsert: true }
     ).lean();
+
     
     // Decrypt before sending back response
     if (updated.emailConfig && updated.emailConfig.pass) {

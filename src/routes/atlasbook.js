@@ -40,9 +40,9 @@ router.get("/properties", requireAuth, handleGet(Property, "company"));
 router.post("/properties", requireAuth, handlePost(Property));
 router.get("/units", requireAuth, handleGet(Unit, "property"));
 router.post("/units", requireAuth, handlePost(Unit));
-router.get("/accounts", requireAuth, handleGet(AtlasAccount, "company"));
+router.get("/accounts", requireAuth, handleGet(AtlasAccount, "company companyLocation"));
 router.post("/accounts", requireAuth, handlePost(AtlasAccount));
-router.get("/journal", requireAuth, handleGet(JournalEntry, "lines.account"));
+router.get("/journal", requireAuth, handleGet(JournalEntry, "lines.account company companyLocation"));
 router.post("/journal", requireAuth, async (req, res) => {
   try { 
     const item = new JournalEntry({ ...req.body, createdBy: req.user._id }); 
@@ -54,11 +54,11 @@ router.post("/journal", requireAuth, async (req, res) => {
     res.json({ success: true, item }); 
   } catch (error) { res.status(500).json({ success: false, message: error.message }); }
 });
-router.get("/transactions", requireAuth, handleGet(AtlasTransaction, "account property unit"));
+router.get("/transactions", requireAuth, handleGet(AtlasTransaction, "account property unit company companyLocation"));
 router.post("/transactions", requireAuth, handlePost(AtlasTransaction));
-router.get("/bills", requireAuth, handleGet(Bill, "vendor items.account"));
+router.get("/bills", requireAuth, handleGet(Bill, "vendor items.account company companyLocation"));
 router.post("/bills", requireAuth, handlePost(Bill));
-router.get("/invoices", requireAuth, handleGet(Invoice, "tenant"));
+router.get("/invoices", requireAuth, handleGet(Invoice, "tenant company companyLocation"));
 router.post("/invoices", requireAuth, handlePost(Invoice));
 router.get("/tenants", requireAuth, handleGet(Tenant, "company"));
 router.post("/tenants", requireAuth, handlePost(Tenant));
@@ -118,8 +118,11 @@ router.get("/search", requireAuth, async (req, res) => {
 
 router.get("/reports/pl", requireAuth, async (req, res) => {
   try {
-    const revenueAccounts = await AtlasAccount.find({ type: "Revenue" });
-    const expenseAccounts = await AtlasAccount.find({ type: "Expense" });
+    const filter = {};
+    if (req.query.company) filter.company = req.query.company;
+    if (req.query.location) filter.companyLocation = req.query.location;
+    const revenueAccounts = await AtlasAccount.find({ type: "Revenue", ...filter });
+    const expenseAccounts = await AtlasAccount.find({ type: "Expense", ...filter });
     const revenue = revenueAccounts.reduce((sum, a) => sum + Math.abs(a.balance), 0);
     const expenses = expenseAccounts.reduce((sum, a) => sum + a.balance, 0);
     res.json({ success: true, revenue, expenses, netProfit: revenue - expenses, breakdown: { revenue: revenueAccounts, expenses: expenseAccounts } });
@@ -128,9 +131,12 @@ router.get("/reports/pl", requireAuth, async (req, res) => {
 
 router.get("/reports/balance-sheet", requireAuth, async (req, res) => {
   try {
-    const assets = await AtlasAccount.find({ type: "Asset" });
-    const liabilities = await AtlasAccount.find({ type: "Liability" });
-    const equity = await AtlasAccount.find({ type: "Equity" });
+    const filter = {};
+    if (req.query.company) filter.company = req.query.company;
+    if (req.query.location) filter.companyLocation = req.query.location;
+    const assets = await AtlasAccount.find({ type: "Asset", ...filter });
+    const liabilities = await AtlasAccount.find({ type: "Liability", ...filter });
+    const equity = await AtlasAccount.find({ type: "Equity", ...filter });
     const totalAssets = assets.reduce((sum, a) => sum + a.balance, 0);
     const totalLiabilities = liabilities.reduce((sum, a) => sum + Math.abs(a.balance), 0);
     const totalEquity = equity.reduce((sum, a) => sum + Math.abs(a.balance), 0);

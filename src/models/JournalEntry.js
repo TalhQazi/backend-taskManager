@@ -5,6 +5,8 @@ const JournalEntrySchema = new mongoose.Schema(
     transactionDate: { type: Date, default: Date.now },
     reference: { type: String }, // Invoice #, Receipt #, etc.
     description: { type: String },
+    company: { type: mongoose.Schema.Types.ObjectId, ref: "Company" },
+    companyLocation: { type: mongoose.Schema.Types.ObjectId, ref: "CompanyLocation" },
     lines: [
       {
         account: { type: mongoose.Schema.Types.ObjectId, ref: "AtlasAccount", required: true },

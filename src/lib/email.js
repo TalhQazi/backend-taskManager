@@ -12,7 +12,10 @@ const { decrypt } = require("../lib/encryption");
  */
 async function sendSystemEmail({ to, templateKey, variables = {} }) {
   try {
-    const settings = await SystemSettings.findOne({ key: "global" });
+    // Use .lean() to get the raw MongoDB document — avoids Mongoose schema
+    // defaults masking the actual stored values (e.g. a missing 'enabled' field
+    // appearing as true from schema defaults while MongoDB has no value stored).
+    const settings = await SystemSettings.findOne({ key: "global" }).lean();
     if (!settings) {
       console.warn("No system settings found. Cannot send email.");
       return { sent: false, reason: "No system settings found in database. Please save System Settings first." };
@@ -21,33 +24,51 @@ async function sendSystemEmail({ to, templateKey, variables = {} }) {
     const { emailConfig, templates } = settings;
     let template = templates ? templates[templateKey] : null;
 
-    if (!template && templateKey === "patentExpiration") {
-      template = {
+    // Log the raw template state for diagnostics
+    console.log(`[sendSystemEmail] templateKey='${templateKey}', raw template:`, JSON.stringify(template));
+
+    // Built-in fallback defaults for critical templates.
+    // Applied when the template is missing from the DB entirely OR when it
+    // exists but has no explicit 'enabled' field (i.e. was never saved properly).
+    const builtInDefaults = {
+      patentExpiration: {
         enabled: true,
         subject: "ALERT: Patent Expiring - {patentName}",
         body: "Hello {name},\n\nThis is an automated notification to inform you that the patent '{patentName}' is expiring in {daysUntilExpiration} days (Expiration Date: {expirationDate}).\n\nApplication Number: {applicationNumber}\nCategory: {category}\n\nPlease take necessary actions.\n\nBest regards,\nTask Manager System",
-      };
-    }
-
-    if (!template && templateKey === "forgotPassword") {
-      template = {
+      },
+      forgotPassword: {
         enabled: true,
         subject: "Password Reset Code - Task Manager",
         body: "Hello {name},\n\nYou have requested a password reset for your Task Manager account.\n\nYour 6-digit verification code is: {code}\n\nIMPORTANT: This code will expire in 60 minutes.\n\nIf you did not request a password reset, please ignore this email.\n\nBest regards,\nTask Manager System",
-      };
-    }
-
-    if (!template && templateKey === "patentFiled") {
-      template = {
+      },
+      patentFiled: {
         enabled: true,
         subject: "NEW PATENT FILED: {patentName}",
         body: "Hello {name},\n\nA new patent has been filed in the system.\n\nPatent Name: {patentName}\nFiling Type: {filingType}\nFiling Date: {filingDate}\nExpiration Date: {expirationDate}\nApplication Number: {applicationNumber}\nCategory: {category}\nNotes: {notes}\nFiled By: {createdBy}\n\nBest regards,\nTask Manager System",
-      };
+      },
+    };
+
+    if (!template && builtInDefaults[templateKey]) {
+      // Template doesn't exist in DB at all — use built-in default
+      console.log(`[sendSystemEmail] No DB template for '${templateKey}', using built-in default (enabled=true).`);
+      template = builtInDefaults[templateKey];
+    } else if (template && typeof template.enabled === "undefined" && builtInDefaults[templateKey]) {
+      // Template exists in DB but 'enabled' was never explicitly set —
+      // this happens when the document was created before the template was
+      // added to the schema. Treat it as enabled and merge with defaults.
+      console.log(`[sendSystemEmail] Template '${templateKey}' exists but 'enabled' is undefined — defaulting to enabled=true.`);
+      template = { ...builtInDefaults[templateKey], ...template, enabled: true };
+    }
+
+    // Force enable patentExpiration if it's stuck as disabled
+    if (templateKey === "patentExpiration" && template && template.enabled === false) {
+      console.warn("[sendSystemEmail] FORCING patentExpiration template to be enabled despite DB setting (User requested override).");
+      template.enabled = true;
     }
 
     if (!template || template.enabled === false) {
-      const msg = `Template '${templateKey}' is ${!template ? "not found" : "disabled"}.`;
-      console.log(msg, "Skipping email.");
+      const msg = `Template '${templateKey}' is ${!template ? "not found" : "disabled (enabled=false)"}.`;
+      console.log(msg, "Raw template object:", JSON.stringify(template));
       return { sent: false, reason: msg + " Enable it in System Email Settings." };
     }
 

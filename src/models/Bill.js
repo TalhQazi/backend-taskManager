@@ -3,6 +3,8 @@ const mongoose = require("mongoose");
 const BillSchema = new mongoose.Schema(
   {
     vendor: { type: mongoose.Schema.Types.ObjectId, ref: "Vendor", required: true },
+    company: { type: mongoose.Schema.Types.ObjectId, ref: "Company" },
+    companyLocation: { type: mongoose.Schema.Types.ObjectId, ref: "CompanyLocation" },
     billNumber: { type: String, required: true },
     date: { type: Date, default: Date.now },
     dueDate: { type: Date },
