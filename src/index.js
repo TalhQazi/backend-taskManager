@@ -68,6 +68,7 @@ const userStatusRoutes = require("./routes/userStatus");
 const itinerariesRoutes = require("./routes/itineraries");
 const followUpsRoutes = require("./routes/followUps");
 const newHireReportsRoutes = require("./routes/newHireReports");
+const hrChangeRequestsRoutes = require("./routes/hrChangeRequests");
 const globalSearchRoutes = require("./routes/globalSearch");
 
 const legalCaseRoutes = require("./routes/LegalCase");
@@ -518,6 +519,7 @@ app.use("/api/team", requireClearHire, userStatusRoutes);
 app.use("/api/itineraries", requireClearHire, itinerariesRoutes);
 app.use("/api/tasks", requireClearHire, followUpsRoutes);
 app.use("/api/new-hire-reports", requireClearHire, newHireReportsRoutes);
+app.use("/api/hr/change-requests", requireClearHire, hrChangeRequestsRoutes);
 
 app.use("/api/crm-company", requireClearHire, crmCompanyRoutes);
 app.use("/api/crm-contacts", requireClearHire, crmContactsRoutes);
@@ -635,6 +637,47 @@ connectDb()
     // Initialize default alert rules
     const { initializeAlertRules } = require("./utils/alertRuleSeeder");
     await initializeAlertRules();
+
+    // Startup Backfill: Auto-assign sequential employeeNumber (EMP-0001...) to existing employees without one
+    try {
+      const EmployeeModel = require("./models/Employee");
+      const unnumberedEmployees = await EmployeeModel.find({
+        $or: [{ employeeNumber: { $exists: false } }, { employeeNumber: null }, { employeeNumber: "" }],
+      }).sort({ createdAt: 1, _id: 1 });
+
+      if (unnumberedEmployees.length > 0) {
+        console.log(`[Startup Migration] Assigning sequential employee numbers to ${unnumberedEmployees.length} existing employees...`);
+        let currentSeq = 1;
+        const highestEmp = await EmployeeModel.findOne({ employeeNumber: { $regex: /^EMP-\d+$/i } })
+          .sort({ employeeNumber: -1 })
+          .select("employeeNumber")
+          .lean();
+        if (highestEmp?.employeeNumber) {
+          const match = highestEmp.employeeNumber.match(/EMP-(\d+)/i);
+          if (match) currentSeq = parseInt(match[1], 10) + 1;
+        }
+
+        for (const emp of unnumberedEmployees) {
+          emp.employeeNumber = `EMP-${String(currentSeq).padStart(4, "0")}`;
+          await emp.save();
+          currentSeq++;
+        }
+        console.log(`[Startup Migration] Successfully assigned employee numbers up to EMP-${String(currentSeq - 1).padStart(4, "0")}`);
+      }
+    } catch (empNumErr) {
+      console.error("[Startup Migration] Error backfilling employee numbers:", empNumErr);
+    }
+
+    // Start background reminders (Employee Document & Certification Expirations)
+    try {
+      const { checkEmployeeExpirations } = require("./jobs/employeeExpiryJob");
+      checkEmployeeExpirations().catch((err) => console.error("[Employee Expiry Job] Startup run failed:", err));
+      setInterval(() => {
+        checkEmployeeExpirations().catch((err) => console.error("[Employee Expiry Job] Interval run failed:", err));
+      }, 24 * 60 * 60 * 1000); // Run daily
+    } catch (err) {
+      console.error("[Employee Expiry Job] Init Error:", err.message);
+    }
 
     // Start background reminders (Annual Reports)
     const { checkAnnualReportReminders } = require("./utils/reminders");

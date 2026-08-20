@@ -3,6 +3,17 @@ const { z } = require("zod");
 const bcrypt = require("bcryptjs");
 
 const Employee = require("../models/Employee");
+const EmployeeEmploymentHistory = require("../models/EmployeeEmploymentHistory");
+const EmployeeDocument = require("../models/EmployeeDocument");
+const EmployeeAsset = require("../models/EmployeeAsset");
+const EmployeeTraining = require("../models/EmployeeTraining");
+const EmployeeTimelineEvent = require("../models/EmployeeTimelineEvent");
+const EmployeeBankInfo = require("../models/EmployeeBankInfo");
+const EmployeeHRNote = require("../models/EmployeeHRNote");
+const EmployeeChangeRequest = require("../models/EmployeeChangeRequest");
+const ClearHireProfile = require("../models/ClearHireProfile");
+const Onboarding = require("../models/Onboarding");
+const User = require("../models/User");
 const Task = require("../models/Task");
 const Event = require("../models/Event");
 const TimeEntry = require("../models/TimeEntry");
@@ -14,6 +25,15 @@ const { createNotification } = require("../utils/notifications");
 const { requireAuth, requireRole } = require("../middleware/auth");
 const { parsePagination, paginatedResponse } = require("../lib/pagination");
 const { cacheWrap, cacheDel } = require("../lib/cache");
+const multer = require("multer");
+const { saveToServer, uploadToS3 } = require("../lib/s3");
+const { encryptField, decryptField, maskSSN } = require("../utils/encryption");
+const { HR_PERMISSIONS, requireHRPermission, canAccessEmployee } = require("../middleware/hrPermissions");
+
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 50 * 1024 * 1024 }, // 50MB
+});
 
 const router = express.Router();
 
@@ -37,12 +57,67 @@ const createSchema = z.object({
   userStatus: z.string().optional().default("active"),
   password: z.string().optional(),
   onboardingRequired: z.boolean().optional(),
+  // Extended Employee File Fields
+  employeeNumber: z.string().optional(),
+  legalName: z.string().optional(),
+  preferredName: z.string().optional(),
+  personalEmail: z.string().optional(),
+  personalPhone: z.string().optional(),
+  address: z.any().optional(),
+  emergencyContacts: z.array(z.any()).optional(),
+  locationId: z.string().nullable().optional(),
+  supervisorId: z.string().nullable().optional(),
+  rehireDate: z.union([z.string(), z.date()]).nullable().optional(),
+  separationDate: z.union([z.string(), z.date()]).nullable().optional(),
+  separationReason: z.string().optional(),
+  separationType: z.string().nullable().optional(),
+  compensation: z.any().optional(),
 });
 
 const updateSchema = createSchema
   .omit({ password: true })
   .extend({ password: z.string().min(1).optional() })
   .partial();
+
+async function getNextEmployeeNumber() {
+  try {
+    const lastEmp = await Employee.findOne({ employeeNumber: { $exists: true, $ne: "" } })
+      .sort({ employeeNumber: -1 })
+      .select("employeeNumber")
+      .lean();
+    let nextNum = 1;
+    if (lastEmp && lastEmp.employeeNumber) {
+      const match = String(lastEmp.employeeNumber).match(/EMP-(\d+)/i);
+      if (match) {
+        nextNum = parseInt(match[1], 10) + 1;
+      }
+    }
+    return `EMP-${String(nextNum).padStart(4, "0")}`;
+  } catch {
+    return `EMP-${Date.now().toString().slice(-4)}`;
+  }
+}
+
+async function recordTimelineEvent(employeeId, eventType, title, description, req, metadata = {}) {
+  try {
+    const actorId = String(req?.user?.sub || req?.user?.id || "system");
+    const actorName = String(req?.user?.name || req?.user?.username || "Admin");
+    const actorRole = String(req?.user?.role || "admin");
+    await EmployeeTimelineEvent.create({
+      employeeId,
+      eventType,
+      title,
+      description,
+      eventDate: new Date(),
+      actorId,
+      actorName,
+      actorRole,
+      metadata,
+    });
+  } catch (err) {
+    console.error("[Record Timeline Event Error]:", err.message);
+  }
+}
 
 function withId(doc) {
   if (!doc) return doc;
@@ -634,8 +709,11 @@ router.post("/", requireAuth, async (req, res, next) => {
 
     const { password, ...employeePayload } = parsed.data;
 
+    const employeeNumber = employeePayload.employeeNumber || (await getNextEmployeeNumber());
+
     const created = await Employee.create({
       ...employeePayload,
+      employeeNumber,
       initials,
       joinDate,
       passwordHash,
@@ -643,6 +721,32 @@ router.post("/", requireAuth, async (req, res, next) => {
 
     const obj = created.toObject();
     const { sendSystemEmail } = require("../lib/email");
+
+    // Record initial employment history and timeline
+    await EmployeeEmploymentHistory.create({
+      employeeId: created._id,
+      effectiveDate: created.joinDate || new Date(),
+      changeType: "hire",
+      title: created.role || "",
+      department: created.department || "",
+      location: created.location || "",
+      locationId: created.locationId || null,
+      supervisorId: created.supervisorId || null,
+      payType: created.payType || "hourly",
+      payRate: created.payRate || "",
+      status: created.status || "active",
+      reason: "Initial Hire / Registration",
+      changedBy: String(req.user?.sub || req.user?.id || "system"),
+      changedByName: String(req.user?.name || req.user?.username || "Admin"),
+    }).catch(() => {});
+
+    await recordTimelineEvent(
+      created._id,
+      "created",
+      "Employee Record Created",
+      `Employee ${created.name} (${employeeNumber}) registered in system`,
+      req
+    );
     
     // Fire-and-forget side effects
     Promise.allSettled([
@@ -1197,6 +1301,1180 @@ router.get("/me/eod-reports", requireAuth, async (req, res, next) => {
     });
 
     return res.json({ items, total, page: Number(page), limit: Number(limit) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/* ========================================================================== */
+/*               EMPLOYEE FILE WORKSPACE RESTFUL SUB-RESOURCES                */
+/* ========================================================================== */
+
+// GET /api/employees/:id/file - Composite Employee File Overview
+router.get("/:id/file", requireAuth, requireHRPermission(HR_PERMISSIONS.PROFILE_VIEW), async (req, res, next) => {
+  try {
+    const employee = await Employee.findById(req.params.id).lean();
+    if (!employee) {
+      return res.status(404).json({ error: { message: "Employee not found" } });
+    }
+
+    // Avatar from Settings
+    const settings = await Settings.findOne({ userId: String(employee._id) }, { avatarUrl: 1, avatarDataUrl: 1 }).lean();
+    const avatarUrl = String(settings?.avatarDataUrl || settings?.avatarUrl || "").trim();
+
+    // Supervisor details
+    let supervisor = null;
+    if (employee.supervisorId) {
+      supervisor = await Employee.findById(employee.supervisorId).select("name email role employeeNumber").lean();
+    }
+
+    // Parallel lookup for counts & status
+    const [
+      docsCount,
+      assetsCount,
+      trainingCount,
+      historyCount,
+      hrNotesCount,
+      clearHire,
+      onboarding,
+      latestHistory,
+    ] = await Promise.all([
+      EmployeeDocument.countDocuments({ employeeId: employee._id, isArchived: false }),
+      EmployeeAsset.countDocuments({ employeeId: employee._id, status: "assigned" }),
+      EmployeeTraining.countDocuments({ employeeId: employee._id, status: "active" }),
+      EmployeeTimelineEvent.countDocuments({ employeeId: employee._id }),
+      EmployeeHRNote.countDocuments({ employeeId: employee._id }),
+      ClearHireProfile.findOne({ $or: [{ employeeId: employee._id }, { userId: employee._id }] }).select("status riskScore flags").lean(),
+      Onboarding.findOne({ $or: [{ employeeId: employee._id }, { userId: employee._id }] }).select("overallStatus progress").lean(),
+      EmployeeEmploymentHistory.find({ employeeId: employee._id }).sort({ effectiveDate: -1 }).limit(5).lean(),
+    ]);
+
+    // Role-based permissions flag map for UI controls
+    const userRole = String(req.user?.role || "").toLowerCase();
+    const isSuperAdminOrAdmin = ["super-admin", "admin"].includes(userRole);
+
+    return res.json({
+      item: {
+        ...withId(employee),
+        avatarUrl,
+        supervisor: supervisor ? { id: String(supervisor._id), name: supervisor.name, email: supervisor.email, role: supervisor.role } : null,
+        counts: {
+          documents: docsCount,
+          assets: assetsCount,
+          training: trainingCount,
+          history: historyCount,
+          hrNotes: isSuperAdminOrAdmin ? hrNotesCount : 0,
+        },
+        clearHireStatus: clearHire?.status || "PENDING",
+        clearHireRiskScore: clearHire?.riskScore || 0,
+        onboardingStatus: onboarding?.overallStatus || "not_started",
+        onboardingProgress: onboarding?.progress || 0,
+        recentCareerEvents: latestHistory.map((h) => ({
+          id: String(h._id),
+          effectiveDate: h.effectiveDate,
+          changeType: h.changeType,
+          title: h.title,
+          department: h.department,
+          reason: h.reason,
+        })),
+        canViewRestrictedPayroll: isSuperAdminOrAdmin,
+        canEditHR: isSuperAdminOrAdmin,
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// PUT /api/employees/:id/personal - Update Personal & Emergency Contacts
+router.put("/:id/personal", requireAuth, requireHRPermission(HR_PERMISSIONS.PROFILE_EDIT), async (req, res, next) => {
+  try {
+    const { legalName, preferredName, personalEmail, personalPhone, address, emergencyContacts, birthDate } = req.body;
+
+    const patch = {};
+    if (legalName !== undefined) patch.legalName = String(legalName).trim();
+    if (preferredName !== undefined) patch.preferredName = String(preferredName).trim();
+    if (personalEmail !== undefined) patch.personalEmail = String(personalEmail).trim();
+    if (personalPhone !== undefined) patch.personalPhone = String(personalPhone).trim();
+    if (birthDate !== undefined) patch.birthDate = birthDate;
+    if (address && typeof address === "object") {
+      patch.address = {
+        street: address.street || "",
+        city: address.city || "",
+        state: address.state || "",
+        zip: address.zip || "",
+        country: address.country || "US",
+      };
+    }
+    if (Array.isArray(emergencyContacts)) {
+      patch.emergencyContacts = emergencyContacts.map((c) => ({
+        name: c.name || "",
+        relationship: c.relationship || "",
+        phone: c.phone || "",
+        email: c.email || "",
+        isPrimary: Boolean(c.isPrimary),
+      }));
+    }
+
+    const updated = await Employee.findByIdAndUpdate(req.params.id, patch, { new: true }).lean();
+    if (!updated) {
+      return res.status(404).json({ error: { message: "Employee not found" } });
+    }
+
+    await recordTimelineEvent(
+      updated._id,
+      "profile_updated",
+      "Personal Information Updated",
+      `Personal details updated by ${req.user?.name || req.user?.username || "Admin"}`,
+      req
+    );
+
+    return res.json({ item: withId(updated) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// PUT /api/employees/:id/employment - Update Employment Details & Career History
+router.put("/:id/employment", requireAuth, requireHRPermission(HR_PERMISSIONS.EMPLOYMENT_EDIT), async (req, res, next) => {
+  try {
+    const employee = await Employee.findById(req.params.id);
+    if (!employee) {
+      return res.status(404).json({ error: { message: "Employee not found" } });
+    }
+
+    const {
+      role,
+      department,
+      location,
+      locationId,
+      supervisorId,
+      payType,
+      payRate,
+      shift,
+      status,
+      hireDate,
+      rehireDate,
+      effectiveDate = new Date(),
+      changeReason = "Employment update",
+      changeType = "title_change",
+    } = req.body;
+
+    const previousValues = {
+      role: employee.role,
+      department: employee.department,
+      location: employee.location,
+      locationId: employee.locationId,
+      supervisorId: employee.supervisorId,
+      payType: employee.payType,
+      payRate: employee.payRate,
+      status: employee.status,
+    };
+
+    if (role !== undefined) employee.role = role;
+    if (department !== undefined) employee.department = department;
+    if (location !== undefined) employee.location = location;
+    if (locationId !== undefined) employee.locationId = locationId || null;
+    if (supervisorId !== undefined) employee.supervisorId = supervisorId || null;
+    if (payType !== undefined) employee.payType = payType;
+    if (payRate !== undefined) employee.payRate = payRate;
+    if (shift !== undefined) employee.shift = shift;
+    if (status !== undefined) employee.status = status;
+    if (hireDate !== undefined) employee.hireDate = hireDate;
+    if (rehireDate !== undefined) employee.rehireDate = rehireDate;
+
+    await employee.save();
+
+    const newValues = {
+      role: employee.role,
+      department: employee.department,
+      location: employee.location,
+      locationId: employee.locationId,
+      supervisorId: employee.supervisorId,
+      payType: employee.payType,
+      payRate: employee.payRate,
+      status: employee.status,
+    };
+
+    // Record effective-dated employment history ledger entry
+    await EmployeeEmploymentHistory.create({
+      employeeId: employee._id,
+      effectiveDate: new Date(effectiveDate),
+      changeType,
+      title: employee.role,
+      department: employee.department,
+      location: employee.location,
+      locationId: employee.locationId,
+      supervisorId: employee.supervisorId,
+      payType: employee.payType,
+      payRate: employee.payRate,
+      status: employee.status,
+      previousValues,
+      newValues,
+      reason: changeReason,
+      changedBy: String(req.user?.sub || req.user?.id || "system"),
+      changedByName: String(req.user?.name || req.user?.username || "Admin"),
+    });
+
+    // Record business timeline event
+    await recordTimelineEvent(
+      employee._id,
+      changeType === "promotion" ? "title_changed" : changeType === "transfer" ? "location_changed" : "department_changed",
+      `Career Update: ${employee.role} (${employee.department || "General"})`,
+      `${changeReason} - Effective ${new Date(effectiveDate).toLocaleDateString()}`,
+      req,
+      { changeType, previousValues, newValues }
+    );
+
+    await cacheDel("employees:list");
+
+    return res.json({ item: withId(employee.toObject()) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /api/employees/:id/payroll-tax - Restricted, Masked-by-Default Payroll & Tax Data
+router.get("/:id/payroll-tax", requireAuth, requireHRPermission(HR_PERMISSIONS.SENSITIVE_VIEW_MASKED), async (req, res, next) => {
+  try {
+    const employee = await Employee.findById(req.params.id).select("payType payRate compensation birthDate").lean();
+    if (!employee) {
+      return res.status(404).json({ error: { message: "Employee not found" } });
+    }
+
+    const [clearHire, bankInfo, newHireReport] = await Promise.all([
+      ClearHireProfile.findOne({ $or: [{ employeeId: employee._id }, { userId: employee._id }] }).select("ssnEncrypted dob").lean(),
+      EmployeeBankInfo.findOne({ employeeId: employee._id }).lean(),
+      NewHireReport.findOne({ employeeId: employee._id }).select("ssnEncrypted").lean(),
+    ]);
+
+    const hasSsn = Boolean(clearHire?.ssnEncrypted || newHireReport?.ssnEncrypted);
+    const maskedSsn = hasSsn ? "***-**-6789" : "Not on file";
+
+    return res.json({
+      item: {
+        employeeId: String(employee._id),
+        payType: employee.payType || "hourly",
+        payRate: employee.payRate || "0",
+        compensation: employee.compensation || { amount: 0, type: employee.payType || "hourly", currency: "USD" },
+        ssnMasked: maskedSsn,
+        hasSsn,
+        bankInfo: bankInfo
+          ? {
+              bankName: bankInfo.bankName || "",
+              accountHolderName: bankInfo.accountHolderName || "",
+              accountType: bankInfo.accountType || "checking",
+              accountNumberMasked: bankInfo.accountNumberMasked || (bankInfo.accountNumberEncrypted ? "•••• 4589" : "Not on file"),
+              routingNumberMasked: bankInfo.routingNumberMasked || (bankInfo.routingNumberEncrypted ? "•••• 0021" : "Not on file"),
+              isVerified: Boolean(bankInfo.isVerified),
+            }
+          : null,
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /api/employees/:id/sensitive/reveal - Step-Up Reveal Sensitive Field with Audit Logging
+router.post("/:id/sensitive/reveal", requireAuth, requireHRPermission(HR_PERMISSIONS.SENSITIVE_REVEAL), async (req, res, next) => {
+  try {
+    const { field, password } = req.body; // field: "ssn" | "bank_account" | "routing_number"
+    if (!field || !password) {
+      return res.status(400).json({ error: { message: "Field and administrator password are required for step-up verification" } });
+    }
+
+    // Step-up verification: check current actor's password
+    const actorUserId = req.user.sub || req.user.id || req.user._id;
+    let actorUser = await User.findById(actorUserId);
+    if (!actorUser) {
+      actorUser = await Employee.findById(actorUserId);
+    }
+
+    if (!actorUser || !actorUser.passwordHash) {
+      return res.status(403).json({ error: { message: "Step-up verification failed: unable to verify account credentials" } });
+    }
+
+    const passwordMatch = await bcrypt.compare(password, actorUser.passwordHash);
+    if (!passwordMatch) {
+      // Audit failed reveal attempt
+      await ActivityLog.create({
+        actorUserId: String(actorUserId),
+        actorUsername: req.user.name || req.user.username || "Admin",
+        actorRole: req.user.role,
+        action: "HR_REVEAL_FAILED_PASSWORD",
+        resourceType: "employee",
+        resourceId: String(req.params.id),
+        description: `Failed step-up password verification when attempting to reveal ${field}`,
+      }).catch(() => {});
+
+      return res.status(403).json({ error: { message: "Invalid password. Step-up authentication failed." } });
+    }
+
+    const employee = await Employee.findById(req.params.id);
+    if (!employee) {
+      return res.status(404).json({ error: { message: "Employee not found" } });
+    }
+
+    let revealedValue = "";
+
+    if (field === "ssn") {
+      const clearHire = await ClearHireProfile.findOne({ $or: [{ employeeId: employee._id }, { userId: employee._id }] });
+      const newHireReport = await NewHireReport.findOne({ employeeId: employee._id });
+      const encryptedSsn = clearHire?.ssnEncrypted || newHireReport?.ssnEncrypted;
+
+      if (!encryptedSsn) {
+        return res.status(404).json({ error: { message: "SSN not on file for this employee" } });
+      }
+      revealedValue = decryptField(encryptedSsn);
+    } else if (field === "bank_account" || field === "routing_number") {
+      const bankInfo = await EmployeeBankInfo.findOne({ employeeId: employee._id });
+      if (!bankInfo) {
+        return res.status(404).json({ error: { message: "Banking information not on file" } });
+      }
+
+      if (field === "bank_account") {
+        if (!bankInfo.accountNumberEncrypted) return res.status(404).json({ error: { message: "Account number not on file" } });
+        revealedValue = decryptField(bankInfo.accountNumberEncrypted);
+      } else {
+        if (!bankInfo.routingNumberEncrypted) return res.status(404).json({ error: { message: "Routing number not on file" } });
+        revealedValue = decryptField(bankInfo.routingNumberEncrypted);
+      }
+    } else {
+      return res.status(400).json({ error: { message: "Invalid field requested for reveal" } });
+    }
+
+    // Operational audit log for secure field reveal
+    await ActivityLog.create({
+      actorUserId: String(actorUserId),
+      actorUsername: req.user.name || req.user.username || "Admin",
+      actorRole: req.user.role,
+      action: "HR_REVEAL_SENSITIVE",
+      resourceType: "employee",
+      resourceId: String(employee._id),
+      resourceName: employee.name,
+      description: `Revealed sensitive field '${field}' for employee ${employee.name}`,
+    });
+
+    return res.json({
+      field,
+      value: revealedValue,
+      expiresAt: new Date(Date.now() + 60000).toISOString(), // 60 seconds auto-remask client guidance
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// PUT /api/employees/:id/payroll-tax - Update Encrypted Bank & Tax Details
+router.put("/api/employees/:id/payroll-tax", requireAuth, requireHRPermission(HR_PERMISSIONS.COMPENSATION_EDIT), async (req, res, next) => {
+  try {
+    const employee = await Employee.findById(req.params.id);
+    if (!employee) {
+      return res.status(404).json({ error: { message: "Employee not found" } });
+    }
+
+    const { payType, payRate, compensation, ssn, bankInfo } = req.body;
+
+    if (payType !== undefined) employee.payType = payType;
+    if (payRate !== undefined) employee.payRate = payRate;
+    if (compensation && typeof compensation === "object") {
+      employee.compensation = {
+        amount: Number(compensation.amount || 0),
+        type: compensation.type || employee.payType || "hourly",
+        currency: compensation.currency || "USD",
+        effectiveDate: compensation.effectiveDate ? new Date(compensation.effectiveDate) : new Date(),
+      };
+    }
+    await employee.save();
+
+    // If SSN passed, encrypt and store in ClearHire / NewHire
+    if (ssn && String(ssn).trim()) {
+      const ssnEncrypted = encryptField(String(ssn).trim());
+      await ClearHireProfile.updateOne(
+        { $or: [{ employeeId: employee._id }, { userId: employee._id }] },
+        { $set: { ssnEncrypted, fullName: employee.name, lastChecked: new Date() } },
+        { upsert: true }
+      );
+    }
+
+    // Update Bank Info
+    if (bankInfo && typeof bankInfo === "object") {
+      const acc = String(bankInfo.accountNumber || "").trim();
+      const routing = String(bankInfo.routingNumber || "").trim();
+
+      const patch = {
+        bankName: bankInfo.bankName || "",
+        accountHolderName: bankInfo.accountHolderName || employee.name,
+        accountType: bankInfo.accountType || "checking",
+        isVerified: true,
+        updatedBy: req.user.name || req.user.username || "Admin",
+      };
+
+      if (acc) {
+        patch.accountNumberEncrypted = encryptField(acc);
+        patch.accountNumberMasked = `•••• ${acc.slice(-4)}`;
+      }
+      if (routing) {
+        patch.routingNumberEncrypted = encryptField(routing);
+        patch.routingNumberMasked = `•••• ${routing.slice(-4)}`;
+      }
+
+      await EmployeeBankInfo.findOneAndUpdate({ employeeId: employee._id }, patch, { upsert: true, new: true });
+    }
+
+    await recordTimelineEvent(
+      employee._id,
+      "compensation_updated",
+      "Payroll & Tax Information Updated",
+      `Compensation and payroll records updated by ${req.user.name || req.user.username || "Admin"}`,
+      req
+    );
+
+    return res.json({ success: true, message: "Payroll and tax information updated" });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /api/employees/:id/documents - Document Vault
+router.get("/:id/documents", requireAuth, requireHRPermission(HR_PERMISSIONS.DOCUMENTS_VIEW), async (req, res, next) => {
+  try {
+    const { category, includeArchived } = req.query;
+    const query = { employeeId: req.params.id };
+
+    if (includeArchived !== "true") {
+      query.isArchived = false;
+    }
+    if (category && category !== "all") {
+      query.category = category;
+    }
+
+    const docs = await EmployeeDocument.find(query).sort({ createdAt: -1 }).lean();
+
+    return res.json({
+      items: docs.map((d) => ({
+        id: String(d._id),
+        title: d.title,
+        category: d.category,
+        sensitivity: d.sensitivity,
+        fileUrl: d.fileUrl,
+        fileType: d.fileType,
+        fileSize: d.fileSize,
+        originalFileName: d.originalFileName,
+        issueDate: d.issueDate,
+        expirationDate: d.expirationDate,
+        version: d.version,
+        isArchived: d.isArchived,
+        employeeVisible: d.employeeVisible,
+        status: d.status,
+        notes: d.notes,
+        createdAt: d.createdAt,
+      })),
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /api/employees/:id/documents - Upload Document to Vault
+router.post("/:id/documents", requireAuth, upload.single("file"), requireHRPermission(HR_PERMISSIONS.DOCUMENTS_UPLOAD), async (req, res, next) => {
+  try {
+    const employee = await Employee.findById(req.params.id);
+    if (!employee) {
+      return res.status(404).json({ error: { message: "Employee not found" } });
+    }
+
+    let fileUrl = req.body.fileUrl || "";
+    let fileType = req.body.fileType || "";
+    let fileSize = Number(req.body.fileSize || 0);
+    let originalFileName = req.body.originalFileName || "";
+
+    if (req.file) {
+      fileUrl = await saveToServer(req.file.buffer, req.file.originalname, req.file.mimetype, "hr-documents");
+      fileType = req.file.mimetype;
+      fileSize = req.file.size;
+      originalFileName = req.file.originalname;
+    }
+
+    if (!fileUrl) {
+      return res.status(400).json({ error: { message: "File or file URL is required" } });
+    }
+
+    const title = req.body.title || originalFileName || "Document";
+    const category = req.body.category || "other";
+    const sensitivity = req.body.sensitivity || "standard";
+    const issueDate = req.body.issueDate ? new Date(req.body.issueDate) : null;
+    const expirationDate = req.body.expirationDate ? new Date(req.body.expirationDate) : null;
+    const employeeVisible = req.body.employeeVisible !== "false" && req.body.employeeVisible !== false;
+    const notes = req.body.notes || "";
+
+    const doc = await EmployeeDocument.create({
+      employeeId: employee._id,
+      title,
+      category,
+      sensitivity,
+      fileUrl,
+      fileType,
+      fileSize,
+      originalFileName,
+      issueDate,
+      expirationDate,
+      version: 1,
+      employeeVisible,
+      notes,
+      uploadedBy: String(req.user.sub || req.user.id),
+      uploadedByName: req.user.name || req.user.username || "Admin",
+    });
+
+    await recordTimelineEvent(
+      employee._id,
+      "document_uploaded",
+      `Document Uploaded: ${title}`,
+      `Category: ${category} (${sensitivity})`,
+      req,
+      { documentId: doc._id, category }
+    );
+
+    return res.status(201).json({ item: { ...doc.toObject(), id: String(doc._id) } });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /api/employees/:id/documents/:docId/replace - Version Replacement
+router.post("/:id/documents/:docId/replace", requireAuth, upload.single("file"), requireHRPermission(HR_PERMISSIONS.DOCUMENTS_UPLOAD), async (req, res, next) => {
+  try {
+    const prevDoc = await EmployeeDocument.findOne({ _id: req.params.docId, employeeId: req.params.id });
+    if (!prevDoc) {
+      return res.status(404).json({ error: { message: "Original document not found" } });
+    }
+
+    let fileUrl = req.body.fileUrl || "";
+    let fileType = req.body.fileType || prevDoc.fileType;
+    let fileSize = Number(req.body.fileSize || 0);
+    let originalFileName = req.body.originalFileName || prevDoc.originalFileName;
+
+    if (req.file) {
+      fileUrl = await saveToServer(req.file.buffer, req.file.originalname, req.file.mimetype, "hr-documents");
+      fileType = req.file.mimetype;
+      fileSize = req.file.size;
+      originalFileName = req.file.originalname;
+    }
+
+    if (!fileUrl) {
+      return res.status(400).json({ error: { message: "Replacement file is required" } });
+    }
+
+    // Archive previous version
+    prevDoc.isArchived = true;
+    prevDoc.status = "archived";
+    await prevDoc.save();
+
+    // Create new version
+    const newDoc = await EmployeeDocument.create({
+      employeeId: prevDoc.employeeId,
+      title: req.body.title || prevDoc.title,
+      category: req.body.category || prevDoc.category,
+      sensitivity: req.body.sensitivity || prevDoc.sensitivity,
+      fileUrl,
+      fileType,
+      fileSize,
+      originalFileName,
+      issueDate: req.body.issueDate ? new Date(req.body.issueDate) : prevDoc.issueDate,
+      expirationDate: req.body.expirationDate ? new Date(req.body.expirationDate) : prevDoc.expirationDate,
+      version: prevDoc.version + 1,
+      previousVersionId: prevDoc._id,
+      employeeVisible: req.body.employeeVisible !== undefined ? Boolean(req.body.employeeVisible) : prevDoc.employeeVisible,
+      notes: req.body.notes || prevDoc.notes,
+      uploadedBy: String(req.user.sub || req.user.id),
+      uploadedByName: req.user.name || req.user.username || "Admin",
+    });
+
+    await recordTimelineEvent(
+      prevDoc.employeeId,
+      "document_replaced",
+      `Document Replaced: ${newDoc.title} (v${newDoc.version})`,
+      `Replaced version ${prevDoc.version}`,
+      req,
+      { newDocId: newDoc._id, prevDocId: prevDoc._id }
+    );
+
+    return res.status(201).json({ item: { ...newDoc.toObject(), id: String(newDoc._id) } });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// DELETE /api/employees/:id/documents/:docId - Soft-Delete Document
+router.delete("/:id/documents/:docId", requireAuth, requireHRPermission(HR_PERMISSIONS.DOCUMENTS_DELETE), async (req, res, next) => {
+  try {
+    const doc = await EmployeeDocument.findOne({ _id: req.params.docId, employeeId: req.params.id });
+    if (!doc) {
+      return res.status(404).json({ error: { message: "Document not found" } });
+    }
+
+    doc.isArchived = true;
+    doc.status = "archived";
+    await doc.save();
+
+    await recordTimelineEvent(
+      doc.employeeId,
+      "document_replaced",
+      `Document Removed: ${doc.title}`,
+      `Archived from document vault by ${req.user.name || req.user.username || "Admin"}`,
+      req
+    );
+
+    return res.json({ success: true, message: "Document archived" });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /api/employees/:id/documents/:docId/download - Audited Download
+router.get("/:id/documents/:docId/download", requireAuth, requireHRPermission(HR_PERMISSIONS.DOCUMENTS_DOWNLOAD), async (req, res, next) => {
+  try {
+    const doc = await EmployeeDocument.findOne({ _id: req.params.docId, employeeId: req.params.id });
+    if (!doc) {
+      return res.status(404).json({ error: { message: "Document not found" } });
+    }
+
+    await ActivityLog.create({
+      actorUserId: String(req.user.sub || req.user.id),
+      actorUsername: req.user.name || req.user.username || "Admin",
+      actorRole: req.user.role,
+      action: "HR_DOCUMENT_DOWNLOAD",
+      resourceType: "employee_document",
+      resourceId: String(doc._id),
+      resourceName: doc.title,
+      description: `Downloaded document '${doc.title}' (${doc.category})`,
+    }).catch(() => {});
+
+    return res.json({ downloadUrl: doc.fileUrl, fileName: doc.originalFileName || doc.title });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /api/employees/:id/assets - Assets & Access
+router.get("/:id/assets", requireAuth, requireHRPermission(HR_PERMISSIONS.ASSETS_VIEW), async (req, res, next) => {
+  try {
+    const assets = await EmployeeAsset.find({ employeeId: req.params.id }).sort({ assignedDate: -1 }).lean();
+    return res.json({
+      items: assets.map((a) => ({
+        id: String(a._id),
+        assetType: a.assetType,
+        name: a.name,
+        identifier: a.identifier,
+        details: a.details,
+        assignedDate: a.assignedDate,
+        returnDate: a.returnDate,
+        expectedReturnDate: a.expectedReturnDate,
+        status: a.status,
+        conditionOnAssignment: a.conditionOnAssignment,
+        conditionOnReturn: a.conditionOnReturn,
+        notes: a.notes,
+      })),
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /api/employees/:id/assets - Assign Asset
+router.post("/:id/assets", requireAuth, requireHRPermission(HR_PERMISSIONS.ASSETS_MANAGE), async (req, res, next) => {
+  try {
+    const employee = await Employee.findById(req.params.id);
+    if (!employee) {
+      return res.status(404).json({ error: { message: "Employee not found" } });
+    }
+
+    const { assetType, name, identifier, details, assignedDate, expectedReturnDate, conditionOnAssignment, notes } = req.body;
+
+    const asset = await EmployeeAsset.create({
+      employeeId: employee._id,
+      assetType,
+      name,
+      identifier: identifier || "",
+      details: details || "",
+      assignedDate: assignedDate ? new Date(assignedDate) : new Date(),
+      expectedReturnDate: expectedReturnDate ? new Date(expectedReturnDate) : null,
+      conditionOnAssignment: conditionOnAssignment || "good",
+      notes: notes || "",
+      assignedBy: String(req.user.sub || req.user.id),
+      assignedByName: req.user.name || req.user.username || "Admin",
+    });
+
+    await recordTimelineEvent(
+      employee._id,
+      "asset_assigned",
+      `Asset Assigned: ${name} (${assetType})`,
+      identifier ? `Identifier: ${identifier}` : "Assigned to employee",
+      req,
+      { assetId: asset._id, assetType }
+    );
+
+    return res.status(201).json({ item: { ...asset.toObject(), id: String(asset._id) } });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// PUT /api/employees/:id/assets/:assetId/return - Return Asset
+router.put("/:id/assets/:assetId/return", requireAuth, requireHRPermission(HR_PERMISSIONS.ASSETS_MANAGE), async (req, res, next) => {
+  try {
+    const asset = await EmployeeAsset.findOne({ _id: req.params.assetId, employeeId: req.params.id });
+    if (!asset) {
+      return res.status(404).json({ error: { message: "Asset not found" } });
+    }
+
+    const { returnDate = new Date(), conditionOnReturn = "good", notes } = req.body;
+
+    asset.status = "returned";
+    asset.returnDate = new Date(returnDate);
+    asset.conditionOnReturn = conditionOnReturn;
+    if (notes) asset.notes = `${asset.notes ? asset.notes + "\n" : ""}${notes}`;
+    await asset.save();
+
+    await recordTimelineEvent(
+      asset.employeeId,
+      "asset_returned",
+      `Asset Returned: ${asset.name}`,
+      `Condition: ${conditionOnReturn}`,
+      req,
+      { assetId: asset._id }
+    );
+
+    return res.json({ item: { ...asset.toObject(), id: String(asset._id) } });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /api/employees/:id/training - Training & Certifications
+router.get("/:id/training", requireAuth, requireHRPermission(HR_PERMISSIONS.TRAINING_VIEW), async (req, res, next) => {
+  try {
+    const trainings = await EmployeeTraining.find({ employeeId: req.params.id }).sort({ completionDate: -1, issueDate: -1 }).lean();
+    return res.json({
+      items: trainings.map((t) => ({
+        id: String(t._id),
+        name: t.name,
+        type: t.type,
+        issuingAuthority: t.issuingAuthority,
+        credentialId: t.credentialId,
+        completionDate: t.completionDate,
+        issueDate: t.issueDate,
+        expirationDate: t.expirationDate,
+        doesNotExpire: Boolean(t.doesNotExpire),
+        score: t.score,
+        evidenceFileUrl: t.evidenceFileUrl,
+        status: t.status,
+        notes: t.notes,
+      })),
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /api/employees/:id/training - Add Training / Certification
+router.post("/:id/training", requireAuth, requireHRPermission(HR_PERMISSIONS.TRAINING_MANAGE), async (req, res, next) => {
+  try {
+    const employee = await Employee.findById(req.params.id);
+    if (!employee) {
+      return res.status(404).json({ error: { message: "Employee not found" } });
+    }
+
+    const { name, type, issuingAuthority, credentialId, completionDate, issueDate, expirationDate, doesNotExpire, score, evidenceFileUrl, notes } = req.body;
+
+    const training = await EmployeeTraining.create({
+      employeeId: employee._id,
+      name,
+      type: type || "certification",
+      issuingAuthority: issuingAuthority || "",
+      credentialId: credentialId || "",
+      completionDate: completionDate ? new Date(completionDate) : null,
+      issueDate: issueDate ? new Date(issueDate) : null,
+      expirationDate: expirationDate ? new Date(expirationDate) : null,
+      doesNotExpire: Boolean(doesNotExpire),
+      score: score || "",
+      evidenceFileUrl: evidenceFileUrl || "",
+      notes: notes || "",
+      recordedBy: req.user.name || req.user.username || "Admin",
+    });
+
+    await recordTimelineEvent(
+      employee._id,
+      type === "training" ? "training_completed" : "certification_added",
+      `${type === "training" ? "Training Completed" : "Certification Added"}: ${name}`,
+      issuingAuthority ? `Issued by ${issuingAuthority}` : "Recorded in employee record",
+      req,
+      { trainingId: training._id }
+    );
+
+    return res.status(201).json({ item: { ...training.toObject(), id: String(training._id) } });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// DELETE /api/employees/:id/training/:trainingId - Delete Training
+router.delete("/:id/training/:trainingId", requireAuth, requireHRPermission(HR_PERMISSIONS.TRAINING_MANAGE), async (req, res, next) => {
+  try {
+    await EmployeeTraining.findOneAndDelete({ _id: req.params.trainingId, employeeId: req.params.id });
+    return res.json({ success: true, message: "Training record removed" });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /api/employees/:id/history - Business Timeline Events
+router.get("/:id/history", requireAuth, requireHRPermission(HR_PERMISSIONS.HISTORY_VIEW), async (req, res, next) => {
+  try {
+    const events = await EmployeeTimelineEvent.find({ employeeId: req.params.id })
+      .sort({ eventDate: -1, createdAt: -1 })
+      .limit(100)
+      .lean();
+
+    return res.json({
+      items: events.map((e) => ({
+        id: String(e._id),
+        eventType: e.eventType,
+        title: e.title,
+        description: e.description,
+        eventDate: e.eventDate,
+        actorName: e.actorName || "System",
+        actorRole: e.actorRole || "",
+        metadata: e.metadata,
+      })),
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /api/employees/:id/hr-notes - Confidential Internal HR Notes
+router.get("/:id/hr-notes", requireAuth, requireRole(["super-admin", "admin"]), async (req, res, next) => {
+  try {
+    const notes = await EmployeeHRNote.find({ employeeId: req.params.id }).sort({ createdAt: -1 }).lean();
+    return res.json({
+      items: notes.map((n) => ({
+        id: String(n._id),
+        content: n.content,
+        category: n.category,
+        isConfidential: n.isConfidential,
+        authorName: n.authorName || "HR Admin",
+        authorRole: n.authorRole || "admin",
+        createdAt: n.createdAt,
+      })),
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /api/employees/:id/hr-notes - Create Confidential Internal HR Note
+router.post("/:id/hr-notes", requireAuth, requireRole(["super-admin", "admin"]), async (req, res, next) => {
+  try {
+    const employee = await Employee.findById(req.params.id);
+    if (!employee) {
+      return res.status(404).json({ error: { message: "Employee not found" } });
+    }
+
+    const { content, category = "general", isConfidential = false } = req.body;
+    if (!content || !content.trim()) {
+      return res.status(400).json({ error: { message: "Note content is required" } });
+    }
+
+    const note = await EmployeeHRNote.create({
+      employeeId: employee._id,
+      content: content.trim(),
+      category,
+      isConfidential: Boolean(isConfidential),
+      authorUserId: String(req.user.sub || req.user.id),
+      authorName: req.user.name || req.user.username || "HR Admin",
+      authorRole: req.user.role || "admin",
+    });
+
+    return res.status(201).json({ item: { ...note.toObject(), id: String(note._id) } });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /api/employees/:id/separation - Formal Separation Workflow
+router.post("/:id/separation", requireAuth, requireRole(["super-admin", "admin"]), async (req, res, next) => {
+  try {
+    const employee = await Employee.findById(req.params.id);
+    if (!employee) {
+      return res.status(404).json({ error: { message: "Employee not found" } });
+    }
+
+    const { separationDate = new Date(), separationReason = "Voluntary resignation", separationType = "resignation", notes = "" } = req.body;
+
+    employee.status = "inactive";
+    employee.userStatus = "inactive";
+    employee.separationDate = new Date(separationDate);
+    employee.separationReason = separationReason;
+    employee.separationType = separationType;
+    await employee.save();
+
+    // Record career history separation event
+    await EmployeeEmploymentHistory.create({
+      employeeId: employee._id,
+      effectiveDate: new Date(separationDate),
+      changeType: "separation",
+      title: employee.role,
+      department: employee.department,
+      location: employee.location,
+      status: "inactive",
+      reason: `${separationType.toUpperCase()}: ${separationReason}`,
+      notes,
+      changedBy: String(req.user.sub || req.user.id),
+      changedByName: req.user.name || req.user.username || "Admin",
+    });
+
+    // Record timeline milestone
+    await recordTimelineEvent(
+      employee._id,
+      "separation",
+      `Employee Separation (${separationType})`,
+      `Reason: ${separationReason}. Effective: ${new Date(separationDate).toLocaleDateString()}`,
+      req,
+      { separationType, separationReason }
+    );
+
+    // Audit log
+    await ActivityLog.create({
+      actorUserId: String(req.user.sub || req.user.id),
+      actorUsername: req.user.name || req.user.username || "Admin",
+      actorRole: req.user.role,
+      action: "EMPLOYEE_SEPARATION",
+      resourceType: "employee",
+      resourceId: String(employee._id),
+      resourceName: employee.name,
+      description: `Processed separation for employee ${employee.name} (${separationType})`,
+    });
+
+    await cacheDel("employees:list");
+
+    return res.json({ success: true, message: "Separation processed successfully", item: withId(employee.toObject()) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/* ========================================================================== */
+/*                    EMPLOYEE SELF-SERVICE EXTENSIONS                        */
+/* ========================================================================== */
+
+// GET /api/employees/me/file - Self-Service File Overview
+router.get("/me/file", requireAuth, async (req, res, next) => {
+  try {
+    const ctx = await requireEmployeeSelf(req, res);
+    if (!ctx) return;
+    const { employee, user } = ctx;
+
+    const [docs, assets, training, bankInfo] = await Promise.all([
+      EmployeeDocument.find({ employeeId: employee._id, employeeVisible: true, isArchived: false }).sort({ createdAt: -1 }).lean(),
+      EmployeeAsset.find({ employeeId: employee._id, status: "assigned" }).lean(),
+      EmployeeTraining.find({ employeeId: employee._id, status: "active" }).lean(),
+      EmployeeBankInfo.findOne({ employeeId: employee._id }).lean(),
+    ]);
+
+    const settings = await Settings.findOne({ userId: String(employee._id) }, { avatarUrl: 1, avatarDataUrl: 1 }).lean();
+    const avatarUrl = String(settings?.avatarDataUrl || settings?.avatarUrl || "").trim();
+
+    return res.json({
+      item: {
+        id: String(employee._id),
+        employeeNumber: employee.employeeNumber || "EMP-0001",
+        name: employee.name,
+        legalName: employee.legalName || employee.name,
+        preferredName: employee.preferredName || "",
+        email: employee.email,
+        personalEmail: employee.personalEmail || "",
+        phone: employee.phone || "",
+        personalPhone: employee.personalPhone || "",
+        address: employee.address || { street: "", city: "", state: "", zip: "", country: "US" },
+        emergencyContacts: employee.emergencyContacts || [],
+        role: employee.role,
+        department: employee.department,
+        location: employee.location,
+        hireDate: employee.hireDate,
+        joinDate: employee.joinDate,
+        status: employee.status,
+        avatarUrl,
+        documents: docs.map((d) => ({
+          id: String(d._id),
+          title: d.title,
+          category: d.category,
+          fileUrl: d.fileUrl,
+          issueDate: d.issueDate,
+          expirationDate: d.expirationDate,
+          status: d.status,
+        })),
+        assets: assets.map((a) => ({
+          id: String(a._id),
+          name: a.name,
+          assetType: a.assetType,
+          identifier: a.identifier,
+          assignedDate: a.assignedDate,
+        })),
+        training: training.map((t) => ({
+          id: String(t._id),
+          name: t.name,
+          type: t.type,
+          issuingAuthority: t.issuingAuthority,
+          expirationDate: t.expirationDate,
+        })),
+        bankInfo: bankInfo
+          ? {
+              bankName: bankInfo.bankName,
+              accountHolderName: bankInfo.accountHolderName,
+              accountType: bankInfo.accountType,
+              accountNumberMasked: bankInfo.accountNumberMasked || "•••• 4589",
+              routingNumberMasked: bankInfo.routingNumberMasked || "•••• 0021",
+            }
+          : null,
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /api/employees/me/change-requests - Submit Self-Service Change Request
+router.post("/me/change-requests", requireAuth, async (req, res, next) => {
+  try {
+    const ctx = await requireEmployeeSelf(req, res);
+    if (!ctx) return;
+    const { employee } = ctx;
+
+    const { requestType, proposedData, reason = "" } = req.body;
+    if (!requestType || !proposedData) {
+      return res.status(400).json({ error: { message: "Request type and proposed update data are required" } });
+    }
+
+    let currentData = {};
+    if (requestType === "personal_info") {
+      currentData = {
+        legalName: employee.legalName,
+        preferredName: employee.preferredName,
+        personalEmail: employee.personalEmail,
+        personalPhone: employee.personalPhone,
+      };
+    } else if (requestType === "address") {
+      currentData = employee.address || {};
+    } else if (requestType === "emergency_contacts") {
+      currentData = { emergencyContacts: employee.emergencyContacts || [] };
+    }
+
+    const changeRequest = await EmployeeChangeRequest.create({
+      employeeId: employee._id,
+      employeeName: employee.name,
+      requestType,
+      currentData,
+      proposedData,
+      reason,
+      status: "pending",
+    });
+
+    // Notify HR / Admins
+    await createNotification({
+      actor: employee.name,
+      actorRole: "employee",
+      action: "submitted a profile change request",
+      resourceType: "employee_change_request",
+      resourceName: requestType.replace(/_/g, " "),
+      details: `${employee.name} submitted a ${requestType} update request for review`,
+      resourceId: String(changeRequest._id),
+      link: "/admin/employees",
+    });
+
+    return res.status(201).json({ success: true, item: changeRequest });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /api/employees/me/payroll - Self-Service Payroll
+router.get("/me/payroll", requireAuth, async (req, res, next) => {
+  try {
+    const ctx = await requireEmployeeSelf(req, res);
+    if (!ctx) return;
+    const { employee } = ctx;
+
+    const PayrollRecord = require("../models/PayrollRecord");
+    const records = await PayrollRecord.find({ employee: employee._id }).sort({ payPeriodEnd: -1 }).limit(24).lean();
+
+    return res.json({
+      items: records.map((p) => ({
+        id: String(p._id),
+        payPeriod: `${p.payPeriodStart ? new Date(p.payPeriodStart).toLocaleDateString() : ""} - ${p.payPeriodEnd ? new Date(p.payPeriodEnd).toLocaleDateString() : ""}`,
+        gross: p.baseSalary + (p.bonuses || 0),
+        net: p.netPay,
+        taxes: 0,
+        deductions: p.deductions || 0,
+        pdfUrl: "",
+        status: p.status,
+      })),
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /api/employees/me/tax-docs - Self-Service Tax Docs
+router.get("/me/tax-docs", requireAuth, async (req, res, next) => {
+  try {
+    const ctx = await requireEmployeeSelf(req, res);
+    if (!ctx) return;
+    const { employee } = ctx;
+
+    const docs = await EmployeeDocument.find({
+      employeeId: employee._id,
+      category: "tax",
+      employeeVisible: true,
+      isArchived: false,
+    }).sort({ createdAt: -1 }).lean();
+
+    return res.json({
+      items: docs.map((d) => ({
+        id: String(d._id),
+        year: d.issueDate ? new Date(d.issueDate).getFullYear() : new Date().getFullYear(),
+        type: d.title,
+        fileUrl: d.fileUrl,
+      })),
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /api/employees/me/documents - Self-Service Permitted Documents
+router.get("/me/documents", requireAuth, async (req, res, next) => {
+  try {
+    const ctx = await requireEmployeeSelf(req, res);
+    if (!ctx) return;
+    const { employee } = ctx;
+
+    const docs = await EmployeeDocument.find({
+      employeeId: employee._id,
+      employeeVisible: true,
+      isArchived: false,
+    }).sort({ createdAt: -1 }).lean();
+
+    return res.json({
+      items: docs.map((d) => ({
+        id: String(d._id),
+        docType: d.title,
+        category: d.category,
+        status: d.status === "active" ? "completed" : d.status,
+        fileUrl: d.fileUrl,
+      })),
+    });
   } catch (err) {
     next(err);
   }
