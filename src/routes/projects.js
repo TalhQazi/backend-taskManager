@@ -27,8 +27,8 @@ function withId(doc) {
     : legacyAssignee
       ? [legacyAssignee]
       : [];
-  const { assignee, assigneeInitials, location, ...rest } = doc;
-  return { ...rest, assignees: nextAssignees, id: String(doc._id) };
+  const { assignee, assigneeInitials, ...rest } = doc;
+  return { ...rest, assignees: nextAssignees, id: String(doc._id), location: doc.location || "" };
 }
 
 function normalizeAssignees(input) {

@@ -12,6 +12,7 @@ const TaskSchema = new mongoose.Schema(
     category: { type: String, enum: ["task", "bug", "feature", "maintenance"], default: "task", index: true },
     dueDate: { type: Date, index: true },
     dueTime: { type: String, default: "" },
+    location: { type: String, default: "", index: true },
     createdAt: { type: String, default: "", index: true },
     introVideoUrl: { type: String, default: "" },
     attachmentFileName: { type: String, default: "" },
