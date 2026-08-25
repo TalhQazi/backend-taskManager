@@ -79,7 +79,7 @@ async function notifyAdminsAboutFiledPatent(patent) {
   }
 }
 
-// Get expiration watch (patents expiring within 180 days) - MUST come before /:id route
+// Get expiration watch (patents expiring within 180 days or within custom reminder days) - MUST come before /:id route
 router.get("/expiration-watch", async (req, res, next) => {
   try {
     const patents = await Patent.find({ patentType: "filed" })
@@ -106,7 +106,9 @@ router.get("/expiration-watch", async (req, res, next) => {
         (patent) =>
           patent &&
           patent.daysUntilExpiration >= 0 &&
-          patent.daysUntilExpiration <= 180
+          (patent.daysUntilExpiration <= 180 ||
+            (Array.isArray(patent.customReminderDays) &&
+              patent.customReminderDays.some((d) => patent.daysUntilExpiration <= d)))
       )
       .sort((a, b) => a.daysUntilExpiration - b.daysUntilExpiration);
 
@@ -123,14 +125,19 @@ router.get("/filed", async (req, res, next) => {
       .sort({ patentName: 1 })
       .lean();
 
+    const today = new Date();
     const enrichedPatents = patents.map((patent) => {
       const expiration = calculateExpiration(patent.filingDate, patent.filingType, patent.provisionalExpiration);
       const isExpiring = isExpiringExpiringSoon(expiration);
+      const daysUntilExpiration = expiration
+        ? Math.ceil((expiration - today) / (1000 * 60 * 60 * 24))
+        : null;
 
       return {
         ...patent,
         provisionalExpiration: expiration,
         isExpiringExpiringSoon: isExpiring,
+        daysUntilExpiration,
       };
     });
 
