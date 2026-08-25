@@ -1,4 +1,5 @@
 const express = require("express");
+const mongoose = require("mongoose");
 const { z } = require("zod");
 const multer = require("multer");
 
@@ -486,20 +487,42 @@ router.post("/", requireAuth, async (req, res, next) => {
       !!parsed.data.attachment &&
       typeof parsed.data.attachment.url === "string" &&
       parsed.data.attachment.url.trim().length > 0;
+    const hasAttachments =
+      Array.isArray(parsed.data.attachments) &&
+      parsed.data.attachments.length > 0 &&
+      parsed.data.attachments.some((a) => a && a.url);
+    const hasVoiceNote =
+      !!parsed.data.voiceNote &&
+      typeof parsed.data.voiceNote.url === "string" &&
+      parsed.data.voiceNote.url.trim().length > 0;
 
-    if (!content.trim() && !hasAttachment) {
-      return res.status(400).json({ error: { message: "Message content or attachment is required" } });
+    if (!content.trim() && !hasAttachment && !hasAttachments && !hasVoiceNote) {
+      return res.status(400).json({ error: { message: "Message content, attachment, or voice note is required" } });
     }
+
+    const validGroupId = (parsed.data.groupId && mongoose.Types.ObjectId.isValid(parsed.data.groupId))
+      ? parsed.data.groupId
+      : undefined;
+    const validParentId = (parsed.data.parentMessageId && mongoose.Types.ObjectId.isValid(parsed.data.parentMessageId))
+      ? parsed.data.parentMessageId
+      : undefined;
 
     const created = await Message.create({
       ...parsed.data,
       title: typeof parsed.data.title === "string" ? encrypt(parsed.data.title) : "",
       content: encrypt(content),
       attachment: parsed.data.attachment || undefined,
+      groupId: validGroupId,
+      parentMessageId: validParentId,
     });
 
     const finalData = withId(decryptOut(created.toObject()));
     const io = global.io;
+
+    // Update group timestamp if it's a group message
+    if (validGroupId) {
+      ChatGroup.findByIdAndUpdate(validGroupId, { updatedAt: new Date() }).catch(() => {});
+    }
 
     // Notify the recipient(s) of a direct message so offline users still get an
     // in-app notification (persists + real-time) and an email.
@@ -512,7 +535,7 @@ router.post("/", requireAuth, async (req, res, next) => {
 
     const preview = content.trim()
       ? (content.trim().length > 60 ? content.trim().slice(0, 60) + "…" : content.trim())
-      : (hasAttachment ? "Sent an attachment" : "");
+      : (hasAttachment ? "Sent an attachment" : (hasVoiceNote ? "Sent a voice note" : ""));
 
     // Fire-and-forget side effects
     Promise.allSettled([
@@ -543,6 +566,9 @@ router.post("/", requireAuth, async (req, res, next) => {
     ]).catch(() => {});
 
     if (io) {
+      if (validGroupId) {
+        io.to(`group-${validGroupId}`).emit("new-message", finalData);
+      }
       io.emit("new-message", finalData);
     }
 
@@ -986,24 +1012,37 @@ router.post("/:id/convert-to-task", requireAuth, async (req, res, next) => {
 router.get("/media-vault", requireAuth, async (req, res, next) => {
   try {
     const { groupId, recipient } = req.query;
+    const mediaFilter = {
+      $or: [
+        { "attachment.url": { $exists: true, $nin: ["", null] } },
+        { "attachments.0.url": { $exists: true, $nin: ["", null] } },
+        { "voiceNote.url": { $exists: true, $nin: ["", null] } },
+      ],
+    };
+
     let query = {};
     if (groupId) {
-      query.groupId = groupId;
+      query = {
+        groupId,
+        ...mediaFilter,
+      };
     } else if (recipient) {
       const currentUser = String(req.user?.name || req.user?.username || "").trim();
       query = {
         type: "direct",
-        $or: [
-          { sender: currentUser, recipient },
-          { sender: recipient, recipient: currentUser },
+        $and: [
+          {
+            $or: [
+              { sender: currentUser, recipient },
+              { sender: recipient, recipient: currentUser },
+            ],
+          },
+          mediaFilter,
         ],
       };
+    } else {
+      query = mediaFilter;
     }
-    query.$or = [
-      { "attachment.url": { $ne: "" } },
-      { "attachments.0": { $exists: true } },
-      { "voiceNote.url": { $ne: "" } },
-    ];
 
     const messages = await Message.find(query).sort({ createdAt: -1 }).limit(100).lean();
     return res.json({ items: messages.map((m) => withId(decryptOut(m))) });
