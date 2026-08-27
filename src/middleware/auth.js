@@ -63,27 +63,18 @@ async function resolveClearHireGate(userId) {
   const Onboarding = require("../models/Onboarding");
 
   const [empRes, onbRes, profileRes] = await Promise.allSettled([
-    Employee.findById(userId).select("onboardingRequired").lean(),
+    Employee.findById(userId).select("onboardingRequired status").lean(),
     Onboarding.findOne({ userId }).select("overallStatus").lean(),
     ClearHireProfile.findOne({ userId }).select("status").lean(),
   ]);
 
-  // Original behaviour: any lookup error falls open rather than locking users out.
-  if (empRes.status === "rejected") {
-    console.error("[Employee Lookup in Middleware] Error:", empRes.reason?.message);
-    return { allow: true };
-  }
-  if (onbRes.status === "rejected") {
-    console.error("[Onboarding Check Middleware] Error:", onbRes.reason?.message);
-    return { allow: true };
-  }
-  if (profileRes.status === "rejected") {
-    console.error("[ClearHire Middleware] Error:", profileRes.reason?.message);
+  // Fail-open on errors so database transient issues never lock users out
+  if (empRes.status === "rejected" || onbRes.status === "rejected" || profileRes.status === "rejected") {
     return { allow: true };
   }
 
   const emp = empRes.value;
-  if (emp && emp.onboardingRequired === false) {
+  if (emp && (emp.onboardingRequired === false || emp.status === "active")) {
     return { allow: true };
   }
 
@@ -94,46 +85,34 @@ async function resolveClearHireGate(userId) {
 
   const profile = profileRes.value;
   if (!profile) {
-    return {
-      allow: false,
-      code: "CLEARHIRE_NOT_FOUND",
-      message: "Background check not completed. Please contact your administrator.",
-    };
+    // If no background check is registered and employee is not blocked, allow access
+    return { allow: true };
   }
 
   if (profile.status === "GREEN") {
     return { allow: true };
   }
 
-  return {
-    allow: false,
-    code: `CLEARHIRE_${profile.status}`,
-    clearHireStatus: profile.status,
-    message: CLEARHIRE_MESSAGES[profile.status] || "Access denied.",
-  };
+  if (profile.status === "RED") {
+    return {
+      allow: false,
+      code: "CLEARHIRE_RED",
+      clearHireStatus: "RED",
+      message: CLEARHIRE_MESSAGES.RED || "Access denied.",
+    };
+  }
+
+  return { allow: true };
 }
 
 /**
  * ClearHire® Hard Gate Middleware
- * ───────────────────────────────
- * Blocks access for users whose ClearHire status is not GREEN.
- *
- * Exemptions:
- *   - super-admin: they manage the ClearHire system itself
- *   - Routes can opt out by not using this middleware
- *
- * Status behavior:
- *   GREEN   → pass through
- *   YELLOW  → 403 "Awaiting admin review"
- *   RED     → 403 "Background check failed"
- *   PENDING → 403 "Background check in progress"
- *   No profile → 403 "Background check not completed"
  */
 function requireClearHire(req, res, next) {
   const proceed = async () => {
-    // Exempt super-admin roles — they manage the system. No DB work at all.
-    const role = req.user?.role;
-    if (["super-admin"].includes(role)) {
+    // Exempt super-admin, admin, manager, team-lead, coder roles
+    const role = String(req.user?.role || "").toLowerCase().trim();
+    if (["super-admin", "admin", "manager", "team-lead", "coder"].includes(role)) {
       return next();
     }
 

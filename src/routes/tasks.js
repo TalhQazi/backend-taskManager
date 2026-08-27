@@ -69,7 +69,7 @@ const upload = multer({
 
 const createSchema = z.object({
   title: z.string().min(1, "Task title is required"),
-  description: z.string().min(1, "Task description is required"),
+  description: z.string().optional().default(""),
   projectId: z.string().optional(),
   assignees: z.array(z.string()).optional().default([]),
   teamLead: z.string().optional().default(""),
@@ -109,7 +109,7 @@ const createSchema = z.object({
 
 const updateSchema = z.object({
   title: z.string().min(1).optional(),
-  description: z.string().min(1).optional(),
+  description: z.string().optional(),
   projectId: z.string().optional(),
   assignees: z.array(z.string()).optional(),
   teamLead: z.string().optional(),
@@ -135,7 +135,73 @@ const updateSchema = z.object({
     size: z.number().optional(),
     uploadedAt: z.union([z.date(), z.string()]).optional(),
   })).optional(),
+  dropboxAttachments: z.array(z.object({
+    file_name: z.string(),
+    file_type: z.string().optional().default(""),
+    file_size: z.number().optional().default(0),
+    dropbox_file_id: z.string(),
+    dropbox_path: z.string(),
+    temporary_link: z.string().optional().default(""),
+  })).optional(),
+  customFields: z.record(z.any()).optional(),
 });
+
+function serializeTask(doc) {
+  if (!doc) return null;
+  return {
+    id: String(doc._id),
+    title: doc.title,
+    description: doc.description,
+    projectId: doc.projectId ? String(doc.projectId) : undefined,
+    assignees: Array.isArray(doc.assignees) ? doc.assignees : [],
+    teamLead: doc.teamLead || "",
+    priority: doc.priority || "medium",
+    status: doc.status || "pending",
+    dueDate: doc.dueDate ? doc.dueDate.toISOString() : undefined,
+    dueTime: doc.dueTime || "",
+    location: doc.location || "",
+    introVideoUrl: doc.introVideoUrl || "",
+    createdAt: doc.createdAt ? doc.createdAt.toISOString() : undefined,
+    updatedAt: doc.updatedAt ? doc.updatedAt.toISOString() : undefined,
+    attachment: doc.attachment || undefined,
+    attachments: Array.isArray(doc.attachments) ? doc.attachments : [],
+    dropboxAttachments: Array.isArray(doc.dropboxAttachments) ? doc.dropboxAttachments : [],
+    attachmentFileName: doc.attachmentFileName || "",
+    attachmentNote: doc.attachmentNote || "",
+    subtasks: Array.isArray(doc.subtasks)
+      ? doc.subtasks.map((s) => ({
+          id: String(s._id || s.id),
+          title: s.title,
+          completed: !!s.completed,
+          completedAt: s.completedAt ? s.completedAt.toISOString() : undefined,
+        }))
+      : [],
+    customFields: doc.customFields || {},
+    totalTimeSpent: doc.totalTimeSpent || 0,
+    executionPriority: doc.executionPriority,
+  };
+}
+
+function normalizeAssignees(input) {
+  if (Array.isArray(input)) {
+    return input
+      .map((s) => {
+        if (typeof s === "string") return s.trim();
+        if (s && typeof s === "object") return (s.name || s.username || s.email || "").trim();
+        return "";
+      })
+      .filter(Boolean);
+  }
+  if (typeof input === "string") {
+    const v = input.trim();
+    return v ? [v] : [];
+  }
+  if (input && typeof input === "object") {
+    const v = (input.name || input.username || input.email || "").trim();
+    return v ? [v] : [];
+  }
+  return [];
+}
 
 function withId(doc) {
   if (!doc) return doc;
@@ -626,12 +692,13 @@ router.get("/:id/dropbox-attachments", requireAuth, async (req, res, next) => {
 
 router.post("/", requireAuth, async (req, res, next) => {
   try {
-    // Manual validation for title and description
-    if (!req.body?.title || !req.body.title.trim()) {
-      return res.status(400).json({ error: { message: "Task title is required" } });
+    const role = String(req.user?.role || "").toLowerCase().trim();
+    if (role !== "admin" && role !== "super-admin") {
+      return res.status(403).json({ error: { message: "Only administrators are permitted to create tasks." } });
     }
-    if (!req.body?.description || !req.body.description.trim()) {
-      return res.status(400).json({ error: { message: "Task description is required" } });
+
+    if (!req.body?.title || !String(req.body.title).trim()) {
+      return res.status(400).json({ error: { message: "Task title is required" } });
     }
 
     // Clean empty projectId to avoid Mongoose CastError
@@ -640,8 +707,28 @@ router.post("/", requireAuth, async (req, res, next) => {
       delete body.projectId;
     }
 
+    // Normalize incoming attachments format
+    if (Array.isArray(body.attachments)) {
+      body.attachments = body.attachments.map((att) => ({
+        fileName: att?.fileName || att?.name || "attachment",
+        url: att?.url || att?.uri || "",
+        mimeType: att?.mimeType || att?.type || "application/octet-stream",
+        size: Number(att?.size) || 0,
+        uploadedAt: att?.uploadedAt || new Date(),
+      }));
+    } else if (body.attachment && typeof body.attachment === "object") {
+      body.attachment = {
+        fileName: body.attachment.fileName || body.attachment.name || "attachment",
+        url: body.attachment.url || body.attachment.uri || "",
+        mimeType: body.attachment.mimeType || body.attachment.type || "application/octet-stream",
+        size: Number(body.attachment.size) || 0,
+        uploadedAt: body.attachment.uploadedAt || new Date(),
+      };
+    }
+
     const parsed = createSchema.safeParse({
       ...body,
+      description: body.description || "",
       assignees: normalizeAssignees(body?.assignees ?? body?.assignee),
     });
     
@@ -1646,12 +1733,29 @@ router.patch("/:id/status", requireAuth, async (req, res, next) => {
   }
 });
 
-router.put("/:id", requireAuth, async (req, res, next) => {
+const handleTaskUpdate = async (req, res, next) => {
   try {
     console.log("PUT /api/tasks Update Payload:", JSON.stringify(req.body, null, 2));
     const parseData = { ...req.body };
     if (req.body?.assignees !== undefined || req.body?.assignee !== undefined) {
       parseData.assignees = normalizeAssignees(req.body?.assignees ?? req.body?.assignee);
+    }
+    if (Array.isArray(req.body?.attachments)) {
+      parseData.attachments = req.body.attachments.map((att) => ({
+        fileName: att?.fileName || att?.name || "attachment",
+        url: att?.url || att?.uri || "",
+        mimeType: att?.mimeType || att?.type || "application/octet-stream",
+        size: Number(att?.size) || 0,
+        uploadedAt: att?.uploadedAt || new Date(),
+      }));
+    } else if (req.body?.attachment && typeof req.body.attachment === "object") {
+      parseData.attachment = {
+        fileName: req.body.attachment.fileName || req.body.attachment.name || "attachment",
+        url: req.body.attachment.url || req.body.attachment.uri || "",
+        mimeType: req.body.attachment.mimeType || req.body.attachment.type || "application/octet-stream",
+        size: Number(req.body.attachment.size) || 0,
+        uploadedAt: req.body.attachment.uploadedAt || new Date(),
+      };
     }
 
     const parsed = updateSchema.safeParse(parseData);
@@ -1786,6 +1890,80 @@ router.put("/:id", requireAuth, async (req, res, next) => {
     ]).catch(() => {});
 
     return res.json({ item: withId(updated) });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+router.put("/:id", requireAuth, handleTaskUpdate);
+router.patch("/:id", requireAuth, handleTaskUpdate);
+
+// POST /api/tasks/:id/subtasks - Add a subtask
+router.post("/:id/subtasks", requireAuth, async (req, res, next) => {
+  try {
+    const { title } = req.body;
+    if (!title || !String(title).trim()) {
+      return res.status(400).json({ error: { message: "Subtask title is required" } });
+    }
+    const task = await Task.findById(req.params.id);
+    if (!task) {
+      return res.status(404).json({ error: { message: "Task not found" } });
+    }
+    const newSubtask = {
+      title: String(title).trim(),
+      completed: false,
+      createdAt: new Date(),
+    };
+    task.subtasks = task.subtasks || [];
+    task.subtasks.push(newSubtask);
+    await task.save();
+    return res.status(201).json({ item: withId(task.toObject()), subtask: newSubtask });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// PATCH /api/tasks/:id/subtasks/:subtaskId - Toggle/Update subtask
+router.patch("/:id/subtasks/:subtaskId", requireAuth, async (req, res, next) => {
+  try {
+    const task = await Task.findById(req.params.id);
+    if (!task) {
+      return res.status(404).json({ error: { message: "Task not found" } });
+    }
+    const subtask = task.subtasks?.id ? task.subtasks.id(req.params.subtaskId) : (task.subtasks || []).find((s) => String(s._id || s.id) === String(req.params.subtaskId));
+    if (!subtask) {
+      return res.status(404).json({ error: { message: "Subtask not found" } });
+    }
+    if (req.body.completed !== undefined) {
+      subtask.completed = Boolean(req.body.completed);
+      if (subtask.completed) {
+        subtask.completedAt = new Date();
+        subtask.completedBy = String(req.user?.name || req.user?.username || "Unknown");
+      } else {
+        subtask.completedAt = null;
+        subtask.completedBy = "";
+      }
+    }
+    if (req.body.title !== undefined && String(req.body.title).trim()) {
+      subtask.title = String(req.body.title).trim();
+    }
+    await task.save();
+    return res.json({ item: withId(task.toObject()), subtask });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// DELETE /api/tasks/:id/subtasks/:subtaskId - Delete subtask
+router.delete("/:id/subtasks/:subtaskId", requireAuth, async (req, res, next) => {
+  try {
+    const task = await Task.findById(req.params.id);
+    if (!task) {
+      return res.status(404).json({ error: { message: "Task not found" } });
+    }
+    task.subtasks = (task.subtasks || []).filter((s) => String(s._id || s.id) !== String(req.params.subtaskId));
+    await task.save();
+    return res.json({ item: withId(task.toObject()) });
   } catch (err) {
     return next(err);
   }
