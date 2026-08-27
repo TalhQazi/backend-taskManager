@@ -742,12 +742,12 @@ router.delete("/:id", requireAuth, async (req, res, next) => {
 // ENTERPRISE GROUP CHAT ENDPOINTS
 // ---------------------------------------------------------------------------
 
-// Create a new Chat Group (Restricted to Super Admin & Admin)
+// Create a new Chat Group (Restricted to Super Admin, Admin & Manager)
 router.post("/groups", requireAuth, async (req, res, next) => {
   try {
     const role = String(req.user?.role || "").trim().toLowerCase();
-    if (!["super-admin", "admin"].includes(role)) {
-      return res.status(403).json({ error: { message: "Only Admins and Super Admins can create groups" } });
+    if (!["super-admin", "admin", "manager"].includes(role)) {
+      return res.status(403).json({ error: { message: "Only Admins, Super Admins, and Managers can create groups" } });
     }
 
     const schema = z.object({
@@ -788,14 +788,31 @@ router.post("/groups", requireAuth, async (req, res, next) => {
   }
 });
 
-// List Groups for current user
+// List Groups for current user (handles employees, managers, and admins)
 router.get("/groups", requireAuth, async (req, res, next) => {
   try {
-    const currentUser = String(req.user?.name || req.user?.username || "").trim();
-    const groups = await ChatGroup.find({
-      members: currentUser,
+    const currentName = String(req.user?.name || "").trim();
+    const currentUsername = String(req.user?.username || "").trim();
+    const currentId = String(req.user?.sub || req.user?.id || req.user?._id || "").trim();
+    const role = String(req.user?.role || "").trim().toLowerCase();
+
+    const userIdentities = [currentName, currentUsername, currentId].filter(Boolean);
+
+    let query = {
       isArchived: false,
-    }).sort({ updatedAt: -1 }).lean();
+      $or: [
+        { isPrivate: false },
+        { members: { $in: userIdentities } },
+        { admins: { $in: userIdentities } },
+        { createdBy: { $in: userIdentities } },
+      ],
+    };
+
+    if (["super-admin", "admin"].includes(role)) {
+      query = { isArchived: false };
+    }
+
+    const groups = await ChatGroup.find(query).sort({ updatedAt: -1 }).lean();
 
     return res.json({ items: groups.map(withId) });
   } catch (err) {
