@@ -122,6 +122,11 @@ const projectCreateSchema = z.object({
 
 router.post("/", requireAuth, async (req, res, next) => {
   try {
+    const role = String(req.user?.role || "").toLowerCase().trim();
+    if (role !== "admin" && role !== "super-admin") {
+      return res.status(403).json({ error: { message: "Only administrators are permitted to create projects." } });
+    }
+
     const parsed = projectCreateSchema.safeParse({
       ...req.body,
       tasks: Array.isArray(req.body?.tasks)

@@ -1667,7 +1667,7 @@ router.post("/:id/sensitive/reveal", requireAuth, requireHRPermission(HR_PERMISS
 });
 
 // PUT /api/employees/:id/payroll-tax - Update Encrypted Bank & Tax Details
-router.put("/api/employees/:id/payroll-tax", requireAuth, requireHRPermission(HR_PERMISSIONS.COMPENSATION_EDIT), async (req, res, next) => {
+router.put("/:id/payroll-tax", requireAuth, requireHRPermission(HR_PERMISSIONS.COMPENSATION_EDIT), async (req, res, next) => {
   try {
     const employee = await Employee.findById(req.params.id);
     if (!employee) {

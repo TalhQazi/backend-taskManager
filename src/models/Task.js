@@ -32,6 +32,15 @@ const TaskSchema = new mongoose.Schema(
         uploadedAt: { type: Date, default: Date.now },
       },
     ],
+    subtasks: [
+      {
+        title: { type: String, required: true },
+        completed: { type: Boolean, default: false },
+        completedAt: { type: Date },
+        completedBy: { type: String, default: "" },
+        createdAt: { type: Date, default: Date.now },
+      },
+    ],
     startedAt: { type: Date },
     totalTimeSpent: { type: Number, default: 0 }, // cumulative time in seconds
 
