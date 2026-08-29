@@ -98,6 +98,7 @@ const NoteSchema = new Schema(
     ],
     notesList: [{ type: String }],
     attachments: { type: [MediaRefSchema], default: [] },
+    heroImage: { type: String, default: "" },
     lastOpenedAt: { type: Date, default: Date.now },
 
     // ===== NEW: identity & tenancy =====

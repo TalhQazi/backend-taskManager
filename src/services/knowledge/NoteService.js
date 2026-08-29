@@ -44,7 +44,7 @@ const NoteService = {
         sort,
         skip,
         limit,
-        select: "title content color isPinned isFavorite isImportant folder folderId tags status priority visibility updatedAt createdAt ai.summary",
+        select: "title content color isPinned isFavorite isImportant folder folderId tags status priority visibility updatedAt createdAt ai heroImage actionItems notesList attachments",
       }),
       noteRepository.count(ctx, filter),
     ]);
