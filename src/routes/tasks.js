@@ -1442,15 +1442,10 @@ router.delete("/:id/comments/:commentId", requireAuth, async (req, res, next) =>
   }
 });
 
-// Archive an attachment from a task
+// Archive/Delete an attachment from a task
 router.post("/:id/attachments/:attachmentIndex/archive", requireAuth, async (req, res, next) => {
   try {
-    const role = String(req.user?.role || "").toLowerCase();
-    if (role !== "admin" && role !== "super-admin") {
-      return res.status(403).json({ error: { message: "Forbidden: Admin access required" } });
-    }
-
-    const task = await Task.findById(req.params.id).lean();
+    const task = await Task.findById(req.params.id);
     if (!task) {
       return res.status(404).json({ error: { message: "Task not found" } });
     }
@@ -1471,22 +1466,26 @@ router.post("/:id/attachments/:attachmentIndex/archive", requireAuth, async (req
     }
 
     const Archive = require("../models/Archive");
-    await Archive.create({
-      itemType: "attachment",
-      itemData: {
-        fileName: archivedAttachment.fileName,
-        url: archivedAttachment.url,
-        mimeType: archivedAttachment.mimeType,
-        size: archivedAttachment.size,
-        taskId: String(task._id),
-      },
-      parentType: "task",
-      parentId: String(task._id),
-      parentName: task.title,
-      archivedByUserId: String(req.user?.sub || req.user?.id || ""),
-      archivedByUsername: String(req.user?.username || ""),
-      archivedByRole: String(req.user?.role || ""),
-    });
+    try {
+      await Archive.create({
+        itemType: "attachment",
+        itemData: {
+          fileName: archivedAttachment.fileName,
+          url: archivedAttachment.url,
+          mimeType: archivedAttachment.mimeType,
+          size: archivedAttachment.size,
+          taskId: String(task._id),
+        },
+        parentType: "task",
+        parentId: String(task._id),
+        parentName: task.title,
+        archivedByUserId: String(req.user?.sub || req.user?.id || ""),
+        archivedByUsername: String(req.user?.name || req.user?.username || ""),
+        archivedByRole: String(req.user?.role || ""),
+      });
+    } catch (e) {
+      console.warn("[Task Attachment Archive] Failed to create archive record:", e.message);
+    }
 
     // Remove the attachment from the task
     const update = {};
@@ -1497,11 +1496,81 @@ router.post("/:id/attachments/:attachmentIndex/archive", requireAuth, async (req
       newAttachments.splice(idx, 1);
       update.$set = { attachments: newAttachments };
     }
-    await Task.findByIdAndUpdate(req.params.id, update);
+    const updated = await Task.findByIdAndUpdate(req.params.id, update, { new: true });
+
+    void cacheDel(`task:${task._id}`);
+    void cacheDel("tasks:list:*");
+    if (task.projectId) void cacheDel(`project:${task.projectId}`);
 
     await logActivity(req, "ATTACHMENT_ARCHIVE", "task", task._id, task.title, `Archived attachment on task: ${task.title}`);
 
-    return res.json({ ok: true, message: "Attachment archived" });
+    return res.json({ ok: true, message: "Attachment archived", item: updated });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// Delete attachment endpoint
+router.delete("/:id/attachments/:attachmentIndex", requireAuth, async (req, res, next) => {
+  try {
+    const task = await Task.findById(req.params.id);
+    if (!task) {
+      return res.status(404).json({ error: { message: "Task not found" } });
+    }
+
+    const idx = parseInt(req.params.attachmentIndex, 10);
+    const attachments = Array.isArray(task.attachments) ? task.attachments : [];
+    
+    let deletedAttachment = null;
+    if (idx === -1 && task.attachment) {
+      deletedAttachment = task.attachment;
+    } else if (idx >= 0 && idx < attachments.length) {
+      deletedAttachment = attachments[idx];
+    }
+
+    if (!deletedAttachment) {
+      return res.status(404).json({ error: { message: "Attachment not found" } });
+    }
+
+    const Archive = require("../models/Archive");
+    try {
+      await Archive.create({
+        itemType: "attachment",
+        itemData: {
+          fileName: deletedAttachment.fileName,
+          url: deletedAttachment.url,
+          mimeType: deletedAttachment.mimeType,
+          size: deletedAttachment.size,
+          taskId: String(task._id),
+        },
+        parentType: "task",
+        parentId: String(task._id),
+        parentName: task.title,
+        archivedByUserId: String(req.user?.sub || req.user?.id || ""),
+        archivedByUsername: String(req.user?.name || req.user?.username || ""),
+        archivedByRole: String(req.user?.role || ""),
+      });
+    } catch (e) {
+      console.warn("[Task Attachment Delete] Failed to create archive record:", e.message);
+    }
+
+    const update = {};
+    if (idx === -1 && task.attachment) {
+      update.$unset = { attachment: 1, attachmentFileName: 1 };
+    } else {
+      const newAttachments = [...attachments];
+      newAttachments.splice(idx, 1);
+      update.$set = { attachments: newAttachments };
+    }
+    const updated = await Task.findByIdAndUpdate(req.params.id, update, { new: true });
+
+    void cacheDel(`task:${task._id}`);
+    void cacheDel("tasks:list:*");
+    if (task.projectId) void cacheDel(`project:${task.projectId}`);
+
+    await logActivity(req, "ATTACHMENT_DELETE", "task", task._id, task.title, `Deleted attachment on task: ${task.title}`);
+
+    return res.json({ ok: true, message: "Attachment deleted successfully", item: updated });
   } catch (err) {
     return next(err);
   }

@@ -857,6 +857,122 @@ router.put("/:id", requireAuth, async (req, res, next) => {
   }
 });
 
+// Delete/Archive an attachment from a project
+router.delete("/:id/attachments/:attachmentIndex", requireAuth, async (req, res, next) => {
+  try {
+    const project = await Project.findById(req.params.id);
+    if (!project) {
+      return res.status(404).json({ error: { message: "Project not found" } });
+    }
+
+    const idx = parseInt(req.params.attachmentIndex, 10);
+    const attachments = Array.isArray(project.attachments) ? project.attachments : [];
+
+    if (isNaN(idx) || idx < 0 || idx >= attachments.length) {
+      return res.status(404).json({ error: { message: "Attachment not found at specified index" } });
+    }
+
+    const removedAttachment = attachments[idx];
+
+    // Archive the deleted attachment
+    try {
+      await Archive.create({
+        itemType: "attachment",
+        itemData: {
+          fileName: removedAttachment.fileName,
+          url: removedAttachment.url,
+          mimeType: removedAttachment.mimeType,
+          size: removedAttachment.size,
+          projectId: String(project._id),
+        },
+        parentType: "project",
+        parentId: String(project._id),
+        parentName: project.name,
+        archivedByUserId: String(req.user?.sub || req.user?.id || ""),
+        archivedByUsername: String(req.user?.name || req.user?.username || ""),
+        archivedByRole: String(req.user?.role || ""),
+      });
+    } catch (archiveErr) {
+      console.warn("[Project Attachment Delete] Failed to create archive record:", archiveErr.message);
+    }
+
+    // Remove from array and save
+    project.attachments.splice(idx, 1);
+    await project.save();
+
+    void cacheDel(`project:${req.params.id}`);
+
+    await logActivity(
+      req,
+      "PROJECT_ATTACHMENT_DELETE",
+      "project",
+      project._id,
+      project.name,
+      `Deleted attachment "${removedAttachment.fileName || "attachment"}" from project: ${project.name}`
+    );
+
+    return res.json({
+      ok: true,
+      message: "Attachment deleted successfully",
+      attachments: project.attachments,
+    });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// Archive project attachment alias
+router.post("/:id/attachments/:attachmentIndex/archive", requireAuth, async (req, res, next) => {
+  // Delegate to delete handler
+  try {
+    const project = await Project.findById(req.params.id);
+    if (!project) return res.status(404).json({ error: { message: "Project not found" } });
+
+    const idx = parseInt(req.params.attachmentIndex, 10);
+    const attachments = Array.isArray(project.attachments) ? project.attachments : [];
+    if (isNaN(idx) || idx < 0 || idx >= attachments.length) {
+      return res.status(404).json({ error: { message: "Attachment not found at specified index" } });
+    }
+
+    const removedAttachment = attachments[idx];
+    try {
+      await Archive.create({
+        itemType: "attachment",
+        itemData: {
+          fileName: removedAttachment.fileName,
+          url: removedAttachment.url,
+          mimeType: removedAttachment.mimeType,
+          size: removedAttachment.size,
+          projectId: String(project._id),
+        },
+        parentType: "project",
+        parentId: String(project._id),
+        parentName: project.name,
+        archivedByUserId: String(req.user?.sub || req.user?.id || ""),
+        archivedByUsername: String(req.user?.name || req.user?.username || ""),
+        archivedByRole: String(req.user?.role || ""),
+      });
+    } catch (e) {}
+
+    project.attachments.splice(idx, 1);
+    await project.save();
+    void cacheDel(`project:${req.params.id}`);
+
+    await logActivity(
+      req,
+      "PROJECT_ATTACHMENT_ARCHIVE",
+      "project",
+      project._id,
+      project.name,
+      `Archived attachment "${removedAttachment.fileName || "attachment"}" on project: ${project.name}`
+    );
+
+    return res.json({ ok: true, message: "Attachment archived successfully", attachments: project.attachments });
+  } catch (err) {
+    return next(err);
+  }
+});
+
 // Close project & all associated tasks endpoint (accessible to all roles: admin, manager, employee)
 router.post("/:id/close", requireAuth, async (req, res, next) => {
   try {
