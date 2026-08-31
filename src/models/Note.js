@@ -83,7 +83,14 @@ const NoteSchema = new Schema(
   {
     // ===== EXISTING FIELDS — unchanged =====
     userId: { type: Schema.Types.ObjectId, ref: "User", required: true, index: true },
+    createdBy: {
+      id: { type: Schema.Types.Mixed, default: null },
+      name: { type: String, default: "" },
+      avatar: { type: String, default: "" },
+      role: { type: String, default: "" },
+    },
     title: { type: String, default: "" },
+    overview: { type: String, default: "" },
     content: { type: String, default: "" }, // legacy body; mirrored with body.plain
     color: { type: String, default: "#ffffff" },
     isPinned: { type: Boolean, default: false },
@@ -148,19 +155,28 @@ const NoteSchema = new Schema(
  * Hooks
  * ------------------------------------------------------------------ */
 
-// Runs on create()/save(). Keeps legacy `content` and new `body.plain` in sync,
+// Runs on create()/save(). Keeps legacy `content`, `overview`, and new `body.plain` in sync,
 // backfills ownerId, and maintains searchText + contentHash.
 NoteSchema.pre("save", function (next) {
   if (!this.ownerId && this.userId) this.ownerId = this.userId;
 
-  if (this.body && this.body.plain) {
+  // Resolve best text value from modified / present fields
+  const plainText = this.overview || this.content || (this.body && this.body.plain) || "";
+
+  if (this.overview !== undefined && this.overview !== null && this.overview !== "") {
+    this.content = this.overview;
+    if (!this.body) this.body = {};
+    this.body.plain = this.overview;
+  } else if (this.body && this.body.plain) {
     this.content = this.body.plain;
+    this.overview = this.body.plain;
   } else if (this.content) {
     if (!this.body) this.body = {};
     this.body.plain = this.content;
+    this.overview = this.content;
   }
 
-  const plain = (this.body && this.body.plain) || this.content || "";
+  const plain = (this.body && this.body.plain) || this.overview || this.content || "";
   this.searchText = [this.title, plain, (this.tags || []).join(" "), this.ai && this.ai.summary]
     .filter(Boolean)
     .join(" \n ");

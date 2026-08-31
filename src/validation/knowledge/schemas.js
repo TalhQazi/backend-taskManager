@@ -23,6 +23,7 @@ const referencesSchema = z
 
 const createNote = z.object({
   title: z.string().max(1000).default(""),
+  overview: z.string().optional(),
   content: z.string().optional(),
   body: bodySchema.optional(),
   color: z.string().max(32).optional(),

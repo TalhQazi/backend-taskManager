@@ -7,6 +7,7 @@ const models = require("../../models/knowledge");
 const { noteRepository } = require("../../repositories/knowledge");
 const PermissionService = require("./PermissionService");
 const { AuditService, ActivityService, UndoService } = require("./governance");
+const { getAuthorProfileMap, getAuthorProfile } = require("../../utils/authorProfile");
 
 function paginate(query = {}) {
   const page = Math.max(1, parseInt(query.page, 10) || 1);
@@ -44,28 +45,80 @@ const NoteService = {
         sort,
         skip,
         limit,
-        select: "title content color isPinned isFavorite isImportant folder folderId tags status priority visibility updatedAt createdAt ai heroImage actionItems notesList attachments",
+        select: "userId ownerId createdBy title content overview color isPinned isFavorite isImportant folder folderId tags status priority visibility updatedAt createdAt ai heroImage actionItems notesList attachments",
       }),
       noteRepository.count(ctx, filter),
     ]);
-    return { items: items.map((n) => ({ ...n, id: n._id })), page, limit, total, totalPages: Math.ceil(total / limit) };
+
+    const authorIds = items
+      .map((n) => n.userId || n.ownerId || (n.createdBy && n.createdBy.id))
+      .filter(Boolean);
+    const profileMap = await getAuthorProfileMap(authorIds);
+
+    const mappedItems = items.map((n) => {
+      const uid = String(n.userId || n.ownerId || (n.createdBy && n.createdBy.id) || "");
+      const profile = profileMap[uid];
+      const authorName = (profile && profile.fullName) || (n.createdBy && n.createdBy.name) || "";
+      const authorAvatar = (profile && profile.avatar) || (n.createdBy && n.createdBy.avatar) || "";
+      const authorRole = (n.createdBy && n.createdBy.role) || "Member";
+
+      return {
+        ...n,
+        id: n._id,
+        createdBy: {
+          id: uid,
+          name: authorName,
+          avatar: authorAvatar,
+          role: authorRole,
+        },
+      };
+    });
+
+    return { items: mappedItems, page, limit, total, totalPages: Math.ceil(total / limit) };
   },
 
   async get(ctx, id) {
     const note = await noteRepository.rawById(id);
     if (!note || note.isDeleted) return null;
     if (!(await PermissionService.can(ctx, "read", note))) return { forbidden: true };
-    return { ...note.toObject(), id: note._id };
+
+    const uid = String(note.userId || note.ownerId || (note.createdBy && note.createdBy.id) || "");
+    const profile = uid ? await getAuthorProfile(uid) : { fullName: "", avatar: "" };
+    const noteObj = note.toObject();
+
+    return {
+      ...noteObj,
+      id: note._id,
+      createdBy: {
+        id: uid,
+        name: profile.fullName || (noteObj.createdBy && noteObj.createdBy.name) || "",
+        avatar: profile.avatar || (noteObj.createdBy && noteObj.createdBy.avatar) || "",
+        role: (noteObj.createdBy && noteObj.createdBy.role) || "Member",
+      },
+    };
   },
 
   async create(ctx, dto) {
+    const textVal = dto.overview || dto.content || (dto.body && dto.body.plain) || "";
+    const profile = ctx.userId ? await getAuthorProfile(ctx.userId) : { fullName: "", avatar: "" };
+    const authorName = profile.fullName || (dto.createdBy && dto.createdBy.name) || "User";
+    const authorAvatar = profile.avatar || (dto.createdBy && dto.createdBy.avatar) || "";
+    const authorRole = (dto.createdBy && dto.createdBy.role) || "Admin";
+
     const note = await noteRepository.create({
       userId: ctx.userId,
       ownerId: ctx.userId,
       organizationId: ctx.organizationId || null,
+      createdBy: {
+        id: ctx.userId,
+        name: authorName,
+        avatar: authorAvatar,
+        role: authorRole,
+      },
       title: dto.title || "",
-      content: dto.content || (dto.body && dto.body.plain) || "",
-      body: dto.body || {},
+      overview: textVal,
+      content: textVal,
+      body: dto.body || { plain: textVal },
       color: dto.color || "#ffffff",
       folder: dto.folder || "",
       folderId: dto.folderId || null,
@@ -86,7 +139,17 @@ const NoteService = {
     await this._version(note, ctx, "created");
     ActivityService.record(ctx, { verb: "created", resourceId: note._id, summary: note.title });
     AuditService.record(ctx, { action: "note.create", resourceId: note._id, after: note.toObject() });
-    return { ...note.toObject(), id: note._id };
+    
+    return {
+      ...note.toObject(),
+      id: note._id,
+      createdBy: {
+        id: ctx.userId,
+        name: authorName,
+        avatar: authorAvatar,
+        role: authorRole,
+      },
+    };
   },
 
   async update(ctx, id, dto) {
@@ -102,7 +165,7 @@ const NoteService = {
     const before = note.toObject();
     const undoInverse = {};
     const editable = [
-      "title", "content", "body", "color", "folder", "folderId", "categoryId",
+      "title", "overview", "content", "body", "color", "folder", "folderId", "categoryId",
       "tags", "tagIds", "status", "priority", "visibility", "isImportant",
       "isPinned", "isFavorite", "references", "customMetadata",
       "heroImage", "actionItems", "notesList", "attachments",
@@ -120,7 +183,21 @@ const NoteService = {
     await UndoService.push(ctx, { action: "note.update", resourceId: note._id, inverse: undoInverse });
     ActivityService.record(ctx, { verb: "edited", resourceId: note._id, summary: note.title });
     AuditService.record(ctx, { action: "note.update", resourceId: note._id, before, after: note.toObject() });
-    return { ...note.toObject(), id: note._id };
+
+    const uid = String(note.userId || note.ownerId || (note.createdBy && note.createdBy.id) || "");
+    const profile = uid ? await getAuthorProfile(uid) : { fullName: "", avatar: "" };
+    const noteObj = note.toObject();
+
+    return {
+      ...noteObj,
+      id: note._id,
+      createdBy: {
+        id: uid,
+        name: profile.fullName || (noteObj.createdBy && noteObj.createdBy.name) || "",
+        avatar: profile.avatar || (noteObj.createdBy && noteObj.createdBy.avatar) || "",
+        role: (noteObj.createdBy && noteObj.createdBy.role) || "Member",
+      },
+    };
   },
 
   async remove(ctx, id) {
