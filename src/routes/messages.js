@@ -507,6 +507,7 @@ router.post("/", requireAuth, async (req, res, next) => {
       ? parsed.data.parentMessageId
       : undefined;
 
+    const nowIso = new Date().toISOString();
     const created = await Message.create({
       ...parsed.data,
       title: typeof parsed.data.title === "string" ? encrypt(parsed.data.title) : "",
@@ -514,6 +515,8 @@ router.post("/", requireAuth, async (req, res, next) => {
       attachment: parsed.data.attachment || undefined,
       groupId: validGroupId,
       parentMessageId: validParentId,
+      timestamp: parsed.data.timestamp || nowIso,
+      createdAt: nowIso,
     });
 
     const finalData = withId(decryptOut(created.toObject()));
@@ -831,7 +834,7 @@ router.get("/groups/:id", requireAuth, async (req, res, next) => {
   }
 });
 
-// Get Group Messages with pagination
+// Get Group Messages with pagination (strictly ascending chronological)
 router.get("/groups/:id/messages", requireAuth, async (req, res, next) => {
   try {
     const { page, limit, skip } = parsePagination(req.query);
@@ -839,7 +842,7 @@ router.get("/groups/:id/messages", requireAuth, async (req, res, next) => {
       groupId: req.params.id,
       parentMessageId: null, // main channel messages only
     })
-      .sort({ createdAt: -1 })
+      .sort({ _id: -1 })
       .skip(skip)
       .limit(limit)
       .lean();
@@ -853,7 +856,7 @@ router.get("/groups/:id/messages", requireAuth, async (req, res, next) => {
   }
 });
 
-// Update group settings / announcement mode
+// Update group settings / announcement mode / avatar / name / members
 router.put("/groups/:id", requireAuth, async (req, res, next) => {
   try {
     const group = await ChatGroup.findById(req.params.id);
@@ -867,15 +870,27 @@ router.put("/groups/:id", requireAuth, async (req, res, next) => {
       return res.status(403).json({ error: { message: "Forbidden: Only Group Admins can modify settings" } });
     }
 
-    const { name, description, avatarUrl, announcementOnly, isPrivate } = req.body;
-    if (name) group.name = name;
+    const { name, description, avatarUrl, announcementOnly, isPrivate, members, admins } = req.body;
+    if (typeof name === "string" && name.trim()) group.name = name.trim();
     if (description !== undefined) group.description = description;
     if (avatarUrl !== undefined) group.avatarUrl = avatarUrl;
     if (announcementOnly !== undefined) group.announcementOnly = announcementOnly;
     if (isPrivate !== undefined) group.isPrivate = isPrivate;
+    if (Array.isArray(members)) {
+      group.members = Array.from(new Set(members.map((m) => String(m).trim()).filter(Boolean)));
+    }
+    if (Array.isArray(admins)) {
+      group.admins = Array.from(new Set(admins.map((a) => String(a).trim()).filter(Boolean)));
+    }
 
     await group.save();
-    return res.json({ item: withId(group.toObject()) });
+    const finalGroup = withId(group.toObject());
+
+    if (global.io) {
+      global.io.emit("group-updated", finalGroup);
+    }
+
+    return res.json({ item: finalGroup });
   } catch (err) {
     next(err);
   }
@@ -884,21 +899,35 @@ router.put("/groups/:id", requireAuth, async (req, res, next) => {
 // Add / Remove group members
 router.post("/groups/:id/members", requireAuth, async (req, res, next) => {
   try {
-    const { action, memberName } = req.body;
-    if (!memberName) return res.status(400).json({ error: { message: "memberName required" } });
+    const { action, memberName, members: batchMembers } = req.body;
+    const targetMembers = Array.isArray(batchMembers) && batchMembers.length > 0
+      ? batchMembers.map((m) => String(m).trim()).filter(Boolean)
+      : (memberName ? [String(memberName).trim()] : []);
+
+    if (targetMembers.length === 0) {
+      return res.status(400).json({ error: { message: "memberName or members array required" } });
+    }
 
     const group = await ChatGroup.findById(req.params.id);
     if (!group) return res.status(404).json({ error: { message: "Group not found" } });
 
     if (action === "add") {
-      if (!group.members.includes(memberName)) group.members.push(memberName);
+      targetMembers.forEach((m) => {
+        if (!group.members.includes(m)) group.members.push(m);
+      });
     } else if (action === "remove") {
-      group.members = group.members.filter((m) => m !== memberName);
-      group.admins = group.admins.filter((a) => a !== memberName);
+      group.members = group.members.filter((m) => !targetMembers.includes(m));
+      group.admins = group.admins.filter((a) => !targetMembers.includes(a));
     }
 
     await group.save();
-    return res.json({ item: withId(group.toObject()) });
+    const finalGroup = withId(group.toObject());
+
+    if (global.io) {
+      global.io.emit("group-updated", finalGroup);
+    }
+
+    return res.json({ item: finalGroup });
   } catch (err) {
     next(err);
   }
