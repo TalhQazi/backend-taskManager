@@ -76,6 +76,10 @@ const NoteService = {
       priority: dto.priority || "normal",
       visibility: dto.visibility || "private",
       isImportant: !!dto.isImportant,
+      heroImage: dto.heroImage || "",
+      actionItems: dto.actionItems || [],
+      notesList: dto.notesList || [],
+      attachments: dto.attachments || [],
       references: dto.references || {},
       customMetadata: dto.customMetadata || {},
     });
@@ -101,6 +105,7 @@ const NoteService = {
       "title", "content", "body", "color", "folder", "folderId", "categoryId",
       "tags", "tagIds", "status", "priority", "visibility", "isImportant",
       "isPinned", "isFavorite", "references", "customMetadata",
+      "heroImage", "actionItems", "notesList", "attachments",
     ];
     for (const f of editable) {
       if (dto[f] !== undefined) {
