@@ -763,6 +763,8 @@ router.post("/", requireAuth, async (req, res, next) => {
         }
         return att;
       }));
+      data.attachment = data.attachments[0];
+      data.attachmentFileName = data.attachments[0]?.fileName || "";
     }
 
     // Save Task Video to server disk (recorded/uploaded as base64 data URL)
@@ -856,16 +858,6 @@ router.post("/", requireAuth, async (req, res, next) => {
         metadata: { taskId: String(created._id), title: created.title },
       }),
       logActivity(req, "TASK_CREATE", "task", created._id, created.title, `Created task: ${created.title}`),
-      createNotification({
-        actor: req.user?.name || req.user?.username || "System",
-        actorRole: req.user?.role || "",
-        action: "created",
-        resourceType: "task",
-        resourceName: created.title,
-        assignees: Array.isArray(created.assignees) ? created.assignees : [],
-        resourceId: String(created._id),
-        category: "TASK_ASSIGNED",
-      }),
       // Extract mentions from task description
       extractMentions(created.description).then(mentionedUsers => {
         if (mentionedUsers.length > 0) {
@@ -1031,16 +1023,6 @@ router.post("/upload", requireAuth, upload.array("files", 10), async (req, res, 
         metadata: { taskId: String(created._id), title: created.title },
       }),
       logActivity(req, "TASK_CREATE", "task", created._id, created.title, `Created task with attachment: ${created.title}`),
-      createNotification({
-        actor: req.user?.name || req.user?.username || "System",
-        actorRole: req.user?.role || "",
-        action: "created",
-        resourceType: "task",
-        resourceName: created.title,
-        assignees: Array.isArray(created.assignees) ? created.assignees : [],
-        resourceId: String(created._id),
-        category: "TASK_ASSIGNED",
-      }),
       cacheDel("tasks:list:*"),
       created.projectId ? cacheDel(`project:${created.projectId}`) : Promise.resolve(),
       (async () => {
@@ -1489,12 +1471,24 @@ router.post("/:id/attachments/:attachmentIndex/archive", requireAuth, async (req
 
     // Remove the attachment from the task
     const update = {};
-    if (idx === -1 && task.attachment) {
+    if (idx === -1) {
       update.$unset = { attachment: 1, attachmentFileName: 1 };
+      if (attachments.length > 0) {
+        const newAttachments = attachments.filter((a) => a.url !== task.attachment?.url);
+        if (newAttachments.length !== attachments.length) {
+          update.$set = { attachments: newAttachments };
+        }
+      }
     } else {
       const newAttachments = [...attachments];
       newAttachments.splice(idx, 1);
       update.$set = { attachments: newAttachments };
+      if (newAttachments.length > 0) {
+        update.$set.attachment = newAttachments[0];
+        update.$set.attachmentFileName = newAttachments[0].fileName || "";
+      } else {
+        update.$unset = { attachment: 1, attachmentFileName: 1 };
+      }
     }
     const updated = await Task.findByIdAndUpdate(req.params.id, update, { new: true });
 
@@ -1504,7 +1498,7 @@ router.post("/:id/attachments/:attachmentIndex/archive", requireAuth, async (req
 
     await logActivity(req, "ATTACHMENT_ARCHIVE", "task", task._id, task.title, `Archived attachment on task: ${task.title}`);
 
-    return res.json({ ok: true, message: "Attachment archived", item: updated });
+    return res.json({ ok: true, message: "Attachment archived", item: updated ? withId(updated.toObject()) : null });
   } catch (err) {
     return next(err);
   }
@@ -1555,12 +1549,24 @@ router.delete("/:id/attachments/:attachmentIndex", requireAuth, async (req, res,
     }
 
     const update = {};
-    if (idx === -1 && task.attachment) {
+    if (idx === -1) {
       update.$unset = { attachment: 1, attachmentFileName: 1 };
+      if (attachments.length > 0) {
+        const newAttachments = attachments.filter((a) => a.url !== task.attachment?.url);
+        if (newAttachments.length !== attachments.length) {
+          update.$set = { attachments: newAttachments };
+        }
+      }
     } else {
       const newAttachments = [...attachments];
       newAttachments.splice(idx, 1);
       update.$set = { attachments: newAttachments };
+      if (newAttachments.length > 0) {
+        update.$set.attachment = newAttachments[0];
+        update.$set.attachmentFileName = newAttachments[0].fileName || "";
+      } else {
+        update.$unset = { attachment: 1, attachmentFileName: 1 };
+      }
     }
     const updated = await Task.findByIdAndUpdate(req.params.id, update, { new: true });
 
@@ -1570,7 +1576,7 @@ router.delete("/:id/attachments/:attachmentIndex", requireAuth, async (req, res,
 
     await logActivity(req, "ATTACHMENT_DELETE", "task", task._id, task.title, `Deleted attachment on task: ${task.title}`);
 
-    return res.json({ ok: true, message: "Attachment deleted successfully", item: updated });
+    return res.json({ ok: true, message: "Attachment deleted successfully", item: updated ? withId(updated.toObject()) : null });
   } catch (err) {
     return next(err);
   }
@@ -1873,20 +1879,27 @@ const handleTaskUpdate = async (req, res, next) => {
       }
     }
 
-    if (Array.isArray(patch.attachments) && patch.attachments.length > 0) {
-      patch.attachments = await Promise.all(patch.attachments.map(async (att) => {
-        if (att.url && att.url.startsWith("data:")) {
-          try {
-            const { buffer, mimeType } = base64ToBuffer(att.url);
-            const s3Url = await uploadToS3(buffer, att.fileName || "attachment", mimeType, "tasks");
-            return { ...att, url: s3Url, uploadedAt: att.uploadedAt || new Date() };
-          } catch (err) {
-            console.error("Failed to upload updated multi-attachment to S3:", err);
-            return att;
+    if (Array.isArray(patch.attachments)) {
+      if (patch.attachments.length > 0) {
+        patch.attachments = await Promise.all(patch.attachments.map(async (att) => {
+          if (att.url && att.url.startsWith("data:")) {
+            try {
+              const { buffer, mimeType } = base64ToBuffer(att.url);
+              const s3Url = await uploadToS3(buffer, att.fileName || "attachment", mimeType, "tasks");
+              return { ...att, url: s3Url, uploadedAt: att.uploadedAt || new Date() };
+            } catch (err) {
+              console.error("Failed to upload updated multi-attachment to S3:", err);
+              return att;
+            }
           }
-        }
-        return att;
-      }));
+          return att;
+        }));
+        patch.attachment = patch.attachments[0];
+        patch.attachmentFileName = patch.attachments[0]?.fileName || "";
+      } else {
+        patch.attachment = { fileName: "", url: "", mimeType: "", size: 0 };
+        patch.attachmentFileName = "";
+      }
     }
 
     // Save Task Video to server disk if update includes a new base64 video

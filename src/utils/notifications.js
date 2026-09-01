@@ -40,13 +40,20 @@ async function createNotification({
   category = "",
 }) {
   try {
+    // Skip notifications for task or project creation
+    const actStr = String(action || "").toLowerCase();
+    const resStr = String(resourceType || "").toLowerCase();
+    if ((resStr === "task" || resStr === "project") && (actStr.includes("creat") || actStr.includes("created"))) {
+      return null;
+    }
+
     // Derive category when not provided
     let derivedCategory = category;
     if (!derivedCategory) {
       if (action.includes("mention")) derivedCategory = "MENTIONED";
       else if (action.includes("comment")) derivedCategory = "COMMENT_ADDED";
       else if ((resourceType === "task" || resourceType === "project") &&
-               (action.includes("assign") || action.includes("creat") || action.includes("reassign")))
+               (action.includes("assign") || action.includes("reassign")))
         derivedCategory = resourceType === "task" ? "TASK_ASSIGNED" : "PROJECT_ASSIGNED";
       else if (action.includes("complet")) derivedCategory = "TASK_COMPLETED";
       else derivedCategory = "SYSTEM";

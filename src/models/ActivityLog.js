@@ -97,6 +97,16 @@ ActivityLogSchema.post("save", async function (doc) {
     if (doc.resourceType === "auth") {
       return;
     }
+    // 3. Skip task and project creation notifications
+    if (
+      doc.action === "TASK_CREATE" ||
+      doc.action === "PROJECT_CREATE" ||
+      ((doc.resourceType === "task" || doc.resourceType === "project") &&
+        doc.action &&
+        (doc.action.toLowerCase().includes("create") || doc.action.toLowerCase().includes("created")))
+    ) {
+      return;
+    }
 
     const { createNotification } = require("../utils/notifications");
 

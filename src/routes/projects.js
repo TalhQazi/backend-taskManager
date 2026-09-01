@@ -256,18 +256,6 @@ router.post("/", requireAuth, async (req, res, next) => {
       `Created project: ${createdProject.name}`
     );
 
-    void createNotification({
-      actor: String(req.user?.name || req.user?.username || "System"),
-      actorRole: String(req.user?.role || ""),
-      action: "created",
-      resourceType: "project",
-      resourceName: createdProject.name,
-      assignees: Array.isArray(data.assignees) ? data.assignees : [],
-      details: `Tasks: ${createdTasks.length}`,
-      resourceId: String(createdProject._id),
-      category: "PROJECT_ASSIGNED",
-    });
-
     // Send project assignment emails directly — not tied to activity log
     if (Array.isArray(createdProject.assignees) && createdProject.assignees.length > 0) {
       void Promise.all(
