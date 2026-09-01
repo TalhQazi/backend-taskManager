@@ -427,10 +427,21 @@ app.get("/api/s3-proxy/*", requireAuth, async (req, res) => {
     res.set("Cache-Control", "public, max-age=86400, immutable"); // Cache for 24h
     res.set("Access-Control-Allow-Origin", "*");
 
+    if (req.query.download === "true" || req.query.download === "1") {
+      const fileName = String(req.query.fileName || path.basename(s3Key) || "download");
+      res.set("Content-Disposition", `attachment; filename="${fileName}"`);
+    }
+
     // Pipe the S3 stream directly to the response
     stream.pipe(res);
   } catch (err) {
-    if (err.name === "NoSuchKey" || err.$metadata?.httpStatusCode === 404) {
+    if (
+      err.name === "NoSuchKey" ||
+      err.name === "NotFound" ||
+      err.$metadata?.httpStatusCode === 404 ||
+      err.code === "ENOENT" ||
+      (err.message && err.message.toLowerCase().includes("not found"))
+    ) {
       return res.status(404).json({ error: { message: "File not found" } });
     }
     console.error("[S3 Proxy] Error:", err.message || err);

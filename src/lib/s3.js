@@ -124,17 +124,31 @@ async function deleteFromS3(url) {
  * @returns {Promise<{stream: ReadableStream, contentType: string, contentLength: number}>}
  */
 async function getFromS3(key) {
-  // Check if file is available locally on disk first
-  const localPath = path.join(__dirname, "../../uploads", key);
-  if (fs.existsSync(localPath)) {
-    console.log(`[File System] Serving proxied file from local disk: ${key}`);
-    const contentType = getMimeType(localPath);
-    const stats = fs.statSync(localPath);
-    return {
-      stream: fs.createReadStream(localPath),
-      contentType,
-      contentLength: stats.size,
-    };
+  if (!key) throw new Error("Key is required");
+
+  // Clean key if it contains /uploads/ or uploads/
+  const cleanKey = key.replace(/^\/?uploads\//, "");
+
+  // Check possible local disk paths
+  const uploadsDir = path.resolve(__dirname, "../../uploads");
+  const candidates = [
+    path.join(uploadsDir, cleanKey),
+    path.join(uploadsDir, key),
+    path.join(uploadsDir, "tasks", path.basename(cleanKey)),
+    path.join(uploadsDir, path.basename(cleanKey)),
+  ];
+
+  for (const localPath of candidates) {
+    if (fs.existsSync(localPath) && fs.statSync(localPath).isFile()) {
+      console.log(`[File System] Serving proxied file from local disk: ${localPath}`);
+      const contentType = getMimeType(localPath);
+      const stats = fs.statSync(localPath);
+      return {
+        stream: fs.createReadStream(localPath),
+        contentType,
+        contentLength: stats.size,
+      };
+    }
   }
 
   // Fallback to AWS S3 if config is present
@@ -145,7 +159,7 @@ async function getFromS3(key) {
     }
     const command = new GetObjectCommand({
       Bucket: bucketName,
-      Key: key,
+      Key: cleanKey,
     });
     const response = await s3Client.send(command);
     return {
@@ -173,12 +187,19 @@ function extractS3Key(url) {
     return url.replace(/^uploads\//, "");
   }
   if (!url.includes("amazonaws.com")) return null;
+  
+  // Try pattern with specific bucket env if available
   const bucketName = process.env.AWS_S3_BUCKET_NAME || process.env.AWS_S3_BUCKET;
-  if (!bucketName) return null;
   const region = process.env.AWS_REGION || "us-east-1";
-  const pattern = new RegExp(`https://${bucketName}\\.s3\\.${region}\\.amazonaws\\.com/(.+)`);
-  const match = url.match(pattern);
-  return match ? match[1] : null;
+  if (bucketName) {
+    const pattern = new RegExp(`https://${bucketName}\\.s3[.-]${region}\\.amazonaws\\.com/(.+)`);
+    const match = url.match(pattern);
+    if (match) return match[1];
+  }
+  
+  // Generic Amazon S3 URL extraction
+  const genericMatch = url.match(/https:\/\/[^/]+\.amazonaws\.com\/(.+)/);
+  return genericMatch ? genericMatch[1] : null;
 }
 
 /**

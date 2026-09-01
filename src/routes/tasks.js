@@ -2287,14 +2287,18 @@ router.get("/:id/attachments/:index/download", requireAuth, async (req, res, nex
       attachment = task.attachment;
     } else if (idx >= 0 && idx < attachments.length) {
       attachment = attachments[idx];
+    } else if (task.attachment) {
+      attachment = task.attachment;
     }
 
     if (!attachment) {
       return res.status(404).json({ error: { message: "Attachment not found" } });
     }
 
-    // If attachment has data URL (base64), decode and serve
     const url = attachment.url || "";
+    const fileName = attachment.fileName || "download";
+
+    // 1. If attachment has data URL (base64), decode and serve
     if (url.startsWith("data:")) {
       const match = url.match(/^data:([^;]+);base64,(.+)$/);
       if (match) {
@@ -2302,40 +2306,44 @@ router.get("/:id/attachments/:index/download", requireAuth, async (req, res, nex
         const base64Data = match[2];
         const buffer = Buffer.from(base64Data, "base64");
         res.setHeader("Content-Type", mimeType);
-        res.setHeader("Content-Disposition", `attachment; filename="${attachment.fileName || "download"}"`);
+        res.setHeader("Content-Disposition", `attachment; filename="${fileName}"`);
         return res.send(buffer);
       }
     }
 
-    // If attachment has external URL, proxy S3 files with download headers
-    // (a plain redirect lets S3 serve images without Content-Disposition, so
-    // browsers preview PNG/WebP instead of downloading them)
-    if (url.startsWith("http://") || url.startsWith("https://")) {
-      const s3Key = extractS3Key(url);
-      if (s3Key) {
-        try {
-          const { stream, contentType, contentLength } = await getFromS3(s3Key);
-          res.setHeader("Content-Type", attachment.mimeType || contentType);
-          res.setHeader("Content-Disposition", `attachment; filename="${attachment.fileName || "download"}"`);
-          if (contentLength) res.setHeader("Content-Length", String(contentLength));
-          return stream.pipe(res);
-        } catch (_) {
-          // S3 fetch failed — fall back to redirect
-          return res.redirect(url);
-        }
+    // 2. Fetch using getFromS3 (handles local uploads folder and S3 seamlessly)
+    const s3Key = extractS3Key(url) || (url.startsWith("/uploads/") ? url.replace(/^\/uploads\//, "") : (url.startsWith("uploads/") ? url.replace(/^uploads\//, "") : null));
+    if (s3Key) {
+      try {
+        const { stream, contentType, contentLength } = await getFromS3(s3Key);
+        res.setHeader("Content-Type", attachment.mimeType || contentType);
+        res.setHeader("Content-Disposition", `attachment; filename="${fileName}"`);
+        if (contentLength) res.setHeader("Content-Length", String(contentLength));
+        return stream.pipe(res);
+      } catch (s3Err) {
+        console.warn("[Attachment Download] getFromS3 failed, trying fallback:", s3Err.message);
       }
-      return res.redirect(url);
     }
 
-    // If no URL or local upload URL, try to serve from uploads folder
-    const targetFile = attachment.fileName || (url ? path.basename(url) : "");
-    if (targetFile) {
-      const filePath = path.join(uploadsDir, targetFile);
-      if (fs.existsSync(filePath)) {
+    // 3. Check local uploads folder directly
+    const uploadsDir = path.resolve(__dirname, "../../uploads");
+    const targetFile = url ? url.replace(/^\/uploads\//, "") : fileName;
+    const candidates = [
+      path.join(uploadsDir, targetFile),
+      path.join(uploadsDir, "tasks", path.basename(targetFile)),
+      path.join(uploadsDir, path.basename(targetFile)),
+    ];
+    for (const filePath of candidates) {
+      if (fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
         res.setHeader("Content-Type", attachment.mimeType || "application/octet-stream");
-        res.setHeader("Content-Disposition", `attachment; filename="${targetFile}"`);
+        res.setHeader("Content-Disposition", `attachment; filename="${fileName}"`);
         return res.sendFile(filePath);
       }
+    }
+
+    // 4. If remote HTTP URL, redirect as fallback
+    if (url.startsWith("http://") || url.startsWith("https://")) {
+      return res.redirect(url);
     }
 
     return res.status(404).json({ error: { message: "Attachment file not available" } });
