@@ -613,35 +613,7 @@ connectDb()
       console.error("[Startup Migration] Error renaming UPH-Server:", migErr);
     }
 
-    // Archive existing completed tasks on startup
-    try {
-      const Archive = require("./models/Archive");
-      const Task = require("./models/Task");
-      const completedTasks = await Task.find({ status: "completed" }).lean();
-      if (completedTasks.length > 0) {
-        console.log(`[Startup Migration] Archiving ${completedTasks.length} existing completed tasks...`);
-        // Batched rather than two round-trips per task. Same end state, but
-        // startup no longer scales linearly with the completed-task backlog —
-        // the server was previously unreachable for the whole loop.
-        const BATCH = 500;
-        for (let i = 0; i < completedTasks.length; i += BATCH) {
-          const chunk = completedTasks.slice(i, i + BATCH);
-          await Archive.insertMany(
-            chunk.map((task) => ({
-              itemType: "task",
-              originalId: task._id,
-              archivedBy: "system",
-              data: task,
-            })),
-            { ordered: false }
-          );
-          await Task.deleteMany({ _id: { $in: chunk.map((t) => t._id) } });
-        }
-        console.log(`[Startup Migration] Finished archiving completed tasks.`);
-      }
-    } catch (migErr) {
-      console.error("[Startup Migration] Error archiving completed tasks:", migErr);
-    }
+
 
     // Initialize default compliance templates
     const { initializeComplianceTemplates } = require("./utils/complianceSeeder");

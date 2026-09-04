@@ -579,13 +579,16 @@ router.get("/:id", requireAuth, async (req, res, next) => {
       const archivedRecord = await Archive.findOne({
         $or: [
           { originalId: req.params.id },
-          ...(isValidObjId ? [{ _id: req.params.id }, { "data._id": new mongoose.Types.ObjectId(req.params.id) }] : []),
-          { "data._id": req.params.id }
+          { "itemData.originalId": req.params.id },
+          ...(isValidObjId ? [{ _id: req.params.id }, { "data._id": new mongoose.Types.ObjectId(req.params.id) }, { "itemData._id": new mongoose.Types.ObjectId(req.params.id) }] : []),
+          { "data._id": req.params.id },
+          { "itemData._id": req.params.id }
         ]
       }).lean();
 
-      if (archivedRecord && archivedRecord.data) {
-        task = { ...archivedRecord.data, isArchived: true, status: "completed" };
+      if (archivedRecord) {
+        const raw = archivedRecord.itemData || archivedRecord.data || {};
+        task = { ...raw, _id: raw._id || archivedRecord.originalId || raw.originalId || req.params.id, isArchived: true, status: raw.status || "completed" };
         isArchived = true;
       }
     }
@@ -1671,15 +1674,16 @@ router.patch("/:id/status", requireAuth, async (req, res, next) => {
       archivedDoc = await Archive.findOne({
         $or: [
           { originalId: req.params.id },
-          ...(isValidObjId ? [{ _id: req.params.id }, { "data._id": new mongoose.Types.ObjectId(req.params.id) }] : []),
+          { "itemData.originalId": req.params.id },
+          ...(isValidObjId ? [{ _id: req.params.id }, { "data._id": new mongoose.Types.ObjectId(req.params.id) }, { "itemData._id": new mongoose.Types.ObjectId(req.params.id) }] : []),
           { "data._id": req.params.id },
-          { "itemData.originalId": req.params.id }
+          { "itemData._id": req.params.id }
         ]
       });
 
       if (archivedDoc) {
-        const rawData = archivedDoc.data || archivedDoc.itemData || {};
-        task = { ...rawData, _id: rawData._id || archivedDoc.originalId || req.params.id };
+        const rawData = archivedDoc.itemData || archivedDoc.data || {};
+        task = { ...rawData, _id: rawData._id || archivedDoc.originalId || rawData.originalId || req.params.id };
         isFromArchive = true;
       }
     }
@@ -1755,7 +1759,6 @@ router.patch("/:id/status", requireAuth, async (req, res, next) => {
 
     if (updated.status === "completed") {
       void handleTaskCompletion(updated);
-      await archiveTaskById(req.params.id, req.user);
     }
 
     // Fire-and-forget
@@ -1949,7 +1952,6 @@ const handleTaskUpdate = async (req, res, next) => {
 
     if (updated.status === "completed") {
       void handleTaskCompletion(updated);
-      await archiveTaskById(req.params.id, req.user);
     }
 
     // Fire-and-forget

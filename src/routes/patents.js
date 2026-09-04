@@ -5,6 +5,7 @@ const User = require("../models/User");
 const SystemSettings = require("../models/SystemSettings");
 const { sendSystemEmail, sendRawEmail } = require("../lib/email");
 const { requireAuth } = require("../middleware/auth");
+const { getPatentAlertRecipients } = require("../jobs/expiryJob");
 
 const router = express.Router();
 
@@ -41,21 +42,7 @@ async function notifyAdminsAboutFiledPatent(patent) {
     const expirationStr = expiration ? expiration.toISOString().split("T")[0] : "N/A";
     const filingDateStr = patent.filingDate ? new Date(patent.filingDate).toISOString().split("T")[0] : "N/A";
 
-    const empAdmins = await Employee.find({
-      userRole: { $in: ["admin", "super-admin"] },
-      userStatus: "active",
-      email: { $exists: true, $ne: "" },
-    }).select("email name").lean();
-
-    const userAdmins = await User.find({
-      role: { $in: ["admin", "super-admin"] },
-      status: "active",
-      email: { $exists: true, $ne: "" },
-    }).select("email name").lean();
-
-    const recipientMap = new Map();
-    empAdmins.forEach((e) => { if (e.email) recipientMap.set(e.email.toLowerCase(), e.name || "Admin"); });
-    userAdmins.forEach((u) => { if (u.email) recipientMap.set(u.email.toLowerCase(), u.name || "Admin"); });
+    const recipientMap = await getPatentAlertRecipients(["admin", "super-admin"]);
 
     for (const [email, name] of recipientMap.entries()) {
       await sendSystemEmail({
@@ -335,14 +322,25 @@ router.post("/filed", requireAuth, async (req, res, next) => {
       req.body.provisionalExpiration = calculateExpiration(req.body.filingDate, req.body.filingType);
     }
 
-    const newPatent = new Patent({ ...req.body, createdBy: req.user?.username || "System" });
+    // Determine initial notified thresholds so background check does not immediately double-email
+    const expiration = req.body.provisionalExpiration ? new Date(req.body.provisionalExpiration) : null;
+    let initialNotifiedDays = [];
+    if (expiration && !isNaN(expiration.getTime())) {
+      const daysUntil = Math.ceil((expiration.getTime() - Date.now()) / (1000 * 60 * 60 * 24));
+      const thresholds = Array.isArray(req.body.customReminderDays) && req.body.customReminderDays.length > 0
+        ? req.body.customReminderDays
+        : [1, 7, 15, 30, 60, 90, 120, 180];
+      initialNotifiedDays = thresholds.filter((t) => daysUntil <= t);
+    }
+
+    const newPatent = new Patent({
+      ...req.body,
+      notifiedDays: Array.from(new Set(initialNotifiedDays)),
+      createdBy: req.user?.username || "System",
+    });
     await newPatent.save();
 
     notifyAdminsAboutFiledPatent(newPatent);
-
-    // Also trigger expiration check in background if filed within alert window
-    const { checkPatentExpirations } = require("../jobs/expiryJob");
-    checkPatentExpirations().catch((e) => console.error("Auto expiry check failed:", e));
 
     res.status(201).json({ item: newPatent });
   } catch (err) { next(err); }
@@ -367,10 +365,6 @@ router.put("/filed/:id", requireAuth, async (req, res, next) => {
     const patent = await Patent.findByIdAndUpdate(req.params.id, req.body, { new: true, runValidators: true });
     if (!patent) return res.status(404).json({ error: { message: "Patent not found" } });
     const expiration = calculateExpiration(patent.filingDate, patent.filingType, patent.provisionalExpiration);
-
-    // Trigger expiration check in background
-    const { checkPatentExpirations } = require("../jobs/expiryJob");
-    checkPatentExpirations().catch((e) => console.error("Auto expiry check failed:", e));
 
     res.json({ item: { ...patent.toObject(), provisionalExpiration: expiration, isExpiringExpiringSoon: isExpiringExpiringSoon(expiration) } });
   } catch (err) { next(err); }
