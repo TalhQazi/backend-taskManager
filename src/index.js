@@ -501,6 +501,14 @@ try {
   console.error("[Knowledge Vault] failed to mount v2 API:", err.message);
 }
 
+// Company Reels™ — Short-form training & knowledge retention module
+try {
+  app.use("/api/company-reels", requireClearHire, require("./routes/companyReels"));
+  console.log("[Company Reels™] API mounted at /api/company-reels");
+} catch (err) {
+  console.error("[Company Reels™] failed to mount API:", err.message);
+}
+
 // Task Management multi-view upgrade — additive routes for the new views.
 // Reuses existing /api/tasks; these add dependencies, capacity, saved views and
 // read-only analytics. Wrapped so a load error can't crash startup.
