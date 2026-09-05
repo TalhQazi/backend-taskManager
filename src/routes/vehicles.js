@@ -93,19 +93,37 @@ const upload = multer({
   limits: { fileSize: 10 * 1024 * 1024 },
 });
 
+const vehicleStatusEnum = ["active", "inactive", "maintenance", "available", "in-use"];
+
+const partSchema = z.object({
+  name: z.string().optional().default(""),
+  cost: z.coerce.number().optional().default(0),
+});
+
+const needItemSchema = z.object({
+  id: z.string(),
+  taskName: z.string().min(1),
+  assignee: z.string().optional().default(""),
+  dueDate: z.string().optional().default(""),
+  completed: z.boolean().optional().default(false),
+  parts: z.array(partSchema).optional().default([]),
+});
+
 const createSchema = z.object({
   name: z.string().min(1),
   type: z.string().optional().default(""),
   licensePlate: z.string().min(1),
-  status: z.enum(["available", "in-use", "maintenance"]).optional(),
+  status: z.enum(vehicleStatusEnum).optional(),
   assignedTo: z.string().nullable().optional(),
-  fuelLevel: z.number().min(0).max(100).optional(),
-  mileage: z.number().min(0).optional(),
+  fuelLevel: z.union([z.number(), z.string()]).optional(),
+  mileage: z.union([z.number(), z.string()]).optional(),
   lastInspection: z.union([z.string(), z.date()]).optional(),
   nextInspection: z.union([z.string(), z.date()]).optional(),
   tagPhotoFileName: z.string().optional().default(""),
   tagPhotoDataUrl: z.string().optional().default(""),
-});
+  requiresInspection: z.boolean().optional().default(true),
+  needs: z.array(needItemSchema).optional(),
+}).passthrough();
 
 const adminUiSchema = z.object({
   make: z.string().min(1),
@@ -113,32 +131,18 @@ const adminUiSchema = z.object({
   year: z.string().min(1),
   licensePlate: z.string().min(1),
   vin: z.string().optional().default(""),
-  mileage: z.string().optional().default(""),
-  status: z.enum(["active", "inactive", "maintenance"]).optional(),
+  mileage: z.union([z.number(), z.string()]).optional().default(""),
+  status: z.enum(vehicleStatusEnum).optional(),
   lastInspection: z.string().optional().default(""),
   nextInspection: z.string().optional().default(""),
   assignedTo: z.string().optional().default(""),
   tagPhotoFileName: z.string().optional().default(""),
   tagPhotoDataUrl: z.string().optional().default(""),
-});
+  requiresInspection: z.boolean().optional().default(true),
+  needs: z.array(needItemSchema).optional(),
+}).passthrough();
 
-const adminUiUpdateSchema = z
-  .object({
-    make: z.string().optional(),
-    model: z.string().optional(),
-    year: z.string().optional(),
-    licensePlate: z.string().optional(),
-    vin: z.string().optional(),
-    mileage: z.string().optional(),
-    status: z.enum(["active", "inactive", "maintenance"]).optional(),
-    lastInspection: z.string().optional(),
-    nextInspection: z.string().optional(),
-    assignedTo: z.string().optional(),
-    tagPhotoFileName: z.string().optional(),
-    tagPhotoDataUrl: z.string().optional(),
-  })
-  .partial();
-
+const adminUiUpdateSchema = adminUiSchema.partial();
 const updateSchema = createSchema.partial();
 
 function withId(doc) {
@@ -167,13 +171,44 @@ async function logActivity(req, action, resourceType, resourceId, resourceName, 
   }
 }
 
-router.get("/", requireAuth, async (_req, res, next) => {
+router.get("/", requireAuth, async (req, res, next) => {
   try {
-    const result = await cacheWrap("vehicles:list", async () => {
-      const items = await Vehicle.find()
-        .sort({ name: 1 })
-        .lean();
-      return { items: items.map(withId) };
+    const page = Math.max(1, parseInt(req.query.page) || 1);
+    const limit = Math.max(1, parseInt(req.query.limit) || 100);
+    const skip = (page - 1) * limit;
+    const search = String(req.query.search || "").trim();
+
+    const query = {};
+    if (search) {
+      query.$or = [
+        { name: { $regex: search, $options: "i" } },
+        { licensePlate: { $regex: search, $options: "i" } },
+        { model: { $regex: search, $options: "i" } },
+        { make: { $regex: search, $options: "i" } },
+      ];
+    }
+
+    const cacheKey = `vehicles:list:${page}:${limit}:${search}`;
+    const result = await cacheWrap(cacheKey, async () => {
+      const [items, total] = await Promise.all([
+        Vehicle.find(query)
+          .select('-tagPhotoDataUrl')
+          .sort({ name: 1 })
+          .skip(skip)
+          .limit(limit)
+          .lean(),
+        Vehicle.countDocuments(query),
+      ]);
+
+      return {
+        items: items.map(withId),
+        pagination: {
+          total,
+          page,
+          limit,
+          totalPages: Math.ceil(total / limit),
+        },
+      };
     }, 60);
     res.json(result);
   } catch (err) {
@@ -189,6 +224,16 @@ router.get("/:id", requireAuth, async (req, res, next) => {
       return res.status(404).json({ error: { message: "Vehicle not found" } });
     }
     return res.json({ item: withId(item) });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+router.get("/:id/photo", requireAuth, async (req, res, next) => {
+  try {
+    const item = await Vehicle.findById(req.params.id).select("tagPhotoDataUrl tagPhotoFileName").lean();
+    if (!item) return res.status(404).json({ error: { message: "Not found" } });
+    return res.json({ photo: item.tagPhotoDataUrl || "", fileName: item.tagPhotoFileName || "" });
   } catch (err) {
     return next(err);
   }
@@ -255,7 +300,9 @@ router.post("/", requireAuth, async (req, res, next) => {
         nextInspection: adminParsed.data.nextInspection ? new Date(adminParsed.data.nextInspection) : undefined,
         tagPhotoFileName: adminParsed.data.tagPhotoFileName || "",
         tagPhotoDataUrl: adminParsed.data.tagPhotoDataUrl || "",
+        requiresInspection: adminParsed.data.requiresInspection ?? true,
         fuelLevel: 100,
+        needs: adminParsed.data.needs || [],
       });
 
       const obj = created.toObject();
@@ -265,7 +312,7 @@ router.post("/", requireAuth, async (req, res, next) => {
 
       // Create notification
       await createNotification({
-        actor: req.user?.username || req.user?.name || "Admin",
+        actor: req.user?.name || req.user?.username || "Admin",
         actorRole: req.user?.role || "admin",
         action: "created",
         resourceType: "vehicle",
@@ -384,6 +431,10 @@ router.put("/:id", requireAuth, async (req, res, next) => {
       }
       if (typeof adminParsed.data.tagPhotoFileName === "string") patch.tagPhotoFileName = adminParsed.data.tagPhotoFileName;
       if (typeof adminParsed.data.tagPhotoDataUrl === "string") patch.tagPhotoDataUrl = adminParsed.data.tagPhotoDataUrl;
+      if (typeof adminParsed.data.requiresInspection === "boolean") patch.requiresInspection = adminParsed.data.requiresInspection;
+      if (Array.isArray(req.body.needs)) {
+        patch.needs = req.body.needs;
+      }
 
       if (typeof patch.year === "string" || typeof patch.make === "string" || typeof patch.model === "string") {
         const existing = await Vehicle.findById(req.params.id).lean();
@@ -401,7 +452,7 @@ router.put("/:id", requireAuth, async (req, res, next) => {
 
       // Create notification
       await createNotification({
-        actor: req.user?.username || req.user?.name || "Admin",
+        actor: req.user?.name || req.user?.username || "Admin",
         actorRole: req.user?.role || "admin",
         action: "updated",
         resourceType: "vehicle",
@@ -434,7 +485,7 @@ router.put("/:id", requireAuth, async (req, res, next) => {
       if (archived) {
          // Create notification
         await createNotification({
-          actor: req.user?.username || req.user?.name || "Admin",
+          actor: req.user?.name || req.user?.username || "Admin",
           actorRole: req.user?.role || "admin",
           action: "archived (deactivated)",
           resourceType: "vehicle",
@@ -455,7 +506,7 @@ router.put("/:id", requireAuth, async (req, res, next) => {
 
     // Create notification
     await createNotification({
-      actor: req.user?.username || req.user?.name || "Admin",
+      actor: req.user?.name || req.user?.username || "Admin",
       actorRole: req.user?.role || "admin",
       action: "updated",
       resourceType: "vehicle",
@@ -506,7 +557,7 @@ router.delete("/:id", requireAuth, async (req, res, next) => {
 
     // Create notification
     await createNotification({
-      actor: req.user?.username || req.user?.name || "Admin",
+      actor: req.user?.name || req.user?.username || "Admin",
       actorRole: req.user?.role || "admin",
       action: "archived",
       resourceType: "vehicle",

@@ -73,6 +73,10 @@ const patentSchema = new mongoose.Schema(
         },
       },
     ],
+    customReminderDays: {
+      type: [Number],
+      default: [],
+    },
     isExpiringExpiringSoon: {
       type: Boolean,
       default: false,
@@ -80,6 +84,10 @@ const patentSchema = new mongoose.Schema(
     daysUntilExpiration: {
       type: Number,
       default: null,
+    },
+    notifiedDays: {
+      type: [Number],
+      default: [],
     },
     createdBy: {
       type: String,

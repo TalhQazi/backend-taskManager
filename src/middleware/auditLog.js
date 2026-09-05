@@ -1,6 +1,12 @@
 const ActivityLog = require("../models/ActivityLog");
 const jwt = require("jsonwebtoken");
 
+function getClientIp(req) {
+  if (!req) return "";
+  const hdr = String(req.headers["x-forwarded-for"] || "").split(",")[0].trim();
+  return hdr || req.ip || String(req.socket?.remoteAddress || req.connection?.remoteAddress || "");
+}
+
 /**
  * Audit logging middleware - captures important API actions
  * This middleware logs various actions to the ActivityLog collection
@@ -29,6 +35,7 @@ function determineAction(method, path, body) {
       'vendors': 'VENDOR_CREATE',
       'events': 'EVENT_CREATE',
       'onboarding': 'ONBOARDING_CREATE',
+      'clearhire': 'CLEARHIRE_SUBMIT',
     },
     PUT: {
       'users': 'USER_UPDATE',
@@ -42,6 +49,7 @@ function determineAction(method, path, body) {
       'vendors': 'VENDOR_UPDATE',
       'events': 'EVENT_UPDATE',
       'onboarding': 'ONBOARDING_UPDATE',
+      'clearhire': 'CLEARHIRE_RECHECK',
     },
     DELETE: {
       'users': 'USER_DELETE',
@@ -89,6 +97,7 @@ function determineResourceType(path) {
   if (normalizedPath.includes('/vendors')) return 'vendor';
   if (normalizedPath.includes('/events') || normalizedPath.includes('/schedules')) return 'event';
   if (normalizedPath.includes('/onboarding')) return 'onboarding';
+  if (normalizedPath.includes('/clearhire')) return 'clearhire';
   return 'system';
 }
 
@@ -187,7 +196,7 @@ function auditLogMiddleware(options = {}) {
         }
         
         // Get client info
-        const ipAddress = req.ip || req.connection.remoteAddress || '';
+        const ipAddress = getClientIp(req);
         const userAgent = req.headers['user-agent'] || '';
         
         // Create log entry
@@ -220,7 +229,7 @@ function auditLogMiddleware(options = {}) {
 // Specific function to log login success
 async function logLoginSuccess(user, req) {
   try {
-    const ipAddress = req.ip || req.connection.remoteAddress || '';
+    const ipAddress = getClientIp(req);
     const userAgent = req.headers['user-agent'] || '';
     
     await ActivityLog.create({
@@ -244,7 +253,7 @@ async function logLoginSuccess(user, req) {
 // Specific function to log login failure
 async function logLoginFailure(username, req, reason) {
   try {
-    const ipAddress = req.ip || req.connection.remoteAddress || '';
+    const ipAddress = getClientIp(req);
     const userAgent = req.headers['user-agent'] || '';
     
     await ActivityLog.create({

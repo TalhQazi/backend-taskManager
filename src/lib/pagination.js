@@ -9,7 +9,9 @@
  */
 function parsePagination(query = {}) {
   const page = Math.max(1, parseInt(query.page) || 1);
-  const limit = Math.min(100, Math.max(1, parseInt(query.limit) || 25));
+  const rawLimit = parseInt(query.limit) || 25;
+  const maxAllowed = query.all === "true" || rawLimit > 100 ? 5000 : 100;
+  const limit = Math.min(maxAllowed, Math.max(1, rawLimit));
   const skip = (page - 1) * limit;
   return { page, limit, skip };
 }
