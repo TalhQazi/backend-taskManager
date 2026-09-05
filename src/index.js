@@ -104,6 +104,7 @@ const personalBudgetRoutes = require("./routes/personalBudget");
 const healthRoutes = require("./routes/health");
 const expenseSheetsRoutes = require("./routes/expenseSheets");
 const syncRoutes = require("./routes/sync");
+const themeEngineRoutes = require("./routes/themeEngine");
 
 //going to express now
 const app = express();
@@ -575,6 +576,7 @@ app.use("/api/atlasbook", requireClearHire, atlasbookRoutes);
 app.use("/api/personal-budget", requireClearHire, personalBudgetRoutes);
 app.use("/api/global-search", requireClearHire, globalSearchRoutes);
 app.use("/api/health", healthRoutes);
+app.use("/api/themes", themeEngineRoutes);
 
 // --- WIP Dashboard ---------------------------------------------------------
 // Mounted on three namespaces so the public API matches the spec exactly.
@@ -745,6 +747,12 @@ connectDb()
     setInterval(() => {
       eodMissCheckJob.run().catch((err) => console.error("[EOD Miss Job] Interval run failed:", err));
     }, 15 * 60 * 1000); // Check every 15 minutes
+
+    // Seed default Holiday Immersive Themes if not present
+    const { seedDefaultHolidayThemes } = require("./services/themeEngineService");
+    seedDefaultHolidayThemes({ performedBy: "server_boot" }).catch((err) =>
+      console.error("[Holiday Themes] Startup seed error:", err.message)
+    );
     
     httpServer.listen(port, () => {
       console.log(`Backend listening on http://localhost:${port}`);
