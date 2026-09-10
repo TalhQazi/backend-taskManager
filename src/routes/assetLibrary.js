@@ -5,7 +5,7 @@ const multer = require("multer");
 const path = require("path");
 
 const { requireAuth, requireRole } = require("../middleware/auth");
-const { uploadToS3, extractS3Key } = require("../lib/s3");
+const { uploadToS3, extractS3Key, getFromS3 } = require("../lib/s3");
 const { parsePagination, paginatedResponse } = require("../lib/pagination");
 const AssetLibraryFolder = require("../models/AssetLibraryFolder");
 const AssetLibraryAsset = require("../models/AssetLibraryAsset");
@@ -400,6 +400,44 @@ router.post(
   }
 );
 
+router.get("/assets/:id/download", async (req, res, next) => {
+  try {
+    const assetId = toObjectIdOrNull(req.params.id);
+    if (!assetId) return res.status(400).json({ error: { message: "Invalid asset id" } });
+
+    const asset = await AssetLibraryAsset.findById(assetId).lean();
+    if (!asset || asset.status !== "active") return res.status(404).json({ error: { message: "Asset not found" } });
+
+    const key = asset.s3KeyOriginal || "";
+    if (!key) return res.status(400).json({ error: { message: "Missing asset key" } });
+
+    const rawFileName = asset.originalFilename || asset.title || "asset";
+    const safeFileName = path.basename(rawFileName).replace(/["\r\n]/g, "");
+
+    const { stream, contentType, contentLength } = await getFromS3(key);
+
+    res.set("Content-Type", contentType || asset.mimeType || "application/octet-stream");
+    if (contentLength) {
+      res.set("Content-Length", String(contentLength));
+    }
+    res.set("Content-Disposition", `attachment; filename="${safeFileName}"; filename*=UTF-8''${encodeURIComponent(safeFileName)}`);
+    res.set("Access-Control-Allow-Origin", "*");
+
+    stream.pipe(res);
+  } catch (err) {
+    if (
+      err.name === "NoSuchKey" ||
+      err.name === "NotFound" ||
+      err.$metadata?.httpStatusCode === 404 ||
+      err.code === "ENOENT" ||
+      (err.message && err.message.toLowerCase().includes("not found"))
+    ) {
+      return res.status(404).json({ error: { message: "File not found" } });
+    }
+    next(err);
+  }
+});
+
 router.post("/assets/:id/download", requireAuth, async (req, res, next) => {
   try {
     const assetId = toObjectIdOrNull(req.params.id);
@@ -411,10 +449,11 @@ router.post("/assets/:id/download", requireAuth, async (req, res, next) => {
     const key = asset.s3KeyOriginal || "";
     if (!key) return res.status(400).json({ error: { message: "Missing asset key" } });
 
-    const proxiedUrl = `/api/s3-proxy/${key}`;
     const fileName = asset.originalFilename || asset.title || "asset";
+    const proxiedUrl = `/api/s3-proxy/${key}`;
+    const directDownloadUrl = `/api/asset-library/assets/${assetId}/download`;
 
-    res.json({ url: proxiedUrl, fileName });
+    res.json({ url: proxiedUrl, fileName, downloadUrl: directDownloadUrl });
   } catch (err) {
     next(err);
   }

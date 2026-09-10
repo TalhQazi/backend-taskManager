@@ -410,12 +410,34 @@ app.get("/health", (_req, res) => {
 const { getFromS3 } = require("./lib/s3");
 const { requireAuth, requireClearHire } = require("./middleware/auth");
 
-app.get("/api/s3-proxy/*", requireAuth, async (req, res) => {
+// Optional auth helper for public files/media/downloads
+function optionalAuth(req, res, next) {
+  const header = req.headers.authorization || "";
+  let [type, token] = header.split(" ");
+  if ((type !== "Bearer" || !token) && req.query.token) {
+    token = req.query.token;
+  }
+  if (!token) return next();
   try {
-    // Extract the S3 key from the URL path after /api/s3-proxy/
+    const secret = process.env.JWT_SECRET;
+    if (secret) {
+      req.user = jwt.verify(token, secret);
+      const userId = String((req.user && typeof req.user === "object" ? req.user.sub || req.user.id || req.user._id : "") || "");
+      req.user._id = userId;
+      req.user.id = userId;
+    }
+  } catch {
+    // Ignore invalid token on optional auth routes
+  }
+  next();
+}
+
+app.get(["/api/s3-proxy/*", "/api/files/*"], optionalAuth, async (req, res) => {
+  try {
+    // Extract the S3 / file key from the URL path
     const s3Key = req.params[0];
     if (!s3Key) {
-      return res.status(400).json({ error: { message: "Missing S3 key" } });
+      return res.status(400).json({ error: { message: "Missing file key" } });
     }
 
     const { stream, contentType, contentLength } = await getFromS3(s3Key);
@@ -429,11 +451,12 @@ app.get("/api/s3-proxy/*", requireAuth, async (req, res) => {
     res.set("Access-Control-Allow-Origin", "*");
 
     if (req.query.download === "true" || req.query.download === "1") {
-      const fileName = String(req.query.fileName || path.basename(s3Key) || "download");
-      res.set("Content-Disposition", `attachment; filename="${fileName}"`);
+      const rawFileName = String(req.query.fileName || path.basename(s3Key) || "download");
+      const safeFileName = path.basename(rawFileName).replace(/["\r\n]/g, "");
+      res.set("Content-Disposition", `attachment; filename="${safeFileName}"; filename*=UTF-8''${encodeURIComponent(safeFileName)}`);
     }
 
-    // Pipe the S3 stream directly to the response
+    // Pipe the stream directly to the response
     stream.pipe(res);
   } catch (err) {
     if (
@@ -445,7 +468,7 @@ app.get("/api/s3-proxy/*", requireAuth, async (req, res) => {
     ) {
       return res.status(404).json({ error: { message: "File not found" } });
     }
-    console.error("[S3 Proxy] Error:", err.message || err);
+    console.error("[File/S3 Proxy] Error:", err.message || err);
     return res.status(500).json({ error: { message: "Failed to fetch file" } });
   }
 });
