@@ -178,14 +178,34 @@ async function getFromS3(key) {
  * @returns {string|null} - The object key, or null if not a valid S3 URL
  */
 function extractS3Key(url) {
-  if (!url) return null;
-  if (url.includes("/uploads/")) {
-    const idx = url.indexOf("/uploads/");
-    return url.substring(idx + "/uploads/".length);
+  if (!url || typeof url !== "string") return null;
+
+  const cleanUrl = url.split("?")[0].split("#")[0];
+
+  if (cleanUrl.includes("/api/s3-proxy/")) {
+    const idx = cleanUrl.indexOf("/api/s3-proxy/");
+    return cleanUrl.substring(idx + "/api/s3-proxy/".length);
   }
-  if (url.startsWith("uploads/")) {
-    return url.replace(/^uploads\//, "");
+  if (cleanUrl.includes("/api/files/")) {
+    const idx = cleanUrl.indexOf("/api/files/");
+    return cleanUrl.substring(idx + "/api/files/".length);
   }
+  if (cleanUrl.includes("/uploads/")) {
+    const idx = cleanUrl.indexOf("/uploads/");
+    return cleanUrl.substring(idx + "/uploads/".length);
+  }
+  if (cleanUrl.startsWith("uploads/")) {
+    return cleanUrl.replace(/^uploads\//, "");
+  }
+  if (cleanUrl.startsWith("/uploads/")) {
+    return cleanUrl.replace(/^\/uploads\//, "");
+  }
+
+  // If already a relative key like "asset-library/..."
+  if (!cleanUrl.startsWith("http://") && !cleanUrl.startsWith("https://") && !cleanUrl.startsWith("/")) {
+    return cleanUrl;
+  }
+
   if (!url.includes("amazonaws.com")) return null;
   
   // Try pattern with specific bucket env if available
@@ -194,12 +214,12 @@ function extractS3Key(url) {
   if (bucketName) {
     const pattern = new RegExp(`https://${bucketName}\\.s3[.-]${region}\\.amazonaws\\.com/(.+)`);
     const match = url.match(pattern);
-    if (match) return match[1];
+    if (match) return match[1].split("?")[0];
   }
   
   // Generic Amazon S3 URL extraction
   const genericMatch = url.match(/https:\/\/[^/]+\.amazonaws\.com\/(.+)/);
-  return genericMatch ? genericMatch[1] : null;
+  return genericMatch ? genericMatch[1].split("?")[0] : null;
 }
 
 /**

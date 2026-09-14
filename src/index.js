@@ -448,7 +448,12 @@ app.get(["/api/s3-proxy/*", "/api/files/*"], optionalAuth, async (req, res) => {
       res.set("Content-Length", String(contentLength));
     }
     res.set("Cache-Control", "public, max-age=86400, immutable"); // Cache for 24h
-    res.set("Access-Control-Allow-Origin", "*");
+    if (req.headers.origin) {
+      res.set("Access-Control-Allow-Origin", req.headers.origin);
+      res.set("Access-Control-Allow-Credentials", "true");
+    } else {
+      res.set("Access-Control-Allow-Origin", "*");
+    }
 
     if (req.query.download === "true" || req.query.download === "1") {
       const rawFileName = String(req.query.fileName || path.basename(s3Key) || "download");

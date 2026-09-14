@@ -408,10 +408,14 @@ router.get("/assets/:id/download", async (req, res, next) => {
     const asset = await AssetLibraryAsset.findById(assetId).lean();
     if (!asset || asset.status !== "active") return res.status(404).json({ error: { message: "Asset not found" } });
 
-    const key = asset.s3KeyOriginal || "";
+    const key =
+      extractS3Key(asset.attachment?.url) ||
+      extractS3Key(asset.urlOriginal) ||
+      asset.s3KeyOriginal ||
+      "";
     if (!key) return res.status(400).json({ error: { message: "Missing asset key" } });
 
-    const rawFileName = asset.originalFilename || asset.title || "asset";
+    const rawFileName = asset.originalFilename || asset.attachment?.fileName || asset.title || "asset";
     const safeFileName = path.basename(rawFileName).replace(/["\r\n]/g, "");
 
     const { stream, contentType, contentLength } = await getFromS3(key);
@@ -446,12 +450,21 @@ router.post("/assets/:id/download", requireAuth, async (req, res, next) => {
     const asset = await AssetLibraryAsset.findById(assetId).lean();
     if (!asset || asset.status !== "active") return res.status(404).json({ error: { message: "Asset not found" } });
 
-    const key = asset.s3KeyOriginal || "";
+    const key =
+      extractS3Key(asset.attachment?.url) ||
+      extractS3Key(asset.urlOriginal) ||
+      asset.s3KeyOriginal ||
+      "";
     if (!key) return res.status(400).json({ error: { message: "Missing asset key" } });
 
-    const fileName = asset.originalFilename || asset.title || "asset";
+    const fileName = asset.originalFilename || asset.attachment?.fileName || asset.title || "asset";
     const proxiedUrl = `/api/s3-proxy/${key}`;
     const directDownloadUrl = `/api/asset-library/assets/${assetId}/download`;
+
+    // Self-heal the record if s3KeyOriginal was stale or mismatched
+    if (key && asset.s3KeyOriginal !== key) {
+      AssetLibraryAsset.updateOne({ _id: assetId }, { $set: { s3KeyOriginal: key } }).catch(() => {});
+    }
 
     res.json({ url: proxiedUrl, fileName, downloadUrl: directDownloadUrl });
   } catch (err) {
