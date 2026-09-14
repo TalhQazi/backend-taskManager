@@ -105,6 +105,8 @@ const healthRoutes = require("./routes/health");
 const expenseSheetsRoutes = require("./routes/expenseSheets");
 const syncRoutes = require("./routes/sync");
 const themeEngineRoutes = require("./routes/themeEngine");
+const meetingsRoutes = require("./routes/meetings");
+const { setupMeetingSocket } = require("./lib/meetingSocket");
 
 //going to express now
 const app = express();
@@ -157,6 +159,7 @@ const io = new Server(httpServer, {
 
 // Store io instance globally so routes can access it
 global.io = io;
+setupMeetingSocket(io);
 
 /**
  * Verify the JWT on the socket handshake and stash the identity on the socket.
@@ -605,6 +608,7 @@ app.use("/api/personal-budget", requireClearHire, personalBudgetRoutes);
 app.use("/api/global-search", requireClearHire, globalSearchRoutes);
 app.use("/api/health", healthRoutes);
 app.use("/api/themes", themeEngineRoutes);
+app.use("/api/meetings", requireClearHire, meetingsRoutes);
 
 // --- WIP Dashboard ---------------------------------------------------------
 // Mounted on three namespaces so the public API matches the spec exactly.
