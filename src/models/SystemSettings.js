@@ -83,6 +83,11 @@ const SystemSettingsSchema = new mongoose.Schema(
         subject: { type: String, default: "Employee Status Alert: {employeeName} - {statusUpdate}" },
         body: { type: String, default: "Hello {name},\n\nThis is an automated notification to inform you that employee '{employeeName}' has updated their status.\n\n--------------------------------------------------\n📊 Status: {statusUpdate}\n🕒 Time: {time}\n--------------------------------------------------\n\nPlease log in to view status details." }
       },
+      meetingInvite: {
+        enabled: { type: Boolean, default: true },
+        subject: { type: String, default: "Meeting Invite: {meetingTitle}" },
+        body: { type: String, default: "Hello {name},\n\nYou have been invited to a video meeting.\n\n--------------------------------------------------\n📌 Topic: {meetingTitle}\n🕐 When: {meetingTime}\n🌍 Timezone: {timezone}\n⏱ Duration: {duration} minutes\n👤 Host: {hostName}\n🔑 Room Code: {roomCode}\n--------------------------------------------------\n\nAgenda:\n{agenda}\n\nJoin link:\n{joinLink}\n\nBest regards,\nTask Manager System" },
+      },
     },
     taskRewardSystemEnabled: { type: Boolean, default: true },
     scheConfig: {

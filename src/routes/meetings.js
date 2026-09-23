@@ -3,6 +3,8 @@ const { z } = require("zod");
 const mongoose = require("mongoose");
 const Meeting = require("../models/Meeting");
 const { requireAuth } = require("../middleware/auth");
+const { sendEmailNotification } = require("../utils/emailNotifications");
+const { sendRawEmail } = require("../lib/email");
 
 const router = express.Router();
 
@@ -18,6 +20,89 @@ function withId(doc) {
   return { ...rest, id: String(doc._id) };
 }
 
+function formatMeetingTime(date, timeZone) {
+  if (!date) return "TBD";
+  try {
+    return new Intl.DateTimeFormat("en-US", {
+      timeZone: timeZone || "UTC",
+      weekday: "short",
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      timeZoneName: "short",
+    }).format(new Date(date));
+  } catch {
+    return new Date(date).toUTCString();
+  }
+}
+
+function getAppBaseUrl(req) {
+  const fromEnv = (process.env.CORS_ORIGIN || "").split(",")[0]?.trim();
+  if (fromEnv) return fromEnv.replace(/\/$/, "");
+  const origin = req.get("origin");
+  if (origin) return origin.replace(/\/$/, "");
+  return "http://localhost:8080";
+}
+
+async function sendMeetingInviteEmails({ meeting, req }) {
+  const participants = Array.isArray(meeting.invitedParticipants) ? meeting.invitedParticipants : [];
+  if (!participants.length) return { sent: 0, failed: 0 };
+
+  const baseUrl = getAppBaseUrl(req);
+  const meetingTime = formatMeetingTime(meeting.scheduledStartTime, meeting.timezone);
+  let sent = 0;
+  let failed = 0;
+
+  await Promise.all(
+    participants.map(async (p) => {
+      const email = String(p.email || "").trim();
+      if (!email) {
+        failed += 1;
+        return;
+      }
+
+      const role = String(p.role || "employee").toLowerCase();
+      // Always use role-agnostic join URL so managers/admins/employees all land in the right panel
+      const joinLink = `${baseUrl}/join/meeting/${meeting.roomCode}`;
+
+      const variables = {
+        name: p.name || "Team Member",
+        meetingTitle: meeting.title || "Team Meeting",
+        meetingTime,
+        timezone: meeting.timezone || "UTC",
+        duration: String(meeting.durationMinutes || 30),
+        hostName: meeting.hostName || "Host",
+        roomCode: meeting.roomCode,
+        agenda: meeting.description || "No agenda provided.",
+        joinLink,
+        role,
+      };
+
+      try {
+        const result = await sendEmailNotification(email, "meetingInvite", variables);
+        if (result === true || result?.sent === true) {
+          sent += 1;
+          return;
+        }
+
+        // Fallback raw email if template path fails
+        const subject = `Meeting Invite: ${variables.meetingTitle}`;
+        const body = `Hello ${variables.name},\n\nYou have been invited to a video meeting.\n\nTopic: ${variables.meetingTitle}\nWhen: ${variables.meetingTime}\nTimezone: ${variables.timezone}\nDuration: ${variables.duration} minutes\nHost: ${variables.hostName}\nRoom Code: ${variables.roomCode}\n\nAgenda:\n${variables.agenda}\n\nJoin link:\n${variables.joinLink}\n\nBest regards,\nTask Manager System`;
+        const rawOk = await sendRawEmail({ to: email, subject, body });
+        if (rawOk) sent += 1;
+        else failed += 1;
+      } catch (err) {
+        console.error("Meeting invite email failed:", err);
+        failed += 1;
+      }
+    })
+  );
+
+  return { sent, failed };
+}
+
 const participantSchema = z.object({
   userId: z.string().optional().default(""),
   name: z.string().optional().default(""),
@@ -30,6 +115,7 @@ const createMeetingSchema = z.object({
   description: z.string().optional().default(""),
   meetingType: z.enum(["instant", "scheduled"]).default("instant"),
   scheduledStartTime: z.string().optional().nullable(),
+  timezone: z.string().optional().default("UTC"),
   durationMinutes: z.number().min(5).max(480).default(30),
   invitedParticipants: z.array(participantSchema).optional().default([]),
   taskId: z.string().optional().nullable(),
@@ -40,6 +126,7 @@ const updateMeetingSchema = z.object({
   title: z.string().min(1).optional(),
   description: z.string().optional(),
   scheduledStartTime: z.string().optional().nullable(),
+  timezone: z.string().optional(),
   durationMinutes: z.number().min(5).max(480).optional(),
   invitedParticipants: z.array(participantSchema).optional(),
   status: z.enum(["scheduled", "active", "ended"]).optional(),
@@ -173,6 +260,7 @@ router.post("/", requireAuth, async (req, res, next) => {
       description: data.description,
       meetingType: data.meetingType,
       scheduledStartTime,
+      timezone: data.timezone || "UTC",
       durationMinutes: data.durationMinutes,
       hostId,
       hostName,
@@ -185,7 +273,12 @@ router.post("/", requireAuth, async (req, res, next) => {
       startedAt: status === "active" ? new Date() : null,
     });
 
-    res.status(201).json({ item: withId(doc) });
+    let emailResult = { sent: 0, failed: 0 };
+    if (data.meetingType === "scheduled" && Array.isArray(data.invitedParticipants) && data.invitedParticipants.length > 0) {
+      emailResult = await sendMeetingInviteEmails({ meeting: doc, req });
+    }
+
+    res.status(201).json({ item: withId(doc), emailResult });
   } catch (err) {
     next(err);
   }

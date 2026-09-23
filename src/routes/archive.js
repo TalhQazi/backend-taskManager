@@ -186,6 +186,26 @@ router.post("/:id/restore", requireAuth, async (req, res, next) => {
       });
     }
 
+    else if (itemType === "tenant") {
+      const Tenant = require("../models/Tenant");
+      const data = archived.itemData || {};
+      const { _id, originalId, __v, createdAt, updatedAt, ...rest } = data;
+      await Tenant.create({
+        name: rest.name || "Restored Tenant",
+        email: rest.email || "",
+        phone: rest.phone || "",
+        type: rest.type || "Individual",
+        status: rest.status || "Active",
+        identification: rest.identification || "",
+        notes: rest.notes || "",
+        company: rest.company || undefined,
+        assignedProperty: rest.assignedProperty || "",
+        assignedUnit: rest.assignedUnit || "",
+        locationName: rest.locationName || "",
+        address: rest.address || "",
+      });
+    }
+
     // Remove from archive after restore
     await Archive.findByIdAndDelete(req.params.id);
 

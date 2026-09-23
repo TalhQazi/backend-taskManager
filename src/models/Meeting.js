@@ -28,6 +28,10 @@ const MeetingSchema = new mongoose.Schema(
       type: Date,
       default: null,
     },
+    timezone: {
+      type: String,
+      default: "UTC",
+    },
     durationMinutes: {
       type: Number,
       default: 30,

@@ -62,6 +62,36 @@ router.get("/invoices", requireAuth, handleGet(Invoice, "tenant company companyL
 router.post("/invoices", requireAuth, handlePost(Invoice));
 router.get("/tenants", requireAuth, handleGet(Tenant, "company"));
 router.post("/tenants", requireAuth, handlePost(Tenant));
+// Soft-delete: move tenant to Archive, then remove from active list
+router.delete("/tenants/:id", requireAuth, async (req, res) => {
+  try {
+    const Archive = require("../models/Archive");
+    const tenant = await Tenant.findById(req.params.id).lean();
+    if (!tenant) {
+      return res.status(404).json({ success: false, message: "Tenant not found" });
+    }
+
+    await Archive.create({
+      itemType: "tenant",
+      itemData: {
+        originalId: String(tenant._id),
+        ...tenant,
+      },
+      originalId: String(tenant._id),
+      parentType: "atlasbook",
+      parentId: "customers",
+      parentName: "Customer / Tenant Management",
+      archivedByUserId: String(req.user?.sub || req.user?.id || ""),
+      archivedByUsername: String(req.user?.username || req.user?.name || ""),
+      archivedByRole: String(req.user?.role || ""),
+    });
+
+    await Tenant.findByIdAndDelete(req.params.id);
+    res.json({ success: true, message: "Tenant moved to archive" });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
 router.get("/leases", requireAuth, handleGet(Lease, "tenant property unit"));
 router.post("/leases", requireAuth, handlePost(Lease));
 router.get("/inventory", requireAuth, handleGet(InventoryItem));

@@ -46,6 +46,11 @@ async function sendSystemEmail({ to, templateKey, variables = {} }) {
         subject: "NEW PATENT FILED: {patentName}",
         body: "Hello {name},\n\nA new patent has been filed in the system.\n\nPatent Name: {patentName}\nFiling Type: {filingType}\nFiling Date: {filingDate}\nExpiration Date: {expirationDate}\nApplication Number: {applicationNumber}\nCategory: {category}\nNotes: {notes}\nFiled By: {createdBy}\n\nBest regards,\nTask Manager System",
       },
+      meetingInvite: {
+        enabled: true,
+        subject: "Meeting Invite: {meetingTitle}",
+        body: "Hello {name},\n\nYou have been invited to a video meeting.\n\n--------------------------------------------------\n📌 Topic: {meetingTitle}\n🕐 When: {meetingTime}\n🌍 Timezone: {timezone}\n⏱ Duration: {duration} minutes\n👤 Host: {hostName}\n🔑 Room Code: {roomCode}\n--------------------------------------------------\n\nAgenda:\n{agenda}\n\nJoin link:\n{joinLink}\n\nBest regards,\nTask Manager System",
+      },
     };
 
     if (!template && builtInDefaults[templateKey]) {
