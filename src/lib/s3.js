@@ -31,6 +31,7 @@ const getMimeType = (filePath) => {
     ".txt": "text/plain",
     ".zip": "application/zip",
     ".mp4": "video/mp4",
+    ".webm": "video/webm",
     ".mp3": "audio/mpeg",
   };
   return mimes[ext] || "application/octet-stream";

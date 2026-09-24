@@ -64,6 +64,19 @@ const MeetingSchema = new mongoose.Schema(
       ],
       default: [],
     },
+    joinedParticipants: {
+      type: [
+        {
+          userId: { type: String, default: "" },
+          name: { type: String, default: "" },
+          email: { type: String, default: "" },
+          role: { type: String, default: "employee" },
+          joinedAt: { type: Date, default: Date.now },
+          leftAt: { type: Date, default: null },
+        },
+      ],
+      default: [],
+    },
     taskId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Task",
@@ -91,6 +104,20 @@ const MeetingSchema = new mongoose.Schema(
     recordingUrl: {
       type: String,
       default: "",
+    },
+    recordings: {
+      type: [
+        {
+          url: { type: String, required: true },
+          fileName: { type: String, default: "" },
+          durationSeconds: { type: Number, default: 0 },
+          sizeBytes: { type: Number, default: 0 },
+          recordedBy: { type: String, default: "" },
+          recordedByName: { type: String, default: "" },
+          createdAt: { type: Date, default: Date.now },
+        },
+      ],
+      default: [],
     },
   },
   { timestamps: true }
