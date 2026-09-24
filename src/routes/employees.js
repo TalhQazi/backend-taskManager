@@ -137,6 +137,21 @@ function getDayRange(d = new Date()) {
   return { start, end };
 }
 
+/** Monday 00:00 → Sunday 23:59:59.999 for the week containing `d`. */
+function getWeekRange(d = new Date()) {
+  const day = new Date(d);
+  day.setHours(0, 0, 0, 0);
+  const dayOfWeek = day.getDay(); // 0=Sun … 6=Sat
+  const mondayOffset = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
+  const start = new Date(day);
+  start.setDate(day.getDate() + mondayOffset);
+  start.setHours(0, 0, 0, 0);
+  const end = new Date(start);
+  end.setDate(start.getDate() + 6);
+  end.setHours(23, 59, 59, 999);
+  return { start, end };
+}
+
 async function requireEmployeeSelf(req, res) {
   const role = String(req.user?.role || "").trim().toLowerCase();
   const allowedRoles = new Set(["employee", "manager", "team-lead"]);
@@ -542,25 +557,24 @@ router.get("/me/dashboard", requireAuth, async (req, res, next) => {
     const { start, end } = getDayRange(new Date());
 
     const now = new Date();
-    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0);
-    const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
+    const { start: startOfWeek, end: endOfWeek } = getWeekRange(now);
 
     // Mirror the task-list accessibility scope (see routes/tasks.js): task
     // visibility is intentionally unrestricted, so the stat cards count every
     // task — matching exactly what the Tasks screen shows.
-    const [tasks, schedule, todayEntry, unreadMessages, monthEntries] = await Promise.all([
+    const [tasks, schedule, todayEntry, unreadMessages, weekEntries] = await Promise.all([
       Task.find({})
         .sort({ updatedAt: -1 })
         .lean(),
       Event.find({ assignee: employee.name }).sort({ createdAt: -1 }).limit(10).lean(),
       TimeEntry.findOne({ employee: employee.name, date: { $gte: start, $lte: end } }).sort({ createdAt: -1 }).lean(),
       Message.countDocuments({ type: "direct", recipient: employee.name, status: { $ne: "read" } }),
-      TimeEntry.find({ employee: employee.name, date: { $gte: startOfMonth, $lte: endOfMonth } }).lean(),
+      TimeEntry.find({ employee: employee.name, date: { $gte: startOfWeek, $lte: endOfWeek } }).lean(),
     ]);
 
-    // Calculate month hours worked
+    // Calculate this week's hours worked
     let hoursWorked = 0;
-    monthEntries.forEach((entry) => {
+    weekEntries.forEach((entry) => {
       let hours = Number(entry.totalHours || 0);
       if (hours === 0 && (entry.clockInAt || entry.clockIn) && !(entry.clockOutAt || entry.clockOut)) {
         const startTime = entry.clockInAt ? new Date(entry.clockInAt).getTime() : new Date(entry.date).getTime();
@@ -571,21 +585,22 @@ router.get("/me/dashboard", requireAuth, async (req, res, next) => {
     });
     hoursWorked = Math.round(hoursWorked * 100) / 100;
 
-    // Calculate current month earnings based on employee salary (payRate) & payType
+    // Weekly earnings from payRate / payType (OT after 40 hrs in the week)
     const payRateVal = Number(String(employee.payRate || "0").replace(/[^0-9.]/g, "")) || 0;
     const isMonthly = employee.payType === "monthly";
+    const weeklyOtThreshold = 40;
 
     let earnings = 0;
     if (isMonthly) {
       const hourlyEquivalent = payRateVal / 160;
-      const regularHours = Math.min(hoursWorked, 160);
-      const overtimeHours = Math.max(0, hoursWorked - 160);
+      const regularHours = Math.min(hoursWorked, weeklyOtThreshold);
+      const overtimeHours = Math.max(0, hoursWorked - weeklyOtThreshold);
       const regularPay = regularHours * hourlyEquivalent;
       const overtimePay = overtimeHours * (hourlyEquivalent * 1.5);
       earnings = regularPay + overtimePay;
     } else {
-      const regularHours = Math.min(hoursWorked, 160);
-      const overtimeHours = Math.max(0, hoursWorked - 160);
+      const regularHours = Math.min(hoursWorked, weeklyOtThreshold);
+      const overtimeHours = Math.max(0, hoursWorked - weeklyOtThreshold);
       const regularPay = regularHours * payRateVal;
       const overtimePay = overtimeHours * (payRateVal * 1.5);
       earnings = regularPay + overtimePay;
@@ -601,6 +616,9 @@ router.get("/me/dashboard", requireAuth, async (req, res, next) => {
       item: {
         earnings,
         hoursWorked,
+        period: "week",
+        weekStart: startOfWeek.toISOString().slice(0, 10),
+        weekEnd: endOfWeek.toISOString().slice(0, 10),
         tasks: {
           total: totalTasks,
           completed: completedTasks,
