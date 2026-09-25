@@ -6,14 +6,16 @@ const Project = require("../models/Project");
 const Task = require("../models/Task");
 const ProjectComment = require("../models/ProjectComment");
 const Settings = require("../models/Settings");
-const User = require("../models/User");
+const Employee = require("../models/Employee");
 const Archive = require("../models/Archive");
 const ActivityLog = require("../models/ActivityLog");
 const { requireAuth } = require("../middleware/auth");
 const { createNotification } = require("../utils/notifications");
+const { sendEmailNotification } = require("../utils/emailNotifications");
+const { extractMentions } = require("../utils/mentions");
 const { parsePagination, paginatedResponse } = require("../lib/pagination");
 const { cacheWrap, cacheDel } = require("../lib/cache");
-const { uploadToS3, base64ToBuffer } = require("../lib/s3");
+const { uploadToS3, saveToServer, base64ToBuffer } = require("../lib/s3");
 
 const router = express.Router();
 
@@ -25,8 +27,8 @@ function withId(doc) {
     : legacyAssignee
       ? [legacyAssignee]
       : [];
-  const { assignee, assigneeInitials, location, ...rest } = doc;
-  return { ...rest, assignees: nextAssignees, id: String(doc._id) };
+  const { assignee, assigneeInitials, ...rest } = doc;
+  return { ...rest, assignees: nextAssignees, id: String(doc._id), location: doc.location || "" };
 }
 
 function normalizeAssignees(input) {
@@ -42,7 +44,7 @@ async function logActivity(req, action, resourceType, resourceId, resourceName, 
   try {
     await ActivityLog.create({
       actorUserId: String(req.user?.sub || req.user?.id || "unknown"),
-      actorUsername: String(req.user?.username || req.user?.name || "unknown"),
+      actorUsername: String(req.user?.name || req.user?.username || "unknown"),
       actorRole: String(req.user?.role || "unknown"),
       action,
       resourceType,
@@ -97,6 +99,8 @@ const projectCreateSchema = z.object({
   name: z.string().min(1, "Project name is required"),
   description: z.string().optional().default(""),
   assignees: z.array(z.string()).optional().default([]),
+  teamLead: z.string().optional().default(""),
+  introVideoUrl: z.string().optional().default(""),
   logo: logoSchema,
   attachments: z.array(z.object({
     fileName: z.string().optional().default(""),
@@ -105,11 +109,24 @@ const projectCreateSchema = z.object({
     size: z.number().optional().default(0),
     uploadedAt: z.date().optional(),
   })).optional().default([]),
-  tasks: z.array(taskCreateSchema).min(1, "At least one task is required"),
+  dropboxAttachments: z.array(z.object({
+    file_name: z.string(),
+    file_type: z.string().optional().default(""),
+    file_size: z.number().optional().default(0),
+    dropbox_file_id: z.string(),
+    dropbox_path: z.string(),
+    temporary_link: z.string().optional().default(""),
+  })).optional().default([]),
+  tasks: z.array(taskCreateSchema).optional().default([]),
 });
 
 router.post("/", requireAuth, async (req, res, next) => {
   try {
+    const role = String(req.user?.role || "").toLowerCase().trim();
+    if (role !== "admin" && role !== "super-admin") {
+      return res.status(403).json({ error: { message: "Only administrators are permitted to create projects." } });
+    }
+
     const parsed = projectCreateSchema.safeParse({
       ...req.body,
       tasks: Array.isArray(req.body?.tasks)
@@ -154,14 +171,28 @@ router.post("/", requireAuth, async (req, res, next) => {
       }));
     }
 
+    // 2b. Save Project Intro Video to server disk (recorded/uploaded as base64 data URL)
+    if (data.introVideoUrl && data.introVideoUrl.startsWith("data:")) {
+      try {
+        const { buffer, mimeType } = base64ToBuffer(data.introVideoUrl);
+        const videoUrl = await saveToServer(buffer, "project-intro-video", mimeType, "projects/videos");
+        data.introVideoUrl = videoUrl;
+      } catch (err) {
+        console.error("Failed to save project intro video to server:", err);
+      }
+    }
+
     const createdProject = await Project.create({
       name: data.name,
       description: data.description || "",
       assignees: data.assignees || [],
+      teamLead: data.teamLead || "",
+      introVideoUrl: data.introVideoUrl || "",
       logo: data.logo || { fileName: "", url: "", mimeType: "", size: 0 },
       attachments: data.attachments || [],
+      dropboxAttachments: data.dropboxAttachments || [],
       createdByUserId: String(req.user?.sub || req.user?.id || ""),
-      createdByUsername: String(req.user?.username || req.user?.name || ""),
+      createdByUsername: String(req.user?.name || req.user?.username || ""),
       createdByRole: String(req.user?.role || ""),
     });
 
@@ -214,7 +245,7 @@ router.post("/", requireAuth, async (req, res, next) => {
       };
     }));
 
-    const createdTasks = await Task.insertMany(taskDocs, { ordered: true });
+    const createdTasks = taskDocs.length > 0 ? await Task.insertMany(taskDocs, { ordered: true }) : [];
 
     await logActivity(
       req,
@@ -225,16 +256,34 @@ router.post("/", requireAuth, async (req, res, next) => {
       `Created project: ${createdProject.name}`
     );
 
-    void createNotification({
-      actor: String(req.user?.username || req.user?.name || "System"),
-      actorRole: String(req.user?.role || ""),
-      action: "created",
-      resourceType: "project",
-      resourceName: createdProject.name,
-      assignees: Array.isArray(data.assignees) ? data.assignees : [],
-      details: `Tasks: ${createdTasks.length}`,
-      resourceId: String(createdProject._id),
-    });
+    // Send project assignment emails directly — not tied to activity log
+    if (Array.isArray(createdProject.assignees) && createdProject.assignees.length > 0) {
+      void Promise.all(
+        createdProject.assignees.map(assignee =>
+          sendEmailNotification(assignee, "projectAssignment", { 
+            projectName: createdProject.name,
+            description: createdProject.description || "No description provided."
+          })
+            .catch(e => console.error(`[email] projectAssignment to ${assignee}:`, e.message))
+        )
+      );
+    }
+
+    // Extract mentions from description
+    const mentionedUsers = await extractMentions(data.description);
+    if (mentionedUsers.length > 0) {
+      await createNotification({
+        actor: String(req.user?.name || req.user?.username || "System"),
+        actorRole: String(req.user?.role || ""),
+        action: "mentioned you in project",
+        resourceType: "project",
+        resourceName: createdProject.name,
+        assignees: mentionedUsers,
+        details: `"${data.description.length > 50 ? data.description.substring(0, 50) + "..." : data.description}"`,
+        resourceId: String(createdProject._id),
+        category: "MENTIONED",
+      });
+    }
 
     return res.status(201).json({
       item: {
@@ -249,7 +298,7 @@ router.post("/", requireAuth, async (req, res, next) => {
 
 // Optimized GET all projects with task stats using aggregation
 function escapeRegExp(s) {
-  return String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return String(s).replace(/[.*+?^${}()|[\]\\]/g, "\$&");
 }
 
 router.get("/", requireAuth, async (req, res, next) => {
@@ -260,22 +309,24 @@ router.get("/", requireAuth, async (req, res, next) => {
 
     const matchStages = [];
 
-    if (role !== "admin" && role !== "super-admin") {
-      const username = String(req.user?.username || "").trim();
-      const name = String(req.user?.name || "").trim();
-      const candidates = [username, name].filter(Boolean);
+    const username = String(req.user?.username || "").trim();
+    const name = String(req.user?.name || "").trim();
+    const candidates = [username, name].filter(Boolean);
 
-      if (candidates.length === 0) {
-        return res.json(paginatedResponse([], 0, page, limit));
-      }
-
-      const regexes = candidates.map((c) => new RegExp(`^${escapeRegExp(c)}$`, "i"));
-      matchStages.push({ $match: { assignees: { $elemMatch: { $in: regexes } } } });
-    }
+    // Accessibility: intentionally unrestricted — every role (super-admin,
+    // admin, manager, employee) sees every project.
 
     if (searchQ) {
       const searchRegex = new RegExp(escapeRegExp(searchQ), "i");
-      matchStages.push({ $match: { $or: [{ name: searchRegex }, { description: searchRegex }] } });
+      matchStages.push({ 
+        $match: { 
+          $or: [
+            { name: searchRegex }, 
+            { description: searchRegex },
+            { assignees: { $elemMatch: { $regex: searchRegex } } }
+          ] 
+        } 
+      });
     }
 
     const shapeStages = [
@@ -285,13 +336,93 @@ router.get("/", requireAuth, async (req, res, next) => {
           localField: "_id",
           foreignField: "projectId",
           as: "tasks",
-          pipeline: [{ $project: { status: 1, _id: 0 } }],
+          pipeline: [{ $project: { status: 1, attachment: 1, attachments: 1, _id: 0 } }],
         },
       },
       {
         $addFields: {
           id: { $toString: "$_id" },
           taskCount: { $size: "$tasks" },
+          taskAttachmentStats: {
+            $reduce: {
+              input: "$tasks",
+              initialValue: { images: 0, files: 0 },
+              in: {
+                $let: {
+                  vars: {
+                    // Merge attachment and attachments, ensuring uniqueness by URL
+                    taskAtts: {
+                      $reduce: {
+                        input: { $ifNull: ["$$this.attachments", []] },
+                        initialValue: { 
+                          $cond: [
+                            { $and: [
+                              { $gt: [{ $ifNull: ["$$this.attachment.url", null] }, null] }, 
+                              { $ne: ["$$this.attachment.url", ""] }
+                            ] }, 
+                            ["$$this.attachment"], 
+                            []
+                          ] 
+                        },
+                        in: {
+                          $cond: [
+                            { $in: ["$$this.url", { $map: { input: "$$value", as: "v", in: "$$v.url" } }] },
+                            "$$value",
+                            { $concatArrays: ["$$value", ["$$this"]] }
+                          ]
+                        }
+                      }
+                    }
+                  },
+                  in: {
+                    images: {
+                      $add: [
+                        "$$value.images",
+                        {
+                          $size: {
+                            $filter: {
+                              input: "$$taskAtts",
+                              as: "att",
+                              cond: {
+                                $or: [
+                                  { $regexMatch: { input: { $ifNull: ["$$att.mimeType", ""] }, regex: "^image/", options: "i" } },
+                                  { $regexMatch: { input: { $ifNull: ["$$att.fileName", ""] }, regex: "\\.(jpg|jpeg|png|gif|webp|svg|bmp|ico)$", options: "i" } }
+                                ]
+                              }
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    files: {
+                      $add: [
+                        "$$value.files",
+                        {
+                          $size: {
+                            $filter: {
+                              input: "$$taskAtts",
+                              as: "att",
+                              cond: {
+                                $and: [
+                                  { $ne: [{ $ifNull: ["$$att.url", ""] }, ""] },
+                                  { $not: {
+                                    $or: [
+                                      { $regexMatch: { input: { $ifNull: ["$$att.mimeType", ""] }, regex: "^image/", options: "i" } },
+                                      { $regexMatch: { input: { $ifNull: ["$$att.fileName", ""] }, regex: "\\.(jpg|jpeg|png|gif|webp|svg|bmp|ico)$", options: "i" } }
+                                    ]
+                                  }}
+                                ]
+                              }
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
           status: {
             $switch: {
               branches: [
@@ -313,6 +444,7 @@ router.get("/", requireAuth, async (req, res, next) => {
           name: 1,
           description: 1,
           assignees: 1,
+          teamLead: 1,
           logo: {
             fileName: { $ifNull: ["$logo.fileName", ""] },
             url: { 
@@ -331,13 +463,31 @@ router.get("/", requireAuth, async (req, res, next) => {
               as: "att",
               in: {
                 fileName: "$$att.fileName",
+                url: { $ifNull: ["$$att.url", ""] },
                 mimeType: "$$att.mimeType",
                 size: "$$att.size",
                 uploadedAt: "$$att.uploadedAt",
               },
             },
           },
+          dropboxAttachments: {
+            $map: {
+              input: { $ifNull: ["$dropboxAttachments", []] },
+              as: "dbf",
+              in: {
+                id: "$$dbf._id",
+                file_name: "$$dbf.file_name",
+                file_type: "$$dbf.file_type",
+                file_size: "$$dbf.file_size",
+                dropbox_file_id: "$$dbf.dropbox_file_id",
+                dropbox_path: "$$dbf.dropbox_path",
+                temporary_link: "$$dbf.temporary_link",
+                created_at: "$$dbf.created_at",
+              },
+            },
+          },
           taskCount: 1,
+          taskAttachmentStats: 1,
           status: 1,
           createdAt: 1,
           createdByUserId: 1,
@@ -401,12 +551,21 @@ router.get("/:id", requireAuth, async (req, res, next) => {
                   title: 1,
                   description: 1,
                   assignees: { $ifNull: ["$assignees", { $cond: [{ $ifNull: ["$assignee", false] }, ["$assignee"], []] }] },
+                  teamLead: 1,
                   priority: 1,
                   status: 1,
+                  taskNumber: 1,
+                  executionPriority: 1,
                   dueDate: 1,
                   dueTime: 1,
                   location: 1,
                   createdAt: 1,
+                  startedAt: 1,
+                  firstStartedAt: 1,
+                  startedByName: 1,
+                  completedAt: 1,
+                  completedByName: 1,
+                  totalTimeSpent: 1,
                   attachmentFileName: 1,
                   attachmentNote: 1,
                   attachment: {
@@ -470,6 +629,7 @@ router.get("/:id", requireAuth, async (req, res, next) => {
             name: 1,
             description: 1,
             assignees: 1,
+            teamLead: 1,
             logo: {
               fileName: { $ifNull: ["$logo.fileName", ""] },
               url: { $ifNull: ["$logo.url", ""] },
@@ -495,6 +655,22 @@ router.get("/:id", requireAuth, async (req, res, next) => {
                 },
               },
             },
+            dropboxAttachments: {
+              $map: {
+                input: { $ifNull: ["$dropboxAttachments", []] },
+                as: "dbf",
+                in: {
+                  id: "$$dbf._id",
+                  file_name: "$$dbf.file_name",
+                  file_type: "$$dbf.file_type",
+                  file_size: "$$dbf.file_size",
+                  dropbox_file_id: "$$dbf.dropbox_file_id",
+                  dropbox_path: "$$dbf.dropbox_path",
+                  temporary_link: "$$dbf.temporary_link",
+                  created_at: "$$dbf.created_at",
+                },
+              },
+            },
             tasks: 1,
             taskCount: 1,
             status: 1,
@@ -513,7 +689,11 @@ router.get("/:id", requireAuth, async (req, res, next) => {
       return res.status(404).json({ error: { message: "Project not found" } });
     }
 
-    return res.json({ item: cached });
+    const cloned = JSON.parse(JSON.stringify(cached));
+
+    // Accessibility: intentionally unrestricted — every role (super-admin,
+    // admin, manager, employee) can see every project and all its tasks without limitation.
+    return res.json({ item: cloned });
   } catch (err) {
     return next(err);
   }
@@ -523,6 +703,8 @@ const projectUpdateSchema = z.object({
   name: z.string().min(1, "Project name is required").optional(),
   description: z.string().optional(),
   assignees: z.array(z.string()).optional(),
+  teamLead: z.string().optional(),
+  introVideoUrl: z.string().optional(),
   logo: logoSchema,
   attachments: z.array(z.object({
     fileName: z.string().optional(),
@@ -530,6 +712,14 @@ const projectUpdateSchema = z.object({
     mimeType: z.string().optional(),
     size: z.number().optional(),
     uploadedAt: z.union([z.date(), z.string()]).optional(),
+  })).optional(),
+  dropboxAttachments: z.array(z.object({
+    file_name: z.string(),
+    file_type: z.string().optional().default(""),
+    file_size: z.number().optional().default(0),
+    dropbox_file_id: z.string(),
+    dropbox_path: z.string(),
+    temporary_link: z.string().optional().default(""),
   })).optional(),
   status: z.string().optional(),
 });
@@ -595,6 +785,17 @@ router.put("/:id", requireAuth, async (req, res, next) => {
       }));
     }
 
+    // Save Project Intro Video to server disk if update includes a new base64 video
+    if (patch.introVideoUrl && patch.introVideoUrl.startsWith("data:")) {
+      try {
+        const { buffer, mimeType } = base64ToBuffer(patch.introVideoUrl);
+        const videoUrl = await saveToServer(buffer, "project-intro-video", mimeType, "projects/videos");
+        patch.introVideoUrl = videoUrl;
+      } catch (err) {
+        console.error("Failed to save updated project intro video to server:", err);
+      }
+    }
+
     // Update fields using findByIdAndUpdate
     console.log("[ProjectUpdate] Saving to MongoDB. Patch keys:", Object.keys(patch), patch.logo ? { logoUrl: patch.logo.url?.substring(0, 60) } : "no logo in patch");
     const updated = await Project.findByIdAndUpdate(
@@ -620,18 +821,177 @@ router.put("/:id", requireAuth, async (req, res, next) => {
       `Updated project: ${updated.name}`
     );
 
-    void createNotification({
-      actor: String(req.user?.username || req.user?.name || "System"),
-      actorRole: String(req.user?.role || ""),
-      action: "updated",
-      resourceType: "project",
-      resourceName: updated.name,
-      resourceId: String(updated._id),
-    });
+    if (patch.description) {
+      const mentionedUsers = await extractMentions(patch.description);
+      if (mentionedUsers.length > 0) {
+        await createNotification({
+          actor: String(req.user?.name || req.user?.username || "System"),
+          actorRole: String(req.user?.role || ""),
+          action: "mentioned you in project",
+          resourceType: "project",
+          resourceName: updated.name,
+          assignees: mentionedUsers,
+          details: `"${patch.description.length > 50 ? patch.description.substring(0, 50) + "..." : patch.description}"`,
+          resourceId: String(updated._id),
+          category: "MENTIONED",
+        });
+      }
+    }
 
     return res.json({ item: withId(updated) });
   } catch (err) {
     console.error("Project Update Error:", err);
+    return next(err);
+  }
+});
+
+// Delete/Archive an attachment from a project
+router.delete("/:id/attachments/:attachmentIndex", requireAuth, async (req, res, next) => {
+  try {
+    const project = await Project.findById(req.params.id);
+    if (!project) {
+      return res.status(404).json({ error: { message: "Project not found" } });
+    }
+
+    const idx = parseInt(req.params.attachmentIndex, 10);
+    const attachments = Array.isArray(project.attachments) ? project.attachments : [];
+
+    if (isNaN(idx) || idx < 0 || idx >= attachments.length) {
+      return res.status(404).json({ error: { message: "Attachment not found at specified index" } });
+    }
+
+    const removedAttachment = attachments[idx];
+
+    // Archive the deleted attachment
+    try {
+      await Archive.create({
+        itemType: "attachment",
+        itemData: {
+          fileName: removedAttachment.fileName,
+          url: removedAttachment.url,
+          mimeType: removedAttachment.mimeType,
+          size: removedAttachment.size,
+          projectId: String(project._id),
+        },
+        parentType: "project",
+        parentId: String(project._id),
+        parentName: project.name,
+        archivedByUserId: String(req.user?.sub || req.user?.id || ""),
+        archivedByUsername: String(req.user?.name || req.user?.username || ""),
+        archivedByRole: String(req.user?.role || ""),
+      });
+    } catch (archiveErr) {
+      console.warn("[Project Attachment Delete] Failed to create archive record:", archiveErr.message);
+    }
+
+    // Remove from array and save
+    project.attachments.splice(idx, 1);
+    await project.save();
+
+    void cacheDel(`project:${req.params.id}`);
+
+    await logActivity(
+      req,
+      "PROJECT_ATTACHMENT_DELETE",
+      "project",
+      project._id,
+      project.name,
+      `Deleted attachment "${removedAttachment.fileName || "attachment"}" from project: ${project.name}`
+    );
+
+    return res.json({
+      ok: true,
+      message: "Attachment deleted successfully",
+      attachments: project.attachments,
+    });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// Archive project attachment alias
+router.post("/:id/attachments/:attachmentIndex/archive", requireAuth, async (req, res, next) => {
+  // Delegate to delete handler
+  try {
+    const project = await Project.findById(req.params.id);
+    if (!project) return res.status(404).json({ error: { message: "Project not found" } });
+
+    const idx = parseInt(req.params.attachmentIndex, 10);
+    const attachments = Array.isArray(project.attachments) ? project.attachments : [];
+    if (isNaN(idx) || idx < 0 || idx >= attachments.length) {
+      return res.status(404).json({ error: { message: "Attachment not found at specified index" } });
+    }
+
+    const removedAttachment = attachments[idx];
+    try {
+      await Archive.create({
+        itemType: "attachment",
+        itemData: {
+          fileName: removedAttachment.fileName,
+          url: removedAttachment.url,
+          mimeType: removedAttachment.mimeType,
+          size: removedAttachment.size,
+          projectId: String(project._id),
+        },
+        parentType: "project",
+        parentId: String(project._id),
+        parentName: project.name,
+        archivedByUserId: String(req.user?.sub || req.user?.id || ""),
+        archivedByUsername: String(req.user?.name || req.user?.username || ""),
+        archivedByRole: String(req.user?.role || ""),
+      });
+    } catch (e) {}
+
+    project.attachments.splice(idx, 1);
+    await project.save();
+    void cacheDel(`project:${req.params.id}`);
+
+    await logActivity(
+      req,
+      "PROJECT_ATTACHMENT_ARCHIVE",
+      "project",
+      project._id,
+      project.name,
+      `Archived attachment "${removedAttachment.fileName || "attachment"}" on project: ${project.name}`
+    );
+
+    return res.json({ ok: true, message: "Attachment archived successfully", attachments: project.attachments });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// Close project & all associated tasks endpoint (accessible to all roles: admin, manager, employee)
+router.post("/:id/close", requireAuth, async (req, res, next) => {
+  try {
+    const project = await Project.findById(req.params.id);
+    if (!project) {
+      return res.status(404).json({ error: { message: "Project not found" } });
+    }
+
+    const actorName = String(req.user?.name || req.user?.username || "Unknown");
+    const now = new Date();
+
+    // Mark all tasks under this project as completed
+    await Task.updateMany(
+      { projectId: project._id },
+      { $set: { status: "completed", completedAt: now, completedByName: actorName } }
+    );
+
+    void cacheDel(`project:${req.params.id}`);
+    void cacheDel("tasks:list:*");
+
+    await logActivity(
+      req,
+      "PROJECT_CLOSE",
+      "project",
+      project._id,
+      project.name,
+      `Closed project and all associated tasks: ${project.name}`
+    );
+
+    return res.json({ ok: true, message: "Project and all associated tasks marked as completed" });
+  } catch (err) {
     return next(err);
   }
 });
@@ -662,14 +1022,23 @@ router.put("/:id/reassign", requireAuth, async (req, res, next) => {
     await logActivity(req, "PROJECT_REASSIGN", "project", req.params.id, project.name, `Reassigned project: ${project.name} to ${assignees.join(", ")}`);
 
     await createNotification({
-      actor: req.user?.username || req.user?.name || "System",
+      actor: req.user?.name || req.user?.username || "System",
       actorRole: req.user?.role || "",
       action: "reassigned",
       resourceType: "project",
       resourceName: project.name,
+      assignees,
       resourceId: String(req.params.id),
-      details: `New assignees: ${assignees.join(", ")}`,
+      category: "PROJECT_ASSIGNED",
     });
+
+    // Send project reassignment emails directly — not tied to activity log
+    void Promise.all(
+      assignees.map(assignee =>
+        sendEmailNotification(assignee, "projectReassignment", { projectName: project.name })
+          .catch(e => console.error(`[email] projectReassignment to ${assignee}:`, e.message))
+      )
+    );
 
     return res.json({ item: withId(project.toObject()) });
   } catch (err) {
@@ -699,6 +1068,7 @@ router.delete("/:id", requireAuth, async (req, res, next) => {
         assignees: project.assignees,
         logo: project.logo,
         attachments: project.attachments,
+        dropboxAttachments: project.dropboxAttachments,
         createdAt: project.createdAt,
         createdByUserId: project.createdByUserId,
         createdByUsername: project.createdByUsername,
@@ -708,7 +1078,7 @@ router.delete("/:id", requireAuth, async (req, res, next) => {
       parentId: String(project._id),
       parentName: project.name,
       archivedByUserId: String(req.user?.sub || req.user?.id || ""),
-      archivedByUsername: String(req.user?.username || req.user?.name || ""),
+      archivedByUsername: String(req.user?.name || req.user?.username || ""),
       archivedByRole: String(req.user?.role || ""),
     });
 
@@ -758,15 +1128,6 @@ router.delete("/:id", requireAuth, async (req, res, next) => {
       `Archived project: ${project.name}`
     );
 
-    void createNotification({
-      actor: String(req.user?.username || req.user?.name || "System"),
-      actorRole: String(req.user?.role || ""),
-      action: "archived",
-      resourceType: "project",
-      resourceName: project.name,
-      resourceId: String(project._id),
-    });
-
     return res.json({ success: true, message: "Project archived successfully" });
   } catch (err) {
     return next(err);
@@ -783,16 +1144,8 @@ router.get("/:id/comments", requireAuth, async (req, res, next) => {
 
     const items = await ProjectComment.find({ projectId: project._id }).sort({ createdAt: 1 }).lean();
 
-    const userIds = [...new Set(items.map(c => c.authorUserId))].filter(Boolean);
-    const settingsList = await Settings.find({ userId: { $in: userIds } }).lean();
-    
-    const settingsMap = {};
-    settingsList.forEach(s => {
-      settingsMap[s.userId] = {
-        fullName: s.fullName || "",
-        avatar: s.avatarDataUrl || s.avatarUrl || ""
-      };
-    });
+    const { getAuthorProfileMap } = require("../utils/authorProfile");
+    const profileMap = await getAuthorProfileMap(items.map((c) => c.authorUserId));
 
     return res.json({
       items: items.map((c) => ({
@@ -801,8 +1154,8 @@ router.get("/:id/comments", requireAuth, async (req, res, next) => {
         message: String(c.message || ""),
         authorUserId: String(c.authorUserId || ""),
         authorUsername: String(c.authorUsername || ""),
-        authorFullName: (c.authorUserId && settingsMap[c.authorUserId]?.fullName) || "",
-        authorAvatar: (c.authorUserId && settingsMap[c.authorUserId]?.avatar) || "",
+        authorFullName: (c.authorUserId && profileMap[String(c.authorUserId)]?.fullName) || "",
+        authorAvatar: (c.authorUserId && profileMap[String(c.authorUserId)]?.avatar) || "",
         authorRole: String(c.authorRole || ""),
         attachments: Array.isArray(c.attachments) ? c.attachments.map(a => ({
           fileName: a.fileName || "",
@@ -845,41 +1198,43 @@ router.post("/:id/comments", requireAuth, async (req, res, next) => {
     await logActivity(req, "PROJECT_COMMENT_CREATE", "project", project._id, project.name, `Comment added on project: ${project.name}`);
 
     // Process Mentions
-    if (message.includes("@")) {
-      const Employee = require("../models/Employee");
-      const activeEmployees = await Employee.find({ status: "active" }).select("name").lean();
-      const mentionedUsers = [];
-      const lowerMessage = message.toLowerCase();
-      
-      activeEmployees.forEach(emp => {
-        if (lowerMessage.includes("@" + emp.name.toLowerCase())) {
-          mentionedUsers.push(emp.name);
-        }
+    const mentionedUsers = await extractMentions(message);
+    if (mentionedUsers.length > 0) {
+      await createNotification({
+        actor: String(req.user?.name || req.user?.username || "Someone"),
+        actorRole: String(req.user?.role || ""),
+        action: "mentioned you in a",
+        resourceType: "project comment",
+        resourceName: project.name,
+        assignees: mentionedUsers,
+        details: `"${message.length > 50 ? message.substring(0, 50) + "..." : message}"`,
+        resourceId: String(project._id),
+        category: "MENTIONED",
       });
-
-      const activeUsers = await User.find({}).select("username").lean();
-      activeUsers.forEach(u => {
-        if (u.username && lowerMessage.includes("@" + u.username.toLowerCase()) && !mentionedUsers.includes(u.username)) {
-          mentionedUsers.push(u.username);
-        }
-      });
-
-      if (mentionedUsers.length > 0) {
-        await createNotification({
-          actor: String(req.user?.username || "Someone"),
-          actorRole: String(req.user?.role || ""),
-          action: "mentioned you in a",
-          resourceType: "project comment",
-          resourceName: project.name,
-          assignees: mentionedUsers,
-          details: `"${message.length > 50 ? message.substring(0, 50) + "..." : message}"`,
-          resourceId: String(project._id),
-        });
-      }
     }
 
+    // Notify task assignees and creator about the new comment
+    const commentRecipients = new Set([
+      ...(Array.isArray(project.assignees) ? project.assignees : []),
+      project.createdByUsername || ""
+    ].filter(Boolean));
+    if (commentRecipients.size > 0) {
+      await createNotification({
+        actor: String(req.user?.name || req.user?.username || "Someone"),
+        actorRole: String(req.user?.role || ""),
+        action: "commented on",
+        resourceType: "project",
+        resourceName: project.name,
+        assignees: Array.from(commentRecipients),
+        details: `"${message.length > 50 ? message.substring(0, 50) + "..." : message}"`,
+        resourceId: String(project._id),
+        category: "COMMENT_ADDED",
+      });
+    }
+
+    const { getAuthorProfile } = require("../utils/authorProfile");
     const authorUserId = String(req.user?.sub || req.user?.id || "");
-    const userSettings = await Settings.findOne({ userId: authorUserId }).lean();
+    const authorProfile = await getAuthorProfile(authorUserId);
 
     const commentData = {
       id: String(created._id),
@@ -887,8 +1242,8 @@ router.post("/:id/comments", requireAuth, async (req, res, next) => {
       message: String(created.message || ""),
       authorUserId: authorUserId,
       authorUsername: String(created.authorUsername || ""),
-      authorFullName: userSettings?.fullName || "",
-      authorAvatar: userSettings?.avatarDataUrl || userSettings?.avatarUrl || "",
+      authorFullName: authorProfile.fullName || "",
+      authorAvatar: authorProfile.avatar || "",
       authorRole: String(created.authorRole || ""),
       attachments: Array.isArray(created.attachments) ? created.attachments.map(a => ({
         fileName: a.fileName || "",
@@ -905,6 +1260,61 @@ router.post("/:id/comments", requireAuth, async (req, res, next) => {
     }
 
     return res.status(201).json({ item: commentData });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// ============================================================================
+// Execution Priority System - Admin Only (Project Tasks)
+// ============================================================================
+
+// DELETE /api/projects/:id/priorities - Clear all execution priorities for a project's tasks
+router.delete("/:id/priorities", requireAuth, async (req, res, next) => {
+  try {
+    // Check admin role
+    if (!['admin', 'super-admin'].includes(String(req.user?.role || '').trim().toLowerCase())) {
+      return res.status(403).json({ error: { message: "Only admins can manage execution priorities" } });
+    }
+
+    const { id } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ error: { message: "Invalid project ID" } });
+    }
+
+    const project = await Project.findById(id);
+    if (!project) {
+      return res.status(404).json({ error: { message: "Project not found" } });
+    }
+
+    // Clear execution priorities for all tasks in this project
+    const result = await Task.updateMany(
+      { projectId: new mongoose.Types.ObjectId(id), executionPriority: { $ne: null } },
+      { executionPriority: null }
+    );
+
+    // Log activity
+    await ActivityLog.create({
+      actorUserId: String(req.user?.sub || req.user?.id || "unknown"),
+      actorUsername: String(req.user?.name || req.user?.username || "unknown"),
+      actorRole: String(req.user?.role || "unknown"),
+      action: "cleared_project_execution_priorities",
+      resourceType: "project",
+      resourceId: String(project._id),
+      resourceName: project.name,
+      description: `Cleared all execution priorities for ${result.modifiedCount} tasks in project "${project.name}"`,
+    });
+
+    // Clear cache
+    await cacheDel("tasks:*");
+    await cacheDel("projects:*");
+
+    return res.status(200).json({
+      success: true,
+      modifiedCount: result.modifiedCount,
+      message: `All execution priorities cleared for ${result.modifiedCount} tasks in project "${project.name}"`,
+    });
   } catch (err) {
     return next(err);
   }

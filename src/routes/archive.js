@@ -34,7 +34,7 @@ router.get("/", requireAuth, async (req, res, next) => {
     const enriched = items.map((i) => ({
       id: String(i._id),
       itemType: i.itemType,
-      itemData: i.itemData,
+      itemData: i.itemData || {},
       parentType: i.parentType,
       parentId: i.parentId,
       parentName: i.parentName,
@@ -168,28 +168,41 @@ router.post("/:id/restore", requireAuth, async (req, res, next) => {
     }
 
     else if (itemType === "user") {
-      const User = require("../models/User");
+      const Employee = require("../models/Employee");
       const data = archived.itemData || {};
       let passwordHash = data.passwordHash;
 
-/*
- let passwordHash = data.passwordHash;
-if (!passwordHash) {
-        const defaultPassword = "123456";
-        passwordHash = await bcrypt.hash(defaultPassword, 10);
-      }
-*/
       if (!passwordHash) {
-        const defaultPassword = "123456";
-        passwordHash = await bcrypt.hash(defaultPassword, 10);
+        const bcrypt = require("bcryptjs");
+        passwordHash = await bcrypt.hash("123456", 10);
       }
-      await User.create({
+
+      await Employee.create({
         name: data.name || "",
         email: data.email || "",
-        username: data.username,          
-        passwordHash: data.passwordHash,  
-        role: data.role || "employee",
-        status: "active",
+        passwordHash,
+        userRole: data.role || "employee",
+        userStatus: "active",
+      });
+    }
+
+    else if (itemType === "tenant") {
+      const Tenant = require("../models/Tenant");
+      const data = archived.itemData || {};
+      const { _id, originalId, __v, createdAt, updatedAt, ...rest } = data;
+      await Tenant.create({
+        name: rest.name || "Restored Tenant",
+        email: rest.email || "",
+        phone: rest.phone || "",
+        type: rest.type || "Individual",
+        status: rest.status || "Active",
+        identification: rest.identification || "",
+        notes: rest.notes || "",
+        company: rest.company || undefined,
+        assignedProperty: rest.assignedProperty || "",
+        assignedUnit: rest.assignedUnit || "",
+        locationName: rest.locationName || "",
+        address: rest.address || "",
       });
     }
 

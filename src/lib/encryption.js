@@ -1,67 +1,63 @@
+/**
+ * AES-256-CBC encryption for OAuth tokens at rest.
+ * Format: "iv:ciphertext" (hex-encoded).
+ * Requires DROPBOX_ENCRYPTION_KEY in .env (64-char hex = 32 bytes).
+ */
 const crypto = require("crypto");
 
+const ALGORITHM = "aes-256-cbc";
+const IV_LENGTH = 16;
+
+let didWarnMissingKey = false;
+
 function getKey() {
-  const raw = String(process.env.MESSAGE_ENCRYPTION_KEY || "").trim();
-  if (!raw) return null;
+  const raw = process.env.DROPBOX_ENCRYPTION_KEY || process.env.APP_ENCRYPTION_KEY || process.env.ENCRYPTION_KEY;
+  if (!raw) {
+    if (!didWarnMissingKey) {
+      didWarnMissingKey = true;
+      console.warn("[encryption] No encryption key set (DROPBOX_ENCRYPTION_KEY, APP_ENCRYPTION_KEY, or ENCRYPTION_KEY). Falling back to plaintext.");
+    }
+    return null;
+  }
+  const buf = Buffer.from(raw, "hex");
+  if (buf.length !== 32) {
+    throw new Error(`DROPBOX_ENCRYPTION_KEY must be 64-char hex (32 bytes). Got ${buf.length} bytes.`);
+  }
+  return buf;
+}
+
+function encrypt(plaintext) {
+  if (!plaintext) return "";
+  const key = getKey();
+  if (!key) return String(plaintext);
+  const iv = crypto.randomBytes(IV_LENGTH);
+  const cipher = crypto.createCipheriv(ALGORITHM, key, iv);
+  let encrypted = cipher.update(plaintext, "utf8", "hex");
+  encrypted += cipher.final("hex");
+  return `${iv.toString("hex")}:${encrypted}`;
+}
+
+function decrypt(encryptedText) {
+  if (!encryptedText) return "";
+  const key = getKey();
+  if (!key) return String(encryptedText);
+  const [ivHex, cipherHex] = encryptedText.split(":");
+  if (!ivHex || !cipherHex) throw new Error("Invalid encrypted text format. Expected iv:ciphertext");
+  const iv = Buffer.from(ivHex, "hex");
+  const decipher = crypto.createDecipheriv(ALGORITHM, key, iv);
+  let decrypted = decipher.update(cipherHex, "hex", "utf8");
+  decrypted += decipher.final("utf8");
+  return decrypted;
+}
+
+// Returns null instead of throwing — use when a decrypt failure shouldn't crash the process
+function safeDecrypt(encryptedText) {
   try {
-    const key = Buffer.from(raw, "base64");
-    if (key.length !== 32) return null;
-    return key;
-  } catch {
+    return decrypt(encryptedText);
+  } catch (err) {
+    console.error("[encryption] safeDecrypt failed:", err.message);
     return null;
   }
 }
 
-function encryptString(plaintext) {
-  const key = getKey();
-  if (!key) {
-    throw new Error(
-      "MESSAGE_ENCRYPTION_KEY is missing or invalid (must be 32-byte base64 for AES-256-GCM)"
-    );
-  }
-
-  const iv = crypto.randomBytes(12);
-  const cipher = crypto.createCipheriv("aes-256-gcm", key, iv);
-  const ciphertext = Buffer.concat([
-    cipher.update(String(plaintext ?? ""), "utf8"),
-    cipher.final(),
-  ]);
-  const tag = cipher.getAuthTag();
-
-  return `enc:${iv.toString("base64")}.${tag.toString("base64")}.${ciphertext.toString("base64")}`;
-}
-
-function decryptString(value) {
-  const raw = String(value ?? "");
-  if (!raw.startsWith("enc:")) return raw;
-
-  const key = getKey();
-  if (!key) {
-    return "[System: Decryption key missing]";
-  }
-
-  const payload = raw.slice(4);
-  const parts = payload.split(".");
-  if (parts.length !== 3) {
-    return "[System: Invalid encrypted payload format]";
-  }
-
-  try {
-    const [ivB64, tagB64, ctB64] = parts;
-    const iv = Buffer.from(ivB64, "base64");
-    const tag = Buffer.from(tagB64, "base64");
-    const ciphertext = Buffer.from(ctB64, "base64");
-
-    const decipher = crypto.createDecipheriv("aes-256-gcm", key, iv);
-    decipher.setAuthTag(tag);
-    const plaintext = Buffer.concat([decipher.update(ciphertext), decipher.final()]);
-    return plaintext.toString("utf8");
-  } catch (err) {
-    return "[System: Decryption failed]";
-  }
-}
-
-module.exports = {
-  encryptString,
-  decryptString,
-};
+module.exports = { encrypt, decrypt, safeDecrypt };

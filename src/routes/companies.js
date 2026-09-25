@@ -73,6 +73,15 @@ const createSchema = z.object({
     currency: z.string().optional().default("USD"),
   }).optional().default({}),
   logo: z.string().optional().default(""),
+  einNumber: z.string().optional().default(""),
+  charterNumber: z.string().optional().default(""),
+  stateOfIncorporation: z.string().optional().default(""),
+  foreignEntities: z.array(z.object({
+    state: z.string().optional().default(""),
+    documentNumber: z.string().optional().default(""),
+  })).optional().default([]),
+  originalFilingDate: z.string().optional().nullable(),
+  annualReportDueDate: z.string().optional().nullable(),
 });
 
 const updateSchema = createSchema.partial();
@@ -135,7 +144,7 @@ router.post("/", requireAuth, requireRole(["super-admin", "admin"]), async (req,
 
     // Create notification
     await createNotification({
-      actor: req.user?.username || req.user?.name || "Admin",
+      actor: req.user?.name || req.user?.username || "Admin",
       actorRole: req.user?.role || "admin",
       action: "created",
       resourceType: "company",
@@ -182,7 +191,7 @@ router.put("/:id", requireAuth, requireRole(["super-admin", "admin"]), async (re
 
     // Create notification
     await createNotification({
-      actor: req.user?.username || req.user?.name || "Admin",
+      actor: req.user?.name || req.user?.username || "Admin",
       actorRole: req.user?.role || "admin",
       action: "updated",
       resourceType: "company",
@@ -206,7 +215,7 @@ router.delete("/:id", requireAuth, requireRole(["super-admin", "admin"]), async 
 
     // Create notification
     await createNotification({
-      actor: req.user?.username || req.user?.name || "Admin",
+      actor: req.user?.name || req.user?.username || "Admin",
       actorRole: req.user?.role || "admin",
       action: "deleted",
       resourceType: "company",

@@ -26,6 +26,14 @@ const websiteSchema = new mongoose.Schema(
       type: String,
       default: "",
     },
+    loginEmail: {
+      type: String,
+      default: "",
+    },
+    loginPassword: {
+      type: String,
+      default: "",
+    },
     status: {
       type: String,
       enum: ["Live", "Maintenance", "Development", "Offline"],
@@ -77,6 +85,53 @@ const websiteSchema = new mongoose.Schema(
       type: String,
       default: "System",
     },
+    launchDate: { type: Date },
+    originalPurchaseDate: { type: Date },
+    expirationDate: { type: Date },
+    businessUnit: { type: String, default: "Marketing" }, // e.g. 'Marketing', 'SaaS', 'E-Commerce', 'Operations'
+    environment: { type: String, default: "Production" }, // e.g. 'Production', 'Staging', 'Development'
+    leadDeveloper: { type: String, default: "" }, // username
+    complianceTemplate: { type: String, default: "" }, // template key
+    readinessScore: { type: Number, default: 0 },
+    overrideReason: { type: String, default: "" },
+    locations: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Location' }],
+    // Core requirements checkmark fields
+    googleAnalytics: { type: String, enum: ["green", "red", "none"], default: "none" },
+    humanVerification: { type: String, enum: ["green", "red", "none"], default: "none" },
+    largeHeaderImage: { type: String, enum: ["green", "red", "none"], default: "none" },
+    contactInfoSection: { type: String, enum: ["green", "red", "none"], default: "none" },
+    adaCompliance: { type: String, enum: ["green", "red", "none"], default: "none" },
+    faq: { type: String, enum: ["green", "red", "none"], default: "none" },
+    contactUsPage: { type: String, enum: ["green", "red", "none"], default: "none" },
+    privacyPolicy: { type: String, enum: ["green", "red", "none"], default: "none" },
+    seo: { type: String, enum: ["green", "red", "none"], default: "none" },
+    siteMap: { type: String, enum: ["green", "red", "none"], default: "none" },
+    stripeIntegration: { type: String, enum: ["green", "red", "none"], default: "none" },
+    bugReportButton: { type: String, enum: ["green", "red", "none"], default: "none" },
+    googleMaps: { type: String, enum: ["green", "red", "none"], default: "none" },
+    appleMaps: { type: String, enum: ["green", "red", "none"], default: "none" },
+    infoEmailSetup: { type: String, enum: ["green", "red", "none"], default: "none" },
+    nathanEmailSetup: { type: String, enum: ["green", "red", "none"], default: "none" },
+    // Social Media Compliance Checklist fields
+    youtubeCompliance: { type: String, enum: ["green", "red", "none"], default: "none" },
+    rumbleCompliance: { type: String, enum: ["green", "red", "none"], default: "none" },
+    libertySocialCompliance: { type: String, enum: ["green", "red", "none"], default: "none" },
+    facebookCompliance: { type: String, enum: ["green", "red", "none"], default: "none" },
+    xCompliance: { type: String, enum: ["green", "red", "none"], default: "none" },
+    instagramCompliance: { type: String, enum: ["green", "red", "none"], default: "none" },
+    tikTokCompliance: { type: String, enum: ["green", "red", "none"], default: "none" },
+    yelpCompliance: { type: String, enum: ["green", "red", "none"], default: "none" },
+    truthSocialCompliance: { type: String, enum: ["green", "red", "none"], default: "none" },
+    threadsCompliance: { type: String, enum: ["green", "red", "none"], default: "none" },
+    // System Health Monitoring fields
+    healthStatus: { type: String, enum: ["LIVE", "DEGRADED", "DOWN", "UNKNOWN"], default: "UNKNOWN" },
+    lastCheckedAt: { type: Date },
+    sslExpiryDate: { type: Date },
+    sslIssuer: { type: String, default: "" },
+    sslStatus: { type: String, enum: ["VALID", "EXPIRING_SOON", "EXPIRED", "INVALID", "UNKNOWN"], default: "UNKNOWN" },
+    responseTimeMs: { type: Number, default: 0 },
+    uptimePercentage: { type: Number, default: 100 },
+    isMonitoringEnabled: { type: Boolean, default: true },
   },
   { timestamps: true }
 );

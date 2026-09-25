@@ -4,8 +4,20 @@ const socialMediaAccountSchema = new mongoose.Schema(
   {
     platform: {
       type: String,
-      enum: ["Instagram", "Facebook", "YouTube", "TikTok", "LinkedIn", "X/Twitter"],
       required: true,
+      enum: [
+        "Instagram", 
+        "Facebook", 
+        "YouTube", 
+        "TikTok", 
+        "LinkedIn", 
+        "X/Twitter",
+        "Liberty social",
+        "Rumble",
+        "Truth Social",
+        "Threads",
+        "Other"
+      ],
     },
     accountHandle: {
       type: String,
@@ -16,11 +28,19 @@ const socialMediaAccountSchema = new mongoose.Schema(
       type: String,
       default: "",
     },
+    password: {
+      type: String,
+      default: "",
+    },
     username: {
       type: String,
       default: "",
     },
-    profileUrl: {
+    brand: {
+      type: String,
+      default: "",
+    },
+    url: {
       type: String,
       default: "",
     },

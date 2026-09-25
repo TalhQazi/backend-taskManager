@@ -1,4 +1,16 @@
 node_modules
 .env
-.env
 uploads/
+queryDb.js
+scratch/
+scratch_query.js
+docker-compose.yml
+nginx.conf
+
+# Documentation and generated files
+*.pdf
+*.html
+*.py
+
+# Internal handoff notes — not published
+docs/WIP_DASHBOARD.md

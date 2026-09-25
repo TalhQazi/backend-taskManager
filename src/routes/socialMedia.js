@@ -35,17 +35,25 @@ router.get("/:id", async (req, res, next) => {
 // Create new social media account (requires auth)
 router.post("/", requireAuth, async (req, res, next) => {
   try {
-    const { platform, accountHandle, ...rest } = req.body;
+    let { platform, accountHandle, username, ...rest } = req.body;
 
-    if (!platform || !accountHandle) {
+    // Align with frontend naming
+    if (platform === "X (Twitter)") platform = "X/Twitter";
+    
+    // Ensure both accountHandle and username are present if either is missing
+    const handle = accountHandle || username;
+    const user = username || accountHandle;
+
+    if (!platform || !handle) {
       return res.status(400).json({
-        error: { message: "platform and accountHandle are required" },
+        error: { message: "platform and accountHandle/username are required" },
       });
     }
 
     const newAccount = new SocialMediaAccount({
       platform,
-      accountHandle,
+      accountHandle: handle,
+      username: user,
       ...rest,
       createdBy: req.user?.username || "System",
     });
@@ -61,9 +69,20 @@ router.post("/", requireAuth, async (req, res, next) => {
 // Update social media account (requires auth)
 router.put("/:id", requireAuth, async (req, res, next) => {
   try {
+    const patch = { ...req.body };
+    if (patch.platform === "X (Twitter)") patch.platform = "X/Twitter";
+    
+    // Ensure both accountHandle and username are present if either is missing in the patch
+    if (patch.accountHandle || patch.username) {
+       const handle = patch.accountHandle || patch.username;
+       const user = patch.username || patch.accountHandle;
+       patch.accountHandle = handle;
+       patch.username = user;
+    }
+
     const account = await SocialMediaAccount.findByIdAndUpdate(
       req.params.id,
-      req.body,
+      patch,
       { new: true, runValidators: true }
     ).populate("credentialId");
 

@@ -62,6 +62,10 @@ const adminUiSchema = z.object({
   status: z.enum(["active", "inactive"]).optional(),
   photoDataUrl: z.string().optional(),
   photoFileName: z.string().optional(),
+  attachments: z.array(z.object({
+    fileName: z.string().optional(),
+    url: z.string().optional()
+  })).optional(),
 });
 
 const updateSchema = createSchema.partial();
@@ -70,6 +74,7 @@ router.get("/", requireAuth, async (_req, res, next) => {
   try {
     const result = await cacheWrap("locations:list", async () => {
       const items = await Location.find()
+        .select("-photoDataUrl -photoFileName")
         .sort({ name: 1 })
         .lean();
       return { items: items.map(withId) };
@@ -101,6 +106,7 @@ router.post("/", requireAuth, async (req, res, next) => {
         operatingHours: "",
         photoDataUrl: adminParsed.data.photoDataUrl || "",
         photoFileName: adminParsed.data.photoFileName || "",
+        attachments: Array.isArray(adminParsed.data.attachments) ? adminParsed.data.attachments : [],
       });
 
       const createdObj = withId(created.toObject());
@@ -119,7 +125,7 @@ router.post("/", requireAuth, async (req, res, next) => {
       
       // Create notification
       await createNotification({
-        actor: req.user?.username || req.user?.name || "Admin",
+        actor: req.user?.name || req.user?.username || "Admin",
         actorRole: req.user?.role || "admin",
         action: "created",
         resourceType: "location",
@@ -149,7 +155,7 @@ router.post("/", requireAuth, async (req, res, next) => {
 
     // Create notification
     await createNotification({
-      actor: req.user?.username || req.user?.name || "Admin",
+      actor: req.user?.name || req.user?.username || "Admin",
       actorRole: req.user?.role || "admin",
       action: "created",
       resourceType: "location",
@@ -166,11 +172,51 @@ router.post("/", requireAuth, async (req, res, next) => {
 
 router.get("/:id/photo", requireAuth, async (req, res, next) => {
   try {
-    const loc = await Location.findById(req.params.id).select("photoDataUrl photoFileName").lean();
+    const loc = await Location.findById(req.params.id).select("photoDataUrl photoFileName attachments").lean();
     if (!loc) return res.status(404).json({ error: { message: "Location not found" } });
-    res.json({ photoDataUrl: loc.photoDataUrl || "", photoFileName: loc.photoFileName || "" });
+    res.json({ 
+      photoDataUrl: loc.photoDataUrl || "", 
+      photoFileName: loc.photoFileName || "",
+      attachments: loc.attachments || []
+    });
   } catch (err) {
     next(err);
+  }
+});
+
+router.get("/:id/render-photo", async (req, res) => {
+  try {
+    const loc = await Location.findById(req.params.id).select("photoDataUrl").lean();
+    if (!loc || !loc.photoDataUrl) {
+      return res.status(404).send("Not found");
+    }
+
+    let contentType = "image/png";
+    let base64Data = "";
+
+    if (loc.photoDataUrl.startsWith("data:")) {
+      const parts = loc.photoDataUrl.split(";base64,");
+      if (parts.length === 2) {
+        contentType = parts[0].replace("data:", "");
+        base64Data = parts[1];
+      } else {
+         return res.status(400).send("Invalid data URI format");
+      }
+    } else {
+      // Fallback if it's just raw base64 (not recommended but seen in some legacy data)
+      base64Data = loc.photoDataUrl;
+    }
+
+    const buffer = Buffer.from(base64Data, 'base64');
+
+    res.writeHead(200, {
+      "Content-Type": contentType,
+      "Content-Length": buffer.length,
+      "Cache-Control": "no-cache"
+    });
+    res.end(buffer);
+  } catch (err) {
+    res.status(500).send("Error rendering image");
   }
 });
 
@@ -194,6 +240,7 @@ router.put("/:id", requireAuth, async (req, res, next) => {
       if (typeof adminParsed.data.tasksCount === "number") patch.employeeCount = adminParsed.data.tasksCount;
       if (typeof adminParsed.data.photoDataUrl === "string") patch.photoDataUrl = adminParsed.data.photoDataUrl;
       if (typeof adminParsed.data.photoFileName === "string") patch.photoFileName = adminParsed.data.photoFileName;
+      if (Array.isArray(adminParsed.data.attachments)) patch.attachments = adminParsed.data.attachments;
 
       const updated = await Location.findByIdAndUpdate(req.params.id, patch, { new: true }).lean();
       if (!updated) return res.status(404).json({ error: { message: "Location not found" } });
@@ -213,7 +260,7 @@ router.put("/:id", requireAuth, async (req, res, next) => {
       
       // Create notification
       await createNotification({
-        actor: req.user?.username || req.user?.name || "Admin",
+        actor: req.user?.name || req.user?.username || "Admin",
         actorRole: req.user?.role || "admin",
         action: "updated",
         resourceType: "location",
@@ -247,7 +294,7 @@ router.put("/:id", requireAuth, async (req, res, next) => {
     
     // Create notification
     await createNotification({
-      actor: req.user?.username || req.user?.name || "Admin",
+      actor: req.user?.name || req.user?.username || "Admin",
       actorRole: req.user?.role || "admin",
       action: "updated",
       resourceType: "location",
@@ -281,7 +328,7 @@ router.delete("/:id", requireAuth, async (req, res, next) => {
     
     // Create notification
     await createNotification({
-      actor: req.user?.username || req.user?.name || "Admin",
+      actor: req.user?.name || req.user?.username || "Admin",
       actorRole: req.user?.role || "admin",
       action: "deleted",
       resourceType: "location",
