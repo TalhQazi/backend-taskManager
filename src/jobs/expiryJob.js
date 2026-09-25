@@ -5,7 +5,7 @@ const SystemSettings = require("../models/SystemSettings");
 const { createNotification } = require("../utils/notifications");
 const { sendSystemEmail } = require("../lib/email");
 
-const DEFAULT_THRESHOLDS = [1, 7, 15, 30, 60, 90, 120, 180];
+const DEFAULT_THRESHOLDS = [3, 5, 7];
 
 const calculateExpiration = (filingDate, filingType, customExpiration = null) => {
   if (customExpiration) {
@@ -28,12 +28,34 @@ const calculateExpiration = (filingDate, filingType, customExpiration = null) =>
  */
 async function loadNotificationThresholds() {
   try {
-    const settings = await SystemSettings.findOne({ key: "global" }).lean();
+    const settings = await SystemSettings.findOne({ key: "global" });
     const custom = settings?.patentExpirationConfig?.notificationDays;
     if (Array.isArray(custom) && custom.length > 0) {
-      // Deduplicate and sort ascending so the smallest threshold is checked first
-      const unique = Array.from(new Set(custom.map(Number).filter(n => !isNaN(n) && n > 0)));
-      if (unique.length > 0) return unique.sort((a, b) => a - b);
+      const unique = Array.from(new Set(custom.map(Number).filter((n) => !isNaN(n) && n > 0))).sort((a, b) => a - b);
+      if (unique.length > 0) {
+        // Migrate legacy long default list → 3 / 5 / 7 day reminders
+        const legacyDefault = [1, 7, 15, 30, 60, 90, 120, 180];
+        const isLegacy =
+          unique.length === legacyDefault.length &&
+          legacyDefault.every((d) => unique.includes(d));
+        if (isLegacy) {
+          const next = [...DEFAULT_THRESHOLDS];
+          await SystemSettings.updateOne(
+            { key: "global" },
+            { $set: { "patentExpirationConfig.notificationDays": next } },
+            { upsert: true }
+          );
+          console.log("[Expiry Job] Migrated legacy notificationDays →", next.join(", "));
+          return next;
+        }
+        return unique;
+      }
+    } else {
+      await SystemSettings.updateOne(
+        { key: "global" },
+        { $set: { "patentExpirationConfig.notificationDays": [...DEFAULT_THRESHOLDS] } },
+        { upsert: true }
+      );
     }
   } catch (err) {
     console.error("[Expiry Job] Failed to load custom thresholds, using defaults:", err.message);
@@ -48,10 +70,10 @@ async function loadNotificationThresholds() {
  * - Deduplicates across User and Employee collections
  * - Checks user's emailPreferences (Settings) to respect opt-out preferences
  *
- * @param {string[]} [roles] - List of authorized roles (defaults to admin, super-admin, manager)
+ * @param {string[]} [roles] - List of authorized roles (defaults to super-admin only)
  * @returns {Promise<Map<string, string>>} Map of normalizedEmail => recipientName
  */
-async function getPatentAlertRecipients(roles = ["super-admin", "admin", "manager"]) {
+async function getPatentAlertRecipients(roles = ["super-admin"]) {
   const Settings = require("../models/Settings");
   const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
   const rawMap = new Map();
@@ -152,11 +174,11 @@ async function checkPatentExpirations(forceSend = false) {
         ? Array.from(new Set(patent.customReminderDays.map(Number).filter((n) => !isNaN(n) && n > 0))).sort((a, b) => a - b)
         : thresholds;
 
-      // Check if any threshold triggers (only for future expiration days)
+      // Exact-day reminders: send once when remaining days hit each threshold (7, 5, 3)
       let triggeredThreshold = null;
 
       for (const t of patentThresholds) {
-        if (daysUntilExpiration > 0 && daysUntilExpiration <= t && (forceSend || !patent.notifiedDays.includes(t))) {
+        if (daysUntilExpiration === t && (forceSend || !patent.notifiedDays.includes(t))) {
           triggeredThreshold = t;
           break;
         }
@@ -166,12 +188,9 @@ async function checkPatentExpirations(forceSend = false) {
         results.expiring++;
         console.log(`[Expiry Job] Triggered threshold ${triggeredThreshold}d for patent: ${patent.patentName} (${daysUntilExpiration} days remaining)`);
 
-        // Add this threshold and all larger ones to notifiedDays
-        patentThresholds.forEach((t) => {
-          if (t >= triggeredThreshold && !patent.notifiedDays.includes(t)) {
-            patent.notifiedDays.push(t);
-          }
-        });
+        if (!patent.notifiedDays.includes(triggeredThreshold)) {
+          patent.notifiedDays.push(triggeredThreshold);
+        }
 
         await patent.save();
 
@@ -197,14 +216,14 @@ async function checkPatentExpirations(forceSend = false) {
           results.errors.push(`Notification: ${notifErr.message}`);
         }
 
-        // Query deduplicated, normalized active recipients
-        const recipientMap = await getPatentAlertRecipients(["super-admin", "admin", "manager"]);
+        // Email only active super-admins
+        const recipientMap = await getPatentAlertRecipients(["super-admin"]);
 
-        console.log(`[Expiry Job] Found ${recipientMap.size} unique recipient(s) for email alerts.`);
+        console.log(`[Expiry Job] Found ${recipientMap.size} super-admin recipient(s) for email alerts.`);
 
         if (recipientMap.size === 0) {
-          console.warn("[Expiry Job] WARNING: No admin/super-admin/manager recipients found. No emails will be sent.");
-          results.errors.push("No admin recipients found");
+          console.warn("[Expiry Job] WARNING: No super-admin recipients found. No emails will be sent.");
+          results.errors.push("No super-admin recipients found");
         }
 
         for (const [email, name] of recipientMap.entries()) {

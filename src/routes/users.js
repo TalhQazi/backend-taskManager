@@ -126,10 +126,11 @@ router.post("/", requireAuth, requireRole(["super-admin", "admin"]), async (req,
 
     if (email) {
       const templateKey = role === "manager" ? "managerRegistration" : "userRegistration";
+      const { getAppAccessVariables } = require("../lib/appAccessLinks");
       sendSystemEmail({
         to: email,
         templateKey,
-        variables: { name },
+        variables: { name, ...getAppAccessVariables() },
       }).catch(() => {});
     }
 

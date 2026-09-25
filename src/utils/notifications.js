@@ -74,7 +74,7 @@ async function createNotification({
     // Build targeted recipient set based on category
     const rawTargetSet = new Set();
 
-    if (derivedCategory === "MENTIONED" || derivedCategory === "COMMENT_ADDED") {
+    if (derivedCategory === "MENTIONED" || derivedCategory === "COMMENT_ADDED" || derivedCategory === "POLL_ASSIGNED") {
       // Notify only the people directly involved — NOT all admins/managers
       if (actor) rawTargetSet.add(String(actor).trim());
       (Array.isArray(assignees) ? assignees : []).forEach((a) => {
@@ -120,6 +120,7 @@ async function createNotification({
       EOD_MISS_ALERT: "eodMissAlert",
       EOD_COMMENT: "eodComment",
       LUNCH_BREAK_ALERT: "lunchBreakAlert",
+      POLL_ASSIGNED: "pollAssignment",
     };
     const prefKey = map[derivedCategory] || "systemAlert";
 

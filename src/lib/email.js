@@ -1,6 +1,12 @@
 const nodemailer = require("nodemailer");
 const SystemSettings = require("../models/SystemSettings");
 const { decrypt } = require("../lib/encryption");
+const {
+  getAppAccessVariables,
+  formatAppAccessSection,
+  getUserRegistrationBody,
+  getManagerRegistrationBody,
+} = require("./appAccessLinks");
 
 
 /**
@@ -50,6 +56,21 @@ async function sendSystemEmail({ to, templateKey, variables = {} }) {
         enabled: true,
         subject: "Meeting Invite: {meetingTitle}",
         body: "Hello {name},\n\nYou have been invited to a video meeting.\n\n--------------------------------------------------\n📌 Topic: {meetingTitle}\n🕐 When: {meetingTime}\n🌍 Timezone: {timezone}\n⏱ Duration: {duration} minutes\n👤 Host: {hostName}\n🔑 Room Code: {roomCode}\n--------------------------------------------------\n\nAgenda:\n{agenda}\n\nJoin link:\n{joinLink}\n\nBest regards,\nTask Manager System",
+      },
+      pollAssignment: {
+        enabled: true,
+        subject: "New Poll: {pollTitle}",
+        body: "Hello {name},\n\nA new poll has been published and your feedback is requested.\n\n--------------------------------------------------\n📊 Poll: {pollTitle}\n📝 Details: {pollDescription}\n⏰ Closes: {closesAt}\n--------------------------------------------------\n\nPlease log in to Task Manager to cast your vote.\n\nBest regards,\nTask Manager System",
+      },
+      userRegistration: {
+        enabled: true,
+        subject: "Welcome to Task Manager",
+        body: getUserRegistrationBody(),
+      },
+      managerRegistration: {
+        enabled: true,
+        subject: "Manager Account Created — Task Manager",
+        body: getManagerRegistrationBody(),
       },
     };
 
@@ -111,12 +132,32 @@ async function sendSystemEmail({ to, templateKey, variables = {} }) {
     let subject = template.subject || (templateKey === "patentExpiration" ? "ALERT: Patent Expiring - {patentName}" : (templateKey === "patentFiled" ? "NEW PATENT FILED: {patentName}" : "Task Manager Notification"));
     let body = template.body || (templateKey === "patentExpiration" ? "Hello {name},\n\nThe patent '{patentName}' is expiring in {daysUntilExpiration} days (Expiration Date: {expirationDate}).\n\nApplication Number: {applicationNumber}\nCategory: {category}\n\nTask Manager System" : "Hello {name},\n\nYou have an update in the Task Manager System.");
 
+    // Always supply app access link variables for registration emails
+    const accessVars = getAppAccessVariables();
+    const mergedVariables = {
+      ...accessVars,
+      ...variables,
+      websiteUrl: variables.websiteUrl || accessVars.websiteUrl,
+      googlePlayUrl: variables.googlePlayUrl || accessVars.googlePlayUrl,
+      appleStoreUrl: variables.appleStoreUrl || accessVars.appleStoreUrl,
+    };
+
     // Replace variables in subject and body
-    Object.keys(variables).forEach((key) => {
+    Object.keys(mergedVariables).forEach((key) => {
       const placeholder = new RegExp(`{${key}}`, "g");
-      subject = subject.replace(placeholder, variables[key] ?? "");
-      body = body.replace(placeholder, variables[key] ?? "");
+      subject = subject.replace(placeholder, mergedVariables[key] ?? "");
+      body = body.replace(placeholder, mergedVariables[key] ?? "");
     });
+
+    // Ensure registration emails always include website + store links even if
+    // the saved DB template is an older version without placeholders.
+    if (templateKey === "userRegistration" || templateKey === "managerRegistration") {
+      const hasPlay = /play\.google\.com/i.test(body);
+      const hasWebsite = /task\.se7eninc\.com|\{websiteUrl\}/i.test(body) || /Access Task Manager/i.test(body);
+      if (!hasPlay || !hasWebsite) {
+        body = `${body.trim()}\n${formatAppAccessSection(accessVars)}`;
+      }
+    }
 
     const fromEmail = emailConfig.fromAddress || emailConfig.user;
     const fromField = emailConfig.senderName

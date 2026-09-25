@@ -1919,6 +1919,15 @@ const handleTaskUpdate = async (req, res, next) => {
     delete patch.assignee;
     delete patch.assigneeInitials;
 
+    // Capture previous assignees so we can email anyone newly assigned on edit
+    let previousAssignees = [];
+    if (Array.isArray(patch.assignees)) {
+      const existingForAssignees = await Task.findById(req.params.id).select("assignees").lean();
+      previousAssignees = Array.isArray(existingForAssignees?.assignees)
+        ? existingForAssignees.assignees.map((a) => String(a || "").trim().toLowerCase()).filter(Boolean)
+        : [];
+    }
+
     // Start/close history when status changes via a full task update
     if (patch.status) {
       const existing = await Task.findById(req.params.id).select("status firstStartedAt").lean();
@@ -1970,7 +1979,31 @@ const handleTaskUpdate = async (req, res, next) => {
           ));
         }
         return Promise.resolve();
-      })()
+      })(),
+      (async () => {
+        if (!Array.isArray(patch.assignees)) return;
+        const nextAssignees = Array.isArray(updated.assignees) ? updated.assignees : [];
+        const newlyAssigned = nextAssignees.filter(
+          (a) => !previousAssignees.includes(String(a || "").trim().toLowerCase())
+        );
+        if (newlyAssigned.length === 0) return;
+
+        let projectName = "General";
+        if (updated.projectId) {
+          const proj = await Project.findById(updated.projectId).select("name").lean();
+          if (proj) projectName = proj.name;
+        }
+
+        for (const assignee of newlyAssigned) {
+          await sendEmailNotification(assignee, "taskAssignment", {
+            taskTitle: updated.title,
+            projectName,
+            priority: updated.priority || "Normal",
+            dueDate: updated.dueDate ? new Date(updated.dueDate).toLocaleDateString() : "No due date",
+            description: updated.description || "",
+          });
+        }
+      })(),
     ]).catch(() => {});
 
     return res.json({ item: withId(updated) });

@@ -153,7 +153,7 @@ router.get("/pending", async (req, res, next) => {
 router.get("/notification-settings", requireAuth, async (req, res, next) => {
   try {
     let settings = await SystemSettings.findOne({ key: "global" }).lean();
-    const defaultDays = [1, 7, 15, 30, 60, 90, 120, 180];
+    const defaultDays = [3, 5, 7];
     const notificationDays = settings?.patentExpirationConfig?.notificationDays || defaultDays;
     const smtpConfigured = Boolean(settings?.emailConfig?.host && settings?.emailConfig?.user && settings?.emailConfig?.pass);
     const templateEnabled = settings?.templates?.patentExpiration?.enabled !== false;

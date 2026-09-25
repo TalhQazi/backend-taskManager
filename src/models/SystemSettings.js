@@ -14,14 +14,22 @@ const SystemSettingsSchema = new mongoose.Schema(
     },
     templates: {
       userRegistration: {
-        enabled: { type: Boolean, default: false },
+        enabled: { type: Boolean, default: true },
         subject: { type: String, default: "Welcome to Task Manager" },
-        body: { type: String, default: "Hello {name},\n\nWelcome to our platform. Your account has been created successfully." },
+        body: {
+          type: String,
+          default:
+            "Hello {name},\n\nWelcome to Task Manager. Your account has been created successfully.\n\nYou can log in on the website or download the mobile app using the links below:\n\n--------------------------------------------------\nAccess Task Manager\n--------------------------------------------------\nWebsite (login): {websiteUrl}\nGoogle Play Store: {googlePlayUrl}\nApple App Store: {appleStoreUrl} (iOS link coming soon — placeholder)\n\nBest regards,\nTask Manager System",
+        },
       },
       managerRegistration: {
-        enabled: { type: Boolean, default: false },
-        subject: { type: String, default: "Manager Account Created" },
-        body: { type: String, default: "Hello {name},\n\nYour manager account has been created. You can now login to manage tasks." },
+        enabled: { type: Boolean, default: true },
+        subject: { type: String, default: "Manager Account Created — Task Manager" },
+        body: {
+          type: String,
+          default:
+            "Hello {name},\n\nYour manager account has been created on Task Manager. You can now log in to manage tasks and your team.\n\nUse the website or mobile apps below:\n\n--------------------------------------------------\nAccess Task Manager\n--------------------------------------------------\nWebsite (login): {websiteUrl}\nGoogle Play Store: {googlePlayUrl}\nApple App Store: {appleStoreUrl} (iOS link coming soon — placeholder)\n\nBest regards,\nTask Manager System",
+        },
       },
       forgotPassword: {
         enabled: { type: Boolean, default: true },
@@ -88,6 +96,15 @@ const SystemSettingsSchema = new mongoose.Schema(
         subject: { type: String, default: "Meeting Invite: {meetingTitle}" },
         body: { type: String, default: "Hello {name},\n\nYou have been invited to a video meeting.\n\n--------------------------------------------------\n📌 Topic: {meetingTitle}\n🕐 When: {meetingTime}\n🌍 Timezone: {timezone}\n⏱ Duration: {duration} minutes\n👤 Host: {hostName}\n🔑 Room Code: {roomCode}\n--------------------------------------------------\n\nAgenda:\n{agenda}\n\nJoin link:\n{joinLink}\n\nBest regards,\nTask Manager System" },
       },
+      pollAssignment: {
+        enabled: { type: Boolean, default: true },
+        subject: { type: String, default: "New Poll: {pollTitle}" },
+        body: {
+          type: String,
+          default:
+            "Hello {name},\n\nA new poll has been published and your feedback is requested.\n\n--------------------------------------------------\n📊 Poll: {pollTitle}\n📝 Details: {pollDescription}\n⏰ Closes: {closesAt}\n--------------------------------------------------\n\nPlease log in to Task Manager to cast your vote.\n\nBest regards,\nTask Manager System",
+        },
+      },
     },
     taskRewardSystemEnabled: { type: Boolean, default: true },
     scheConfig: {
@@ -98,7 +115,7 @@ const SystemSettingsSchema = new mongoose.Schema(
     patentExpirationConfig: {
       notificationDays: {
         type: [Number],
-        default: [1, 7, 15, 30, 60, 90, 120, 180],
+        default: [3, 5, 7],
       },
     },
   },

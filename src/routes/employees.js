@@ -129,6 +129,22 @@ function escapeRegExp(s) {
   return String(s).replace(/[.*+?^${}()|[\]\\]/g, "\$&");
 }
 
+/** Align employee time-entry status with manager: incomplete → In Progress, complete → Complete. */
+function resolveTimeEntryStatus(entry) {
+  const hasClockOut = Boolean(
+    entry?.clockOutAt || (entry?.clockOut && String(entry.clockOut).trim())
+  );
+  const raw = String(entry?.status || "").toLowerCase().trim();
+  if (raw === "overtime") return "overtime";
+  if (hasClockOut) {
+    if (raw === "complete" || raw === "completed") return "complete";
+    return "complete";
+  }
+  // Missed / open checkout — same as manager ("In Progress")
+  if (raw === "incomplete" || raw === "active" || !raw) return "incomplete";
+  return "incomplete";
+}
+
 function getDayRange(d = new Date()) {
   const start = new Date(d);
   start.setHours(0, 0, 0, 0);
@@ -318,7 +334,7 @@ router.get("/me/time-logs", requireAuth, async (req, res, next) => {
       clock_in: entry.clockInAt || entry.clockIn || "",
       clock_out: entry.clockOutAt || entry.clockOut || "",
       total_hours: Number(entry.totalHours || 0),
-      status: entry.clockOutAt || entry.clockOut ? "completed" : "active",
+      status: resolveTimeEntryStatus(entry),
     }));
 
     res.json({ success: true, items });
@@ -782,7 +798,10 @@ router.post("/", requireAuth, async (req, res, next) => {
         ? sendSystemEmail({
             to: created.email,
             templateKey: created.userRole === "manager" ? "managerRegistration" : "userRegistration",
-            variables: { name: created.name },
+            variables: {
+              name: created.name,
+              ...require("../lib/appAccessLinks").getAppAccessVariables(),
+            },
           }).catch((err) => console.error("Welcome email failed:", err))
         : Promise.resolve(),
     ]).catch(() => {});
@@ -992,7 +1011,7 @@ router.get("/me/time-entry/history", requireAuth, async (req, res, next) => {
       clockInAt: entry.clockInAt,
       clockOutAt: entry.clockOutAt,
       totalHours: entry.totalHours,
-      status: entry.clockOut ? "completed" : "active",
+      status: resolveTimeEntryStatus(entry),
       scrum: entry.scrum || null,
     }));
 

@@ -41,6 +41,7 @@ const headerSettingsRoutes = require("./routes/headerSettings");
 const adminInfoRoutes = require("./routes/adminInfo");
 const websitesRoutes = require("./routes/websites");
 const socialMediaRoutes = require("./routes/socialMedia");
+const appStoreLinksRoutes = require("./routes/appStoreLinks");
 const patentsRoutes = require("./routes/patents");
 const credentialsRoutes = require("./routes/credentials");
 const archiveRoutes = require("./routes/archive");
@@ -96,6 +97,7 @@ const crmCommunicationRoutes = require("./routes/crmcommunication");
 const memeRoutes = require("./routes/meme");
 
 const announcementsRoutes = require("./routes/announcements");
+const pollsRoutes = require("./routes/polls");
 
 const milestonesRoutes = require("./routes/milestones");
 const costManagerRoutes = require("./routes/costManager");
@@ -515,6 +517,7 @@ app.use("/api/header-settings", requireClearHire, headerSettingsRoutes);
 app.use("/api/admin-info", requireClearHire, adminInfoRoutes);
 app.use("/api/websites", requireClearHire, websitesRoutes);
 app.use("/api/social-media", requireClearHire, socialMediaRoutes);
+app.use("/api/app-store-links", requireClearHire, appStoreLinksRoutes);
 app.use("/api/patents", requireClearHire, patentsRoutes);
 app.use("/api/credentials", requireClearHire, credentialsRoutes);
 app.use("/api/archive", requireClearHire, archiveRoutes);
@@ -598,6 +601,7 @@ app.use("/api/legal/filings", requireClearHire, legalFilingRoutes);
 app.use("/api/legal/notifications", requireClearHire, legalNotificationRoutes);
 
 app.use("/api/announcements", requireClearHire, announcementsRoutes);
+app.use("/api/polls", requireClearHire, pollsRoutes);
 
 app.use("/api/milestones", requireClearHire, milestonesRoutes);
 app.use("/api/cost-manager", requireClearHire, costManagerRoutes);
@@ -746,6 +750,16 @@ connectDb()
     setInterval(
       () => {
         runAnnouncementScheduler().catch((err) => console.error("[Announcements] Scheduler error:", err));
+      },
+      5 * 60 * 1000
+    );
+
+    // Ideas & Polls scheduler (activate scheduled + auto-close)
+    const { runPollScheduler } = require("./lib/pollScheduler");
+    runPollScheduler().catch((err) => console.error("[Polls] Startup scheduler error:", err));
+    setInterval(
+      () => {
+        runPollScheduler().catch((err) => console.error("[Polls] Scheduler error:", err));
       },
       5 * 60 * 1000
     );
