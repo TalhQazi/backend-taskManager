@@ -8,6 +8,8 @@ const { sendEmailNotification } = require("../utils/emailNotifications");
 const { sendRawEmail } = require("../lib/email");
 const { uploadToS3 } = require("../lib/s3");
 
+const crypto = require("crypto");
+
 const router = express.Router();
 
 const recordingUpload = multer({
@@ -30,9 +32,27 @@ const recordingUpload = multer({
   },
 });
 
+/** High-entropy room codes: ABC-DEF-GHI (no ambiguous 0/O/1/I). */
 function generateRoomCode() {
-  const segment = () => Math.floor(100 + Math.random() * 900).toString();
-  return `${segment()}-${segment()}-${segment()}`;
+  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  const pick = (n) => {
+    const bytes = crypto.randomBytes(n);
+    let out = "";
+    for (let i = 0; i < n; i++) out += alphabet[bytes[i] % alphabet.length];
+    return out;
+  };
+  return `${pick(3)}-${pick(3)}-${pick(3)}`;
+}
+
+/** Allocate a room code that does not already exist in DB. */
+async function allocateUniqueRoomCode(maxAttempts = 12) {
+  for (let i = 0; i < maxAttempts; i++) {
+    const roomCode = generateRoomCode();
+    const exists = await Meeting.exists({ roomCode });
+    if (!exists) return roomCode;
+  }
+  // Extremely unlikely fallback
+  return `${generateRoomCode()}-${Date.now().toString(36).slice(-4).toUpperCase()}`;
 }
 
 function withId(doc) {
@@ -195,22 +215,25 @@ router.get("/", requireAuth, async (req, res, next) => {
       });
     }
 
-    // Role-based visibility: employees see meetings they host, are invited to, joined, or instant public rooms
-    const isPrivileged = ["super-admin", "admin", "manager"].includes(req.user?.role);
+    // Everyone (including admin/manager) only sees meetings they host, are invited to, or have joined.
+    // Sharing an invite link / room code is the only way into someone else's live room.
+    // Admins can pass ?scope=all to audit every meeting.
     const userId = String(req.user?.sub || req.user?.id || "");
     const userEmail = String(req.user?.username || req.user?.email || "").toLowerCase();
+    const scopeAll =
+      String(req.query.scope || "").toLowerCase() === "all" &&
+      ["super-admin", "admin"].includes(String(req.user?.role || ""));
 
-    if (!isPrivileged && userId) {
-      const visibilityOr = [
-        { hostId: userId },
-        { "invitedParticipants.userId": userId },
-        { "invitedParticipants.email": userEmail },
-        { "joinedParticipants.userId": userId },
-      ];
-      if (type !== "past") {
-        visibilityOr.push({ meetingType: "instant", status: "active" });
-      }
-      andClauses.push({ $or: visibilityOr });
+    if (!scopeAll && userId) {
+      andClauses.push({
+        $or: [
+          { hostId: userId },
+          ...(userEmail ? [{ hostEmail: new RegExp(`^${userEmail.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i") }] : []),
+          { "invitedParticipants.userId": userId },
+          ...(userEmail ? [{ "invitedParticipants.email": userEmail }] : []),
+          { "joinedParticipants.userId": userId },
+        ],
+      });
     }
 
     if (andClauses.length === 1) {
@@ -228,35 +251,48 @@ router.get("/", requireAuth, async (req, res, next) => {
   }
 });
 
-// GET /api/meetings/code/:code - lookup by room code
+// GET /api/meetings/code/:code - lookup by room code (must already exist)
 router.get("/code/:code", requireAuth, async (req, res, next) => {
   try {
-    const cleanCode = String(req.params.code || "").trim();
+    const cleanCode = String(req.params.code || "").trim().toUpperCase();
     if (!cleanCode) {
       return res.status(400).json({ error: { message: "Invalid room code" } });
     }
 
-    let meeting = await Meeting.findOne({ roomCode: cleanCode }).lean();
+    // Case-insensitive match so typed codes still work
+    const meeting = await Meeting.findOne({
+      roomCode: { $regex: new RegExp(`^${cleanCode.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i") },
+    }).lean();
 
     if (!meeting) {
-      // Create ad-hoc instant meeting if valid room code format
-      const hostId = String(req.user?.sub || req.user?.id || "guest");
-      const hostName = String(req.user?.name || "Host");
-      const hostEmail = String(req.user?.username || "");
-      const hostRole = String(req.user?.role || "employee");
-
-      const created = await Meeting.create({
-        roomCode: cleanCode,
-        title: `Room ${cleanCode}`,
-        meetingType: "instant",
-        hostId,
-        hostName,
-        hostEmail,
-        hostRole,
-        status: "active",
+      return res.status(404).json({
+        error: { message: "Meeting not found. Ask the host for a valid room code or start a new meeting." },
       });
+    }
 
-      return res.json({ item: withId(created) });
+    // Ended meetings: host can rejoin/reactivate (e.g. after accidentally hitting Back)
+    if (meeting.status === "ended" || meeting.status === "cancelled") {
+      const userId = String(req.user?.sub || req.user?.id || "");
+      const userEmail = String(req.user?.username || req.user?.email || "").toLowerCase();
+      const isHost =
+        String(meeting.hostId) === userId ||
+        (meeting.hostEmail && String(meeting.hostEmail).toLowerCase() === userEmail);
+
+      const endedRecently =
+        meeting.endedAt && Date.now() - new Date(meeting.endedAt).getTime() < 30 * 60 * 1000;
+
+      if (isHost && endedRecently) {
+        await Meeting.updateOne(
+          { _id: meeting._id },
+          { $set: { status: "active", endedAt: null } }
+        );
+        const reopened = await Meeting.findById(meeting._id).lean();
+        return res.json({ item: withId(reopened) });
+      }
+
+      return res.status(410).json({
+        error: { message: "This meeting has ended. Start a new meeting to get a fresh room code." },
+      });
     }
 
     res.json({ item: withId(meeting) });
@@ -280,19 +316,11 @@ router.post(
         return res.status(400).json({ error: { message: "Recording file is required" } });
       }
 
-      let meeting = await Meeting.findOne({ roomCode: cleanCode });
+      let meeting = await Meeting.findOne({
+        roomCode: { $regex: new RegExp(`^${cleanCode.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i") },
+      });
       if (!meeting) {
-        // Allow recording even for ad-hoc rooms created via join
-        meeting = await Meeting.create({
-          roomCode: cleanCode,
-          title: `Room ${cleanCode}`,
-          meetingType: "instant",
-          hostId: String(req.user?.sub || req.user?.id || "guest"),
-          hostName: String(req.user?.name || "Host"),
-          hostEmail: String(req.user?.username || ""),
-          hostRole: String(req.user?.role || "employee"),
-          status: "active",
-        });
+        return res.status(404).json({ error: { message: "Meeting not found for this room code" } });
       }
 
       const durationSeconds = Math.max(0, Number(req.body?.durationSeconds) || 0);
@@ -363,7 +391,7 @@ router.post("/", requireAuth, async (req, res, next) => {
     }
 
     const data = parsed.data;
-    const roomCode = generateRoomCode();
+    const roomCode = await allocateUniqueRoomCode();
 
     const hostId = String(req.user?.sub || req.user?.id || "");
     const hostName = String(req.user?.name || "Host");
@@ -374,24 +402,51 @@ router.post("/", requireAuth, async (req, res, next) => {
     const scheduledStartTime = data.scheduledStartTime ? new Date(data.scheduledStartTime) : null;
     const taskId = data.taskId && mongoose.Types.ObjectId.isValid(data.taskId) ? new mongoose.Types.ObjectId(data.taskId) : null;
 
-    const doc = await Meeting.create({
-      roomCode,
-      title: data.title,
-      description: data.description,
-      meetingType: data.meetingType,
-      scheduledStartTime,
-      timezone: data.timezone || "UTC",
-      durationMinutes: data.durationMinutes,
-      hostId,
-      hostName,
-      hostEmail,
-      hostRole,
-      invitedParticipants: data.invitedParticipants,
-      taskId,
-      status,
-      passcode: data.passcode,
-      startedAt: status === "active" ? new Date() : null,
-    });
+    let doc;
+    try {
+      doc = await Meeting.create({
+        roomCode,
+        title: data.title,
+        description: data.description,
+        meetingType: data.meetingType,
+        scheduledStartTime,
+        timezone: data.timezone || "UTC",
+        durationMinutes: data.durationMinutes,
+        hostId,
+        hostName,
+        hostEmail,
+        hostRole,
+        invitedParticipants: data.invitedParticipants,
+        taskId,
+        status,
+        passcode: data.passcode,
+        startedAt: status === "active" ? new Date() : null,
+      });
+    } catch (createErr) {
+      // Rare race on unique index — retry once with a fresh code
+      if (createErr?.code === 11000) {
+        doc = await Meeting.create({
+          roomCode: await allocateUniqueRoomCode(),
+          title: data.title,
+          description: data.description,
+          meetingType: data.meetingType,
+          scheduledStartTime,
+          timezone: data.timezone || "UTC",
+          durationMinutes: data.durationMinutes,
+          hostId,
+          hostName,
+          hostEmail,
+          hostRole,
+          invitedParticipants: data.invitedParticipants,
+          taskId,
+          status,
+          passcode: data.passcode,
+          startedAt: status === "active" ? new Date() : null,
+        });
+      } else {
+        throw createErr;
+      }
+    }
 
     let emailResult = { sent: 0, failed: 0 };
     if (data.meetingType === "scheduled" && Array.isArray(data.invitedParticipants) && data.invitedParticipants.length > 0) {

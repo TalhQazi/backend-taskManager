@@ -11,7 +11,65 @@ function setupMeetingSocket(io) {
     socket.on("meeting:join", async ({ roomCode, userId, name, role, isHost = false }) => {
       if (!roomCode) return;
 
-      const cleanCode = String(roomCode).trim();
+      const requestedCode = String(roomCode).trim();
+      let meeting = null;
+
+      // Only allow joining rooms that exist and are not ended
+      try {
+        meeting = await Meeting.findOne({
+          roomCode: { $regex: new RegExp(`^${requestedCode.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i") },
+        });
+        if (!meeting) {
+          socket.emit("meeting:error", { message: "Meeting not found for this room code." });
+          return;
+        }
+        if (meeting.status === "ended" || meeting.status === "cancelled") {
+          // Allow the host to rejoin the same room (e.g. after Back); others stay blocked
+          const joinerUserIdPreview = String(
+            userId || socket.data?.auth?.employeeId || socket.data?.auth?.sub || ""
+          );
+          const joinerEmailPreview = String(
+            socket.data?.auth?.email || socket.data?.auth?.username || ""
+          ).toLowerCase();
+          const hostRejoining =
+            String(meeting.hostId) === joinerUserIdPreview ||
+            (meeting.hostEmail &&
+              joinerEmailPreview &&
+              String(meeting.hostEmail).toLowerCase() === joinerEmailPreview);
+          if (!hostRejoining) {
+            socket.emit("meeting:error", { message: "This meeting has ended." });
+            return;
+          }
+          meeting.status = "active";
+          meeting.endedAt = null;
+          await meeting.save();
+        }
+      } catch (err) {
+        console.error("[Meeting Socket] Join validation failed:", err.message);
+        socket.emit("meeting:error", { message: "Could not validate meeting room." });
+        return;
+      }
+
+      // Always use the canonical DB room code so case/format mismatches don't split rooms
+      const cleanCode = String(meeting.roomCode);
+      const joinerUserId = String(userId || socket.data?.auth?.employeeId || socket.data?.auth?.sub || socket.id);
+      const joinerEmail = String(
+        socket.data?.auth?.email || socket.data?.auth?.username || ""
+      ).toLowerCase();
+
+      // Host privileges come from DB — never trust client isHost / admin role alone
+      const actualIsHost =
+        String(meeting.hostId) === joinerUserId ||
+        (meeting.hostEmail &&
+          joinerEmail &&
+          String(meeting.hostEmail).toLowerCase() === joinerEmail);
+
+      // Cancel any pending auto-end (host hit Back and is rejoining)
+      if (global.__meetingEmptyTimers?.has(cleanCode)) {
+        clearTimeout(global.__meetingEmptyTimers.get(cleanCode));
+        global.__meetingEmptyTimers.delete(cleanCode);
+      }
+
       socket.join(`meeting:${cleanCode}`);
       joinedRooms.add(cleanCode);
 
@@ -23,10 +81,10 @@ function setupMeetingSocket(io) {
 
       const participantData = {
         socketId: socket.id,
-        userId: String(userId || socket.data?.auth?.employeeId || socket.id),
+        userId: joinerUserId,
         name: String(name || socket.data?.auth?.name || "Participant"),
         role: String(role || socket.data?.auth?.role || "employee"),
-        isHost: Boolean(isHost),
+        isHost: Boolean(actualIsHost),
         audioEnabled: true,
         videoEnabled: true,
         handRaised: false,
@@ -59,51 +117,45 @@ function setupMeetingSocket(io) {
       // Broadcast newcomer to all other participants in the room
       socket.to(`meeting:${cleanCode}`).emit("meeting:user-joined", participantData);
 
-      console.log(`[Meeting Socket] ${participantData.name} (${socket.id}) joined room ${cleanCode}. Total: ${roomParticipants.size}`);
+      console.log(
+        `[Meeting Socket] ${participantData.name} (${socket.id}) joined room ${cleanCode} (host=${actualIsHost}). Total: ${roomParticipants.size}`
+      );
 
       // Update DB meeting status to active if not already + track joiner
       try {
-        const meeting = await Meeting.findOne({ roomCode: cleanCode });
-        if (meeting) {
-          const updates = {};
-          if (["scheduled", "active"].includes(meeting.status)) {
-            updates.status = "active";
-            if (!meeting.startedAt) updates.startedAt = new Date();
-          }
-
-          const joiner = {
-            userId: participantData.userId,
-            name: participantData.name,
-            email: String(socket.data?.auth?.email || socket.data?.auth?.username || ""),
-            role: participantData.role,
-            joinedAt: new Date(),
-            leftAt: null,
-          };
-
-          const existingIdx = (meeting.joinedParticipants || []).findIndex(
-            (j) =>
-              (j.userId && j.userId === joiner.userId) ||
-              (j.name && j.name.toLowerCase() === String(joiner.name).toLowerCase())
-          );
-
-          if (existingIdx >= 0) {
-            meeting.joinedParticipants[existingIdx].leftAt = null;
-            meeting.joinedParticipants[existingIdx].joinedAt = new Date();
-            meeting.joinedParticipants[existingIdx].name = joiner.name;
-            meeting.joinedParticipants[existingIdx].role = joiner.role;
-          } else {
-            if (!Array.isArray(meeting.joinedParticipants)) meeting.joinedParticipants = [];
-            meeting.joinedParticipants.push(joiner);
-          }
-
-          Object.assign(meeting, updates);
-          await meeting.save();
-        } else {
-          await Meeting.updateOne(
-            { roomCode: cleanCode, status: { $in: ["scheduled", "active"] } },
-            { $set: { status: "active", startedAt: new Date() } }
-          );
+        const updates = {};
+        if (["scheduled", "active"].includes(meeting.status)) {
+          updates.status = "active";
+          if (!meeting.startedAt) updates.startedAt = new Date();
         }
+
+        const joiner = {
+          userId: participantData.userId,
+          name: participantData.name,
+          email: joinerEmail,
+          role: participantData.role,
+          joinedAt: new Date(),
+          leftAt: null,
+        };
+
+        const existingIdx = (meeting.joinedParticipants || []).findIndex(
+          (j) =>
+            (j.userId && j.userId === joiner.userId) ||
+            (j.name && j.name.toLowerCase() === String(joiner.name).toLowerCase())
+        );
+
+        if (existingIdx >= 0) {
+          meeting.joinedParticipants[existingIdx].leftAt = null;
+          meeting.joinedParticipants[existingIdx].joinedAt = new Date();
+          meeting.joinedParticipants[existingIdx].name = joiner.name;
+          meeting.joinedParticipants[existingIdx].role = joiner.role;
+        } else {
+          if (!Array.isArray(meeting.joinedParticipants)) meeting.joinedParticipants = [];
+          meeting.joinedParticipants.push(joiner);
+        }
+
+        Object.assign(meeting, updates);
+        await meeting.save();
       } catch (err) {
         console.error("[Meeting Socket] Error updating meeting status:", err.message);
       }
@@ -184,11 +236,21 @@ function setupMeetingSocket(io) {
     socket.on("meeting:host-action", async ({ roomCode, action, targetSocketId }) => {
       if (!roomCode || !action) return;
       const cleanCode = String(roomCode).trim();
-      const roomParticipants = activeRooms.get(cleanCode);
+      // Resolve canonical room key from in-memory maps (case-insensitive)
+      let resolvedCode = cleanCode;
+      if (!activeRooms.has(resolvedCode)) {
+        for (const key of activeRooms.keys()) {
+          if (String(key).toLowerCase() === cleanCode.toLowerCase()) {
+            resolvedCode = key;
+            break;
+          }
+        }
+      }
+      const roomParticipants = activeRooms.get(resolvedCode);
       const actor = roomParticipants?.get(socket.id);
 
-      // Verify host privileges
-      if (!actor?.isHost && actor?.role !== "admin" && actor?.role !== "super-admin") {
+      // Only the real meeting host (not every admin) can control the room
+      if (!actor?.isHost) {
         return socket.emit("meeting:error", { message: "Host permissions required" });
       }
 
@@ -200,7 +262,7 @@ function setupMeetingSocket(io) {
           break;
         }
         case "mute-all": {
-          socket.to(`meeting:${cleanCode}`).emit("meeting:force-mute");
+          socket.to(`meeting:${resolvedCode}`).emit("meeting:force-mute");
           break;
         }
         case "kick-user": {
@@ -208,21 +270,25 @@ function setupMeetingSocket(io) {
             io.to(targetSocketId).emit("meeting:kicked");
             const targetSocket = io.sockets.sockets.get(targetSocketId);
             if (targetSocket) {
-              targetSocket.leave(`meeting:${cleanCode}`);
+              targetSocket.leave(`meeting:${resolvedCode}`);
               if (roomParticipants) roomParticipants.delete(targetSocketId);
-              io.to(`meeting:${cleanCode}`).emit("meeting:user-left", { socketId: targetSocketId });
+              io.to(`meeting:${resolvedCode}`).emit("meeting:user-left", { socketId: targetSocketId });
             }
           }
           break;
         }
         case "end-meeting": {
-          io.to(`meeting:${cleanCode}`).emit("meeting:ended", {
+          io.to(`meeting:${resolvedCode}`).emit("meeting:ended", {
             message: "The host has ended this meeting for all participants.",
           });
-          activeRooms.delete(cleanCode);
+          activeRooms.delete(resolvedCode);
           try {
             await Meeting.updateOne(
-              { roomCode: cleanCode },
+              {
+                roomCode: {
+                  $regex: new RegExp(`^${resolvedCode.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i"),
+                },
+              },
               { $set: { status: "ended", endedAt: new Date() } }
             );
           } catch (err) {
@@ -249,12 +315,12 @@ function setupMeetingSocket(io) {
 
     // User explicitly leaves
     socket.on("meeting:leave", ({ roomCode }) => {
-      handleUserLeave(cleanRoomCode(roomCode));
+      handleUserLeave(roomCode);
     });
 
     // Disconnect cleanup
     socket.on("disconnect", () => {
-      for (const roomCode of joinedRooms) {
+      for (const roomCode of [...joinedRooms]) {
         handleUserLeave(roomCode);
       }
     });
@@ -263,53 +329,107 @@ function setupMeetingSocket(io) {
       return String(code || "").trim();
     }
 
-    function handleUserLeave(cleanCode) {
+    /** Resolve to the canonical in-memory / DB room key (case-insensitive). */
+    function resolveActiveRoomKey(code) {
+      const clean = cleanRoomCode(code);
+      if (!clean) return "";
+      if (activeRooms.has(clean)) return clean;
+      const lower = clean.toLowerCase();
+      for (const key of activeRooms.keys()) {
+        if (String(key).toLowerCase() === lower) return key;
+      }
+      return clean;
+    }
+
+    function cancelPendingEnd(roomKey) {
+      if (global.__meetingEmptyTimers?.has(roomKey)) {
+        clearTimeout(global.__meetingEmptyTimers.get(roomKey));
+        global.__meetingEmptyTimers.delete(roomKey);
+      }
+    }
+
+    function scheduleEndIfStillEmpty(roomKey, meetingId) {
+      if (!global.__meetingEmptyTimers) global.__meetingEmptyTimers = new Map();
+      cancelPendingEnd(roomKey);
+      const timer = setTimeout(async () => {
+        global.__meetingEmptyTimers.delete(roomKey);
+        const still = activeRooms.get(roomKey);
+        if (still && still.size > 0) return;
+        activeRooms.delete(roomKey);
+        if (!meetingId) return;
+        try {
+          await Meeting.updateOne(
+            { _id: meetingId, status: { $ne: "ended" } },
+            { $set: { status: "ended", endedAt: new Date() } }
+          );
+          console.log(`[Meeting Socket] Auto-ended empty room ${roomKey}`);
+        } catch (err) {
+          console.error("[Meeting Socket] Auto-end failed:", err.message);
+        }
+      }, 60 * 1000); // 60s grace — host can rejoin after Back
+      global.__meetingEmptyTimers.set(roomKey, timer);
+    }
+
+    function handleUserLeave(rawCode) {
+      const cleanCode = resolveActiveRoomKey(rawCode);
       if (!cleanCode) return;
       socket.leave(`meeting:${cleanCode}`);
       joinedRooms.delete(cleanCode);
 
       const roomParticipants = activeRooms.get(cleanCode);
-      if (roomParticipants && roomParticipants.has(socket.id)) {
-        const p = roomParticipants.get(socket.id);
-        roomParticipants.delete(socket.id);
+      if (!roomParticipants || !roomParticipants.has(socket.id)) {
+        // Also try other case variants for this socket
+        return;
+      }
 
-        io.to(`meeting:${cleanCode}`).emit("meeting:user-left", {
-          socketId: socket.id,
-          userId: p.userId,
-          name: p.name,
-        });
+      const p = roomParticipants.get(socket.id);
+      roomParticipants.delete(socket.id);
 
-        console.log(`[Meeting Socket] ${p.name} left room ${cleanCode}. Remaining: ${roomParticipants.size}`);
+      io.to(`meeting:${cleanCode}`).emit("meeting:user-left", {
+        socketId: socket.id,
+        userId: p.userId,
+        name: p.name,
+      });
 
-        // Mark joiner leftAt in DB
-        Meeting.findOne({ roomCode: cleanCode })
-          .then(async (meeting) => {
-            if (!meeting) return;
-            const idx = (meeting.joinedParticipants || []).findIndex(
-              (j) =>
-                (j.userId && j.userId === p.userId && !j.leftAt) ||
-                (j.name && j.name.toLowerCase() === String(p.name).toLowerCase() && !j.leftAt)
-            );
-            if (idx >= 0) {
-              meeting.joinedParticipants[idx].leftAt = new Date();
-            }
+      console.log(`[Meeting Socket] ${p.name} left room ${cleanCode}. Remaining: ${roomParticipants.size}`);
 
-            if (roomParticipants.size === 0) {
-              activeRooms.delete(cleanCode);
-              if (meeting.status !== "ended") {
-                meeting.status = "ended";
-                meeting.endedAt = new Date();
-              }
+      Meeting.findOne({
+        roomCode: { $regex: new RegExp(`^${cleanCode.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i") },
+      })
+        .then(async (meeting) => {
+          if (!meeting) return;
+
+          const idx = (meeting.joinedParticipants || []).findIndex(
+            (j) =>
+              (j.userId && j.userId === p.userId && !j.leftAt) ||
+              (j.name && j.name.toLowerCase() === String(p.name).toLowerCase() && !j.leftAt)
+          );
+          if (idx >= 0) {
+            meeting.joinedParticipants[idx].leftAt = new Date();
+          }
+
+          // IMPORTANT: leaving/back must NOT instantly end the meeting.
+          // Employee may still be in the room; host must be able to rejoin the same code.
+          if (roomParticipants.size === 0) {
+            // Keep status "active" during grace; only then mark ended
+            await meeting.save();
+            scheduleEndIfStillEmpty(cleanCode, meeting._id);
+          } else {
+            cancelPendingEnd(cleanCode);
+            // Ensure meeting stays active while anyone remains
+            if (meeting.status !== "active" && meeting.status !== "ended") {
+              meeting.status = "active";
             }
             await meeting.save();
-          })
-          .catch((err) => {
-            console.error("[Meeting Socket] Error updating leave/end:", err.message);
-            if (roomParticipants.size === 0) {
-              activeRooms.delete(cleanCode);
-            }
-          });
-      }
+          }
+        })
+        .catch((err) => {
+          console.error("[Meeting Socket] Error updating leave:", err.message);
+          if (roomParticipants.size === 0) {
+            // still schedule cleanup of memory map later
+            scheduleEndIfStillEmpty(cleanCode, null);
+          }
+        });
     }
   });
 }
