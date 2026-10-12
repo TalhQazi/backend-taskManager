@@ -13,7 +13,7 @@ const checklistItemSchema = new mongoose.Schema(
     description: { type: String, default: "" },
     status: {
       type: String,
-      enum: ["pending", "in-progress", "completed", "blocked"],
+      enum: ["pending", "in-progress", "completed", "blocked", "na"],
       default: "pending",
       index: true,
     },

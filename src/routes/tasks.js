@@ -696,8 +696,8 @@ router.get("/:id/dropbox-attachments", requireAuth, async (req, res, next) => {
 router.post("/", requireAuth, async (req, res, next) => {
   try {
     const role = String(req.user?.role || "").toLowerCase().trim();
-    if (role !== "admin" && role !== "super-admin") {
-      return res.status(403).json({ error: { message: "Only administrators are permitted to create tasks." } });
+    if (role !== "admin" && role !== "super-admin" && role !== "manager" && role !== "team-lead") {
+      return res.status(403).json({ error: { message: "Only administrators and managers are permitted to create tasks." } });
     }
 
     if (!req.body?.title || !String(req.body.title).trim()) {
@@ -851,6 +851,12 @@ router.post("/", requireAuth, async (req, res, next) => {
       obj.dropboxAttachments = savedDropboxAttachments;
     }
 
+    // Invalidate project and task caches so immediate reload sees the new task
+    if (created.projectId) {
+      await cacheDel(`project:${created.projectId}`).catch(() => {});
+    }
+    await cacheDel("tasks:list:*").catch(() => {});
+
     // Fire-and-forget side effects (don't block response)
     Promise.allSettled([
       checkAndFlagOffTheClock({
@@ -878,7 +884,6 @@ router.post("/", requireAuth, async (req, res, next) => {
         }
       }),
       cacheDel("tasks:list:*"),
-      created.projectId ? cacheDel(`project:${created.projectId}`) : Promise.resolve(),
       // Track contributor
       contributionTracker.trackTaskCreation(created, {
         userId: String(req.user?.sub || ""),

@@ -40,12 +40,14 @@ const CORE_REQ_MAP = {
 function coreStatusToChecklistStatus(val) {
   if (val === "green" || val === "completed" || val === "passed") return "completed";
   if (val === "red" || val === "blocked" || val === "failed") return "blocked";
+  if (val === "na") return "na";
   return "pending";
 }
 
 function checklistStatusToCoreStatus(status) {
   if (status === "completed" || status === "green" || status === "passed") return "green";
   if (status === "blocked" || status === "red" || status === "failed") return "red";
+  if (status === "na") return "na";
   return "none";
 }
 
@@ -62,7 +64,7 @@ async function updateAndGetWebsiteReadinessScore(websiteId) {
 
   if (totalItems === 0) {
     const coreKeys = Object.keys(CORE_REQ_MAP);
-    const completedCount = coreKeys.filter(k => website[k] === "green" || website[k] === "completed").length;
+    const completedCount = coreKeys.filter(k => website[k] === "green" || website[k] === "completed" || website[k] === "na").length;
     const readinessScore = Math.round((completedCount / coreKeys.length) * 100);
     if (website.readinessScore !== readinessScore) {
       website.readinessScore = readinessScore;
@@ -73,7 +75,7 @@ async function updateAndGetWebsiteReadinessScore(websiteId) {
 
   const completedItems = await ChecklistItem.countDocuments({
     websiteId,
-    status: { $in: ["completed", "green", "passed"] },
+    status: { $in: ["completed", "green", "passed", "na"] },
   });
 
   const readinessScore = totalItems > 0 ? Math.round((completedItems / totalItems) * 100) : 0;
@@ -326,7 +328,7 @@ router.put("/:id/compliance/:itemId", requireAuth, async (req, res, next) => {
     // Update item
     if (status !== undefined) {
       item.status = status;
-      if (status === "completed") {
+      if (status === "completed" || status === "na") {
         item.completedBy = req.user?.username || "System";
         item.completedAt = new Date();
       } else {

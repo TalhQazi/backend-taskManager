@@ -35,6 +35,53 @@ const isExpiringExpiringSoon = (expirationDate) => {
   return daysUntilExpiration <= 60 && daysUntilExpiration > 0;
 };
 
+// Helper function to resolve explicit or deduced expiration reason and diagnostic details
+const resolveExpirationDiagnostics = (patent) => {
+  let reason = patent.expirationReason || "";
+  let reasonDetail = patent.expirationReasonDetail || "";
+  const feeStatus = patent.feeStatus || "na";
+  const feeAmount = Number(patent.feeAmount) || 0;
+  const feeDueDate = patent.feeDueDate || null;
+  const paperworkStatus = patent.paperworkStatus || "na";
+  const paperworkDetails = patent.paperworkDetails || "";
+
+  if (!reason) {
+    if (patent.filingType === "Provisional") {
+      reason = "one-year-clock";
+      if (!reasonDetail) {
+        reasonDetail = "1-Year Provisional Application Clock Expiring. Under 35 U.S.C. 119(e), a corresponding non-provisional application must be filed within 12 months to claim priority.";
+      }
+    } else if (feeStatus === "pending" || feeStatus === "overdue") {
+      reason = "fees";
+      if (!reasonDetail) {
+        reasonDetail = "Maintenance / government renewal fees are pending or overdue. Unpaid fees will result in patent lapse.";
+      }
+    } else if (paperworkStatus === "pending" || paperworkStatus === "missing") {
+      reason = "paperwork";
+      if (!reasonDetail) {
+        reasonDetail = "Required legal paperwork, declarations, or conversion documents are missing or pending completion.";
+      }
+    } else {
+      reason = patent.filingType === "Provisional" ? "one-year-clock" : "fees";
+      if (!reasonDetail) {
+        reasonDetail = reason === "one-year-clock"
+          ? "1-Year Provisional Application Clock Expiring."
+          : "Maintenance or government renewal fee deadline approaching.";
+      }
+    }
+  }
+
+  return {
+    expirationReason: reason,
+    expirationReasonDetail: reasonDetail,
+    feeStatus,
+    feeAmount,
+    feeDueDate,
+    paperworkStatus,
+    paperworkDetails,
+  };
+};
+
 // Helper to notify all active Admins & Super-Admins when a patent is filed
 async function notifyAdminsAboutFiledPatent(patent) {
   try {
@@ -87,6 +134,7 @@ router.get("/expiration-watch", async (req, res, next) => {
           ...patent,
           provisionalExpiration: expiration,
           daysUntilExpiration,
+          ...resolveExpirationDiagnostics(patent),
         };
       })
       .filter(
@@ -125,6 +173,7 @@ router.get("/filed", async (req, res, next) => {
         provisionalExpiration: expiration,
         isExpiringExpiringSoon: isExpiring,
         daysUntilExpiration,
+        ...resolveExpirationDiagnostics(patent),
       };
     });
 
@@ -300,6 +349,7 @@ router.get("/:id", async (req, res, next) => {
           ...patent,
           provisionalExpiration: expiration,
           isExpiringExpiringSoon: isExpiringExpiringSoon(expiration),
+          ...resolveExpirationDiagnostics(patent),
         },
       });
     }
@@ -366,7 +416,14 @@ router.put("/filed/:id", requireAuth, async (req, res, next) => {
     if (!patent) return res.status(404).json({ error: { message: "Patent not found" } });
     const expiration = calculateExpiration(patent.filingDate, patent.filingType, patent.provisionalExpiration);
 
-    res.json({ item: { ...patent.toObject(), provisionalExpiration: expiration, isExpiringExpiringSoon: isExpiringExpiringSoon(expiration) } });
+    res.json({
+      item: {
+        ...patent.toObject(),
+        provisionalExpiration: expiration,
+        isExpiringExpiringSoon: isExpiringExpiringSoon(expiration),
+        ...resolveExpirationDiagnostics(patent.toObject()),
+      },
+    });
   } catch (err) { next(err); }
 });
 
@@ -457,6 +514,7 @@ router.put("/:id", requireAuth, async (req, res, next) => {
           ...patent.toObject(),
           provisionalExpiration: expiration,
           isExpiringExpiringSoon: isExpiringExpiringSoon(expiration),
+          ...resolveExpirationDiagnostics(patent.toObject()),
         },
       });
     }
