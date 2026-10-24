@@ -687,6 +687,14 @@ async function logActivity(req, action, resourceType, resourceId, resourceName, 
   }
 }
 
+const workAssignmentCtrl = require("../controllers/workAssignmentController");
+const { attachActor } = require("../middleware/wipPermissions");
+
+// Live Workforce Command Center & Employee Live View
+router.get("/live", requireAuth, attachActor, workAssignmentCtrl.getLiveOverview);
+router.get("/:employeeId/live", requireAuth, attachActor, workAssignmentCtrl.getEmployeeLive);
+router.get("/:employeeId/activity", requireAuth, attachActor, workAssignmentCtrl.getEmployeeActivity);
+
 router.get("/", requireAuth, async (req, res, next) => {
   try {
     const includeInactive = req.query?.includeInactive === "true";

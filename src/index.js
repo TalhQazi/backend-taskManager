@@ -623,6 +623,8 @@ app.use("/api/dashboard/wip", dashboardRouter);
 app.use("/api/work-sessions", sessionRouter);
 app.use("/api/blockers", blockerRouter);
 app.use("/api/tasks", taskRouter);
+app.use("/api/assignments", require("./routes/assignments"));
+app.use("/assignments", require("./routes/assignments"));
 
 app.use(notFoundHandler);
 app.use(errorHandler);

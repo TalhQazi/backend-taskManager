@@ -23,6 +23,7 @@ const WorkSessionSchema = new mongoose.Schema(
     employeeName: { type: String, default: "" },
     department: { type: String, default: "", index: true },
 
+    assignmentId: { type: mongoose.Schema.Types.ObjectId, ref: "WorkAssignment", default: null, index: true },
     taskId: { type: mongoose.Schema.Types.ObjectId, ref: "Task", required: true, index: true },
     taskTitle: { type: String, default: "" },
 
