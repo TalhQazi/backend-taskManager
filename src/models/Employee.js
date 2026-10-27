@@ -84,6 +84,57 @@ const EmployeeSchema = new mongoose.Schema(
       currency: { type: String, default: "USD" },
       effectiveDate: { type: Date, default: null },
     },
+    // Employee Compliance Center Checklist
+    complianceChecklist: {
+      drivLic: {
+        status: { type: String, enum: ["missing", "pending", "verified", "na"], default: "missing" },
+        fileUrl: { type: String, default: "" },
+        updatedBy: { type: String, default: "" },
+        updatedAt: { type: Date, default: null },
+        notes: { type: String, default: "" },
+      },
+      ssCard: {
+        status: { type: String, enum: ["missing", "pending", "verified", "na"], default: "missing" },
+        fileUrl: { type: String, default: "" },
+        updatedBy: { type: String, default: "" },
+        updatedAt: { type: Date, default: null },
+        notes: { type: String, default: "" },
+      },
+      email: {
+        status: { type: String, enum: ["missing", "pending", "verified", "na"], default: "missing" },
+        value: { type: String, default: "" },
+        updatedBy: { type: String, default: "" },
+        updatedAt: { type: Date, default: null },
+        notes: { type: String, default: "" },
+      },
+      phoneNumber: {
+        status: { type: String, enum: ["missing", "pending", "verified", "na"], default: "missing" },
+        value: { type: String, default: "" },
+        updatedBy: { type: String, default: "" },
+        updatedAt: { type: Date, default: null },
+        notes: { type: String, default: "" },
+      },
+      signedDocs: {
+        status: { type: String, enum: ["missing", "pending", "verified", "na"], default: "missing" },
+        docCount: { type: Number, default: 0 },
+        updatedBy: { type: String, default: "" },
+        updatedAt: { type: Date, default: null },
+        notes: { type: String, default: "" },
+      },
+      eVerify: {
+        status: { type: String, enum: ["missing", "pending", "verified", "na"], default: "missing" },
+        caseNumber: { type: String, default: "" },
+        updatedBy: { type: String, default: "" },
+        updatedAt: { type: Date, default: null },
+        notes: { type: String, default: "" },
+      },
+      downloadedApps: {
+        status: { type: String, enum: ["missing", "pending", "verified", "na"], default: "missing" },
+        updatedBy: { type: String, default: "" },
+        updatedAt: { type: Date, default: null },
+        notes: { type: String, default: "" },
+      },
+    },
   },
   { timestamps: true }
 );

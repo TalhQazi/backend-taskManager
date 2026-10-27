@@ -6,6 +6,7 @@ const LocationSchema = new mongoose.Schema(
     type: { type: String, enum: ["office", "warehouse", "facility", "site"], required: true },
     address: { type: String, default: "" },
     city: { type: String, required: true },
+    state: { type: String, default: "", index: true },
     country: { type: String, default: "" },
     phone: { type: String, default: "" },
     manager: { type: String, default: "" },
@@ -21,14 +22,27 @@ const LocationSchema = new mongoose.Schema(
         url: { type: String, default: "" },
       },
     ],
+    documents: [
+      {
+        fileName: { type: String, default: "" },
+        url: { type: String, default: "" },
+        fileType: { type: String, default: "" },
+        size: { type: Number, default: 0 },
+        uploadedAt: { type: Date, default: Date.now },
+      },
+    ],
     complianceChecklist: {
       water: {
         status: { type: String, default: "Pending" },
         notes: { type: String, default: "" },
+        updatedBy: { type: String, default: "" },
+        updatedAt: { type: Date },
       },
       power: {
         status: { type: String, default: "Pending" },
         notes: { type: String, default: "" },
+        updatedBy: { type: String, default: "" },
+        updatedAt: { type: Date },
       },
       townPermitDemo: {
         status: { type: String, default: "Pending" },

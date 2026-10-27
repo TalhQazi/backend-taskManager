@@ -55,6 +55,22 @@ const BugReportSchema = new mongoose.Schema(
     },
     company: { type: String, default: "" },
     module: { type: String, default: "" },
+    websiteName: { type: String, default: "" },
+    websiteUrl: { type: String, default: "" },
+    pageUrl: { type: String, default: "" },
+    reporterName: { type: String, default: "" },
+    reporterEmail: { type: String, default: "" },
+    originType: {
+      type: String,
+      enum: ["INTERNAL", "EXTERNAL"],
+      default: "INTERNAL",
+    },
+    browserInfo: {
+      userAgent: { type: String, default: "" },
+      screenResolution: { type: String, default: "" },
+      language: { type: String, default: "" },
+      platform: { type: String, default: "" },
+    },
     assignedDeveloperId: { type: String, default: "" },
     assignedDeveloperName: { type: String, default: "" },
     createdByUserId: { type: String, default: "" },
@@ -95,6 +111,8 @@ BugReportSchema.index({ severity: 1, priority: 1 });
 BugReportSchema.index({ company: 1, module: 1 });
 BugReportSchema.index({ createdByUsername: 1 });
 BugReportSchema.index({ assignedDeveloperName: 1 });
+BugReportSchema.index({ websiteName: 1 });
+BugReportSchema.index({ originType: 1 });
 BugReportSchema.index({ createdAt: -1 });
 
 module.exports = mongoose.model("BugReport", BugReportSchema);

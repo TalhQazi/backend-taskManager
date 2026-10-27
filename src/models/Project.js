@@ -4,6 +4,7 @@ const ProjectSchema = new mongoose.Schema(
   {
     name: { type: String, required: true, trim: true, index: true },
     description: { type: String, default: "" },
+    category: { type: String, default: "", index: true },
     assignees: { type: [String], default: [], index: true },
     teamLead: { type: String, default: "", index: true },
     logo: {

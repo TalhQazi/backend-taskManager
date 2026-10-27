@@ -431,11 +431,73 @@ router.get("/tasks/:taskId", requireAuth, async (req, res, next) => {
   }
 });
 
-// GET /api/cost-manager/sheets — get all cost sheets
+// GET /api/cost-manager/sheets — get all cost sheets with completion and progress summaries
 router.get("/sheets", requireAuth, async (req, res, next) => {
   try {
-    const sheets = await CostSheet.find({}).sort({ createdAt: -1 }).lean();
-    res.json({ items: sheets });
+    const rawSheets = await CostSheet.find({}).sort({ createdAt: -1 }).lean();
+    const sheetIds = rawSheets.map((s) => s._id);
+
+    // Fetch line items for all sheets in a single query
+    const allItems = await CostLineItem.find({
+      sheetId: { $in: sheetIds },
+      isActive: { $ne: false },
+    }).lean();
+
+    // Group items by sheetId
+    const itemsBySheet = {};
+    for (const item of allItems) {
+      const sId = String(item.sheetId);
+      if (!itemsBySheet[sId]) itemsBySheet[sId] = [];
+      itemsBySheet[sId].push(item);
+    }
+
+    const enhancedSheets = rawSheets.map((sheet) => {
+      const items = itemsBySheet[String(sheet._id)] || [];
+      const itemCount = items.length;
+      const projectedCents = items.reduce((sum, i) => sum + (i.estimatedTotalCents || 0), 0);
+      const spentCents = items.reduce((sum, i) => sum + (i.paidCents || 0), 0);
+
+      const purchasedCount = items.filter((i) =>
+        ["purchased", "shipped", "received", "stored"].includes(i.purchaseStatus)
+      ).length;
+
+      const isDone =
+        sheet.quoteStatus === "accepted" ||
+        (itemCount > 0 && purchasedCount === itemCount);
+
+      const isStarted =
+        itemCount > 0 ||
+        spentCents > 0 ||
+        sheet.quoteStatus === "submitted" ||
+        sheet.quoteStatus === "accepted" ||
+        (sheet.availableBudgetCents > 0 && itemCount > 0);
+
+      const status = isDone ? "done" : isStarted ? "started" : "not-started";
+
+      return {
+        ...sheet,
+        itemCount,
+        purchasedCount,
+        projectedCents,
+        spentCents,
+        isStarted,
+        isDone,
+        status,
+      };
+    });
+
+    const filterStatus = String(req.query.status || "").toLowerCase().trim();
+    let resultItems = enhancedSheets;
+    if (filterStatus === "done") {
+      resultItems = enhancedSheets.filter((s) => s.isDone);
+    } else if (filterStatus === "started") {
+      // "At least started": includes both started and done
+      resultItems = enhancedSheets.filter((s) => s.isStarted || s.isDone);
+    } else if (filterStatus === "not-started") {
+      resultItems = enhancedSheets.filter((s) => !s.isStarted && !s.isDone);
+    }
+
+    res.json({ items: resultItems });
   } catch (err) {
     next(err);
   }

@@ -98,6 +98,7 @@ const logoSchema = z.object({
 const projectCreateSchema = z.object({
   name: z.string().min(1, "Project name is required"),
   description: z.string().optional().default(""),
+  category: z.string().optional().default(""),
   assignees: z.array(z.string()).optional().default([]),
   teamLead: z.string().optional().default(""),
   introVideoUrl: z.string().optional().default(""),
@@ -323,9 +324,19 @@ router.get("/", requireAuth, async (req, res, next) => {
           $or: [
             { name: searchRegex }, 
             { description: searchRegex },
+            { category: searchRegex },
             { assignees: { $elemMatch: { $regex: searchRegex } } }
           ] 
         } 
+      });
+    }
+
+    const categoryFilter = String(req.query.category || "").trim();
+    if (categoryFilter && categoryFilter.toLowerCase() !== "all") {
+      matchStages.push({
+        $match: {
+          category: { $regex: new RegExp(`^${escapeRegExp(categoryFilter)}$`, "i") }
+        }
       });
     }
 
@@ -518,6 +529,29 @@ router.get("/", requireAuth, async (req, res, next) => {
   }
 });
 
+// GET distinct project categories
+router.get("/categories", requireAuth, async (_req, res, next) => {
+  try {
+    const rawCategories = await Project.distinct("category");
+    const cleaned = Array.from(new Set(
+      rawCategories
+        .map((c) => String(c || "").trim())
+        .filter(Boolean)
+    )).sort();
+    // Include common categories if not already present
+    const standardCategories = ["Location", "Mechanical", "Medical", "Software", "Hardware", "Marketing"];
+    for (const std of standardCategories) {
+      if (!cleaned.some(c => c.toLowerCase() === std.toLowerCase())) {
+        cleaned.push(std);
+      }
+    }
+    cleaned.sort();
+    res.json({ categories: cleaned });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // GET project logo only (avoids sending large base64 in list endpoint)
 router.get("/:id/logo", requireAuth, async (req, res, next) => {
   try {
@@ -673,6 +707,7 @@ router.get("/:id", requireAuth, async (req, res, next) => {
             },
             tasks: 1,
             taskCount: 1,
+            category: 1,
             status: 1,
             createdAt: 1,
             createdByUserId: 1,
@@ -702,6 +737,7 @@ router.get("/:id", requireAuth, async (req, res, next) => {
 const projectUpdateSchema = z.object({
   name: z.string().min(1, "Project name is required").optional(),
   description: z.string().optional(),
+  category: z.string().optional(),
   assignees: z.array(z.string()).optional(),
   teamLead: z.string().optional(),
   introVideoUrl: z.string().optional(),

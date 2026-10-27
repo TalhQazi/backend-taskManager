@@ -34,6 +34,15 @@ const handlePost = (Model) => async (req, res) => {
   try { const item = new Model(req.body); await item.save(); res.json({ success: true, item }); } 
   catch (error) { res.status(500).json({ success: false, message: error.message }); }
 };
+const handlePut = (Model) => async (req, res) => {
+  try {
+    const item = await Model.findByIdAndUpdate(req.params.id, req.body, { new: true });
+    if (!item) return res.status(404).json({ success: false, message: "Item not found" });
+    res.json({ success: true, item });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
 
 // --- CORE ROUTES ---
 router.get("/properties", requireAuth, handleGet(Property, "company"));
@@ -62,6 +71,8 @@ router.get("/invoices", requireAuth, handleGet(Invoice, "tenant company companyL
 router.post("/invoices", requireAuth, handlePost(Invoice));
 router.get("/tenants", requireAuth, handleGet(Tenant, "company"));
 router.post("/tenants", requireAuth, handlePost(Tenant));
+router.put("/tenants/:id", requireAuth, handlePut(Tenant));
+router.patch("/tenants/:id", requireAuth, handlePut(Tenant));
 // Soft-delete: move tenant to Archive, then remove from active list
 router.delete("/tenants/:id", requireAuth, async (req, res) => {
   try {

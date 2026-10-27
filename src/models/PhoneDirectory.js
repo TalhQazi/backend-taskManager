@@ -88,6 +88,34 @@ const PhoneDirectorySchema = new mongoose.Schema(
       type: String,
       default: "",
     },
+    // Banking Details (Super-Admin only & Password protected)
+    bankName: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+    accountNo: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+    accountNumberEncrypted: {
+      type: String,
+      default: "",
+    },
+    accountNumberMasked: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+    hasBankDetails: {
+      type: Boolean,
+      default: false,
+    },
+    bankPasswordHash: {
+      type: String,
+      default: "",
+    },
     createdBy: {
       type: String,
       default: "",

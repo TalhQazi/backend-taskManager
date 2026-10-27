@@ -1,10 +1,14 @@
 const express = require("express");
 const { z } = require("zod");
 const mongoose = require("mongoose");
+const bcrypt = require("bcryptjs");
 
 const PhoneDirectory = require("../models/PhoneDirectory");
 const Location = require("../models/Location");
 const ActivityLog = require("../models/ActivityLog");
+const User = require("../models/User");
+const Employee = require("../models/Employee");
+const { encryptField, decryptField } = require("../utils/encryption");
 const { createNotification } = require("../utils/notifications");
 const { requireAuth } = require("../middleware/auth");
 
@@ -27,6 +31,37 @@ async function logActivity(req, action, resourceId, resourceName, description) {
   } catch (err) {
     console.error("PhoneDirectory activity log error:", err.message);
   }
+}
+
+// Sanitization helper: Protect sensitive bank information. Only Super Admin has access,
+// and the raw account number is kept masked until verified with password reveal.
+function formatDirectoryContact(doc, isSuperAdmin) {
+  const base = {
+    ...doc,
+    id: String(doc._id),
+    location: doc.locationId || null,
+  };
+
+  // Strip cryptographic secrets
+  delete base.bankPasswordHash;
+  delete base.accountNumberEncrypted;
+
+  if (!isSuperAdmin) {
+    // Non-super-admins cannot see any bank details
+    delete base.bankName;
+    delete base.accountNo;
+    delete base.accountNumberMasked;
+    base.hasBankDetails = false;
+  } else {
+    // Super-admins see bank name and masked account number
+    base.hasBankDetails = Boolean(doc.bankName || doc.accountNumberMasked || doc.accountNumberEncrypted);
+    base.bankName = doc.bankName || "";
+    base.accountNumberMasked = doc.accountNumberMasked || (doc.accountNumberEncrypted ? "••••••••" : "");
+    // Raw plain accountNo is NOT exposed in general queries; requires /reveal-bank endpoint
+    delete base.accountNo;
+  }
+
+  return base;
 }
 
 const CATEGORIES = [
@@ -71,6 +106,9 @@ const phoneDirectorySchema = z.object({
   status: z.enum(["active", "inactive"]).optional().default("active"),
   operatingHours: z.string().optional().default("24/7"),
   notes: z.string().optional().default(""),
+  bankName: z.string().optional().default(""),
+  accountNo: z.string().optional().default(""),
+  bankPassword: z.string().optional().default(""),
 });
 
 const updatePhoneDirectorySchema = phoneDirectorySchema.partial();
@@ -193,11 +231,8 @@ router.get("/", requireAuth, async (req, res, next) => {
       return String(a.name || "").localeCompare(String(b.name || ""));
     });
 
-    const formatted = items.map((doc) => ({
-      ...doc,
-      id: String(doc._id),
-      location: doc.locationId || null,
-    }));
+    const isSuperAdmin = req.user?.role === "super-admin";
+    const formatted = items.map((doc) => formatDirectoryContact(doc, isSuperAdmin));
 
     res.json({ items: formatted });
   } catch (err) {
@@ -233,12 +268,9 @@ router.get("/by-location/:locationId", requireAuth, async (req, res, next) => {
       return String(a.name || "").localeCompare(String(b.name || ""));
     });
 
+    const isSuperAdmin = req.user?.role === "super-admin";
     res.json({
-      items: items.map((doc) => ({
-        ...doc,
-        id: String(doc._id),
-        location: doc.locationId || null,
-      })),
+      items: items.map((doc) => formatDirectoryContact(doc, isSuperAdmin)),
     });
   } catch (err) {
     next(err);
@@ -254,7 +286,8 @@ router.get("/:id", requireAuth, async (req, res, next) => {
     if (!item) {
       return res.status(404).json({ error: { message: "Phone directory entry not found" } });
     }
-    res.json({ item: { ...item, id: String(item._id) } });
+    const isSuperAdmin = req.user?.role === "super-admin";
+    res.json({ item: formatDirectoryContact(item, isSuperAdmin) });
   } catch (err) {
     next(err);
   }
@@ -274,6 +307,49 @@ router.post("/", requireAuth, async (req, res, next) => {
     }
 
     const data = { ...parsed.data };
+    const isSuperAdmin = req.user?.role === "super-admin";
+
+    // Banking Details authorization check
+    if (data.bankName || data.accountNo || data.bankPassword) {
+      if (!isSuperAdmin) {
+        return res.status(403).json({
+          error: { message: "Access denied. Only Super Admin can configure bank account details." },
+        });
+      }
+    }
+
+    // Process Bank & Account Information
+    if (isSuperAdmin && data.accountNo && String(data.accountNo).trim()) {
+      const raw = String(data.accountNo).trim();
+      data.accountNo = ""; // Never store plain account number in plain text
+      data.accountNumberMasked = raw.length > 4 ? `•••• ${raw.slice(-4)}` : "••••••••";
+      try {
+        data.accountNumberEncrypted = encryptField(raw);
+      } catch (encErr) {
+        console.error("Encryption error for accountNo:", encErr.message);
+        data.accountNumberEncrypted = "";
+      }
+      data.hasBankDetails = true;
+    } else {
+      data.accountNo = "";
+      data.accountNumberMasked = "";
+      data.accountNumberEncrypted = "";
+      data.hasBankDetails = isSuperAdmin ? Boolean(data.bankName && data.bankName.trim()) : false;
+    }
+
+    if (isSuperAdmin && data.bankPassword && String(data.bankPassword).trim()) {
+      data.bankPasswordHash = await bcrypt.hash(String(data.bankPassword).trim(), 10);
+    }
+    delete data.bankPassword;
+
+    if (!isSuperAdmin) {
+      delete data.bankName;
+      delete data.accountNo;
+      delete data.accountNumberMasked;
+      delete data.accountNumberEncrypted;
+      delete data.bankPasswordHash;
+      data.hasBankDetails = false;
+    }
 
     // Resolve location name if locationId provided
     if (data.isAllLocations) {
@@ -302,7 +378,9 @@ router.post("/", requireAuth, async (req, res, next) => {
       "PHONE_DIRECTORY_CREATE",
       created._id,
       created.name,
-      `Created directory contact "${created.name}" (${created.category}: ${created.phoneNumber})`
+      `Created directory contact "${created.name}" (${created.category}: ${created.phoneNumber})${
+        created.hasBankDetails ? " [Includes Protected Banking Details]" : ""
+      }`
     );
 
     // Create notification
@@ -316,7 +394,7 @@ router.post("/", requireAuth, async (req, res, next) => {
       resourceId: String(created._id),
     });
 
-    res.status(201).json({ item: { ...populated, id: String(populated._id) } });
+    res.status(201).json({ item: formatDirectoryContact(populated, isSuperAdmin) });
   } catch (err) {
     next(err);
   }
@@ -336,6 +414,61 @@ router.put("/:id", requireAuth, async (req, res, next) => {
     }
 
     const data = { ...parsed.data };
+    const isSuperAdmin = req.user?.role === "super-admin";
+
+    // Restrict editing bank information to super-admin
+    if (
+      (data.bankName !== undefined && data.bankName !== "") ||
+      (data.accountNo !== undefined && data.accountNo !== "") ||
+      data.bankPassword !== undefined
+    ) {
+      if (!isSuperAdmin) {
+        return res.status(403).json({
+          error: { message: "Access denied. Only Super Admin can edit bank account details." },
+        });
+      }
+    }
+
+    // Process Bank & Account Information
+    if (data.accountNo !== undefined) {
+      if (!isSuperAdmin) {
+        delete data.accountNo;
+      } else if (data.accountNo && String(data.accountNo).trim()) {
+        const raw = String(data.accountNo).trim();
+        data.accountNo = "";
+        data.accountNumberMasked = raw.length > 4 ? `•••• ${raw.slice(-4)}` : "••••••••";
+        try {
+          data.accountNumberEncrypted = encryptField(raw);
+        } catch (encErr) {
+          console.error("Encryption error for accountNo:", encErr.message);
+          data.accountNumberEncrypted = "";
+        }
+        data.hasBankDetails = true;
+      } else {
+        // Explicitly cleared
+        data.accountNo = "";
+        data.accountNumberMasked = "";
+        data.accountNumberEncrypted = "";
+        data.hasBankDetails = Boolean(data.bankName && String(data.bankName).trim());
+      }
+    }
+
+    if (data.bankPassword !== undefined) {
+      if (isSuperAdmin && String(data.bankPassword).trim()) {
+        data.bankPasswordHash = await bcrypt.hash(String(data.bankPassword).trim(), 10);
+      } else if (isSuperAdmin && data.bankPassword === "") {
+        data.bankPasswordHash = "";
+      }
+      delete data.bankPassword;
+    }
+
+    if (!isSuperAdmin) {
+      delete data.bankName;
+      delete data.accountNo;
+      delete data.accountNumberMasked;
+      delete data.accountNumberEncrypted;
+      delete data.bankPasswordHash;
+    }
 
     // Update location name if location changed
     if (data.isAllLocations) {
@@ -372,7 +505,97 @@ router.put("/:id", requireAuth, async (req, res, next) => {
       `Updated directory contact "${updated.name}"`
     );
 
-    res.json({ item: { ...updated, id: String(updated._id) } });
+    res.json({ item: formatDirectoryContact(updated, isSuperAdmin) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /api/phone-directory/:id/reveal-bank - Step-Up Reveal Bank Details (Password Protected - Super Admin Only)
+router.post("/:id/reveal-bank", requireAuth, async (req, res, next) => {
+  try {
+    if (req.user?.role !== "super-admin") {
+      return res.status(403).json({
+        error: { message: "Access denied. Only Super Admin is authorized to reveal banking details." },
+      });
+    }
+
+    const { password } = req.body;
+    if (!password || !String(password).trim()) {
+      return res.status(400).json({
+        error: { message: "Administrator password is required to reveal banking details." },
+      });
+    }
+
+    const contact = await PhoneDirectory.findById(req.params.id);
+    if (!contact) {
+      return res.status(404).json({ error: { message: "Phone directory entry not found." } });
+    }
+
+    // Verify requesting Super Admin's password
+    const actorUserId = req.user.sub || req.user.id || req.user._id;
+    let actorUser = await User.findById(actorUserId);
+    if (!actorUser) {
+      actorUser = await Employee.findById(actorUserId);
+    }
+
+    let passwordMatch = false;
+    if (actorUser && actorUser.passwordHash) {
+      passwordMatch = await bcrypt.compare(String(password).trim(), actorUser.passwordHash);
+    }
+
+    // Also accept entry-specific custom bank protection password if one was set
+    if (!passwordMatch && contact.bankPasswordHash) {
+      passwordMatch = await bcrypt.compare(String(password).trim(), contact.bankPasswordHash);
+    }
+
+    if (!passwordMatch) {
+      await ActivityLog.create({
+        actorUserId: String(actorUserId),
+        actorUsername: req.user.name || req.user.username || "Super Admin",
+        actorRole: req.user.role,
+        action: "PHONE_DIRECTORY_BANK_REVEAL_FAILED",
+        resourceType: "phone_directory",
+        resourceId: String(contact._id),
+        resourceName: contact.name,
+        description: `Failed password verification when attempting to reveal banking details for "${contact.name}"`,
+      }).catch(() => {});
+
+      return res.status(403).json({
+        error: { message: "Invalid password. Access denied." },
+      });
+    }
+
+    // Decrypt account number
+    let decryptedAccountNo = "";
+    if (contact.accountNumberEncrypted) {
+      try {
+        decryptedAccountNo = decryptField(contact.accountNumberEncrypted);
+      } catch (decErr) {
+        console.error("Decryption failed for contact bank account:", decErr.message);
+        decryptedAccountNo = contact.accountNo || "";
+      }
+    } else if (contact.accountNo) {
+      decryptedAccountNo = contact.accountNo;
+    }
+
+    await ActivityLog.create({
+      actorUserId: String(actorUserId),
+      actorUsername: req.user.name || req.user.username || "Super Admin",
+      actorRole: req.user.role,
+      action: "PHONE_DIRECTORY_BANK_REVEAL_SUCCESS",
+      resourceType: "phone_directory",
+      resourceId: String(contact._id),
+      resourceName: contact.name,
+      description: `Super Admin revealed protected bank account details for "${contact.name}"`,
+    }).catch(() => {});
+
+    return res.json({
+      bankName: contact.bankName || "",
+      accountNo: decryptedAccountNo,
+      accountNumberMasked: contact.accountNumberMasked || (decryptedAccountNo ? `•••• ${decryptedAccountNo.slice(-4)}` : ""),
+      revealedAt: new Date().toISOString(),
+    });
   } catch (err) {
     next(err);
   }

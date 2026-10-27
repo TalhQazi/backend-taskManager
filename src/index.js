@@ -346,33 +346,45 @@ configuredOrigins.push(
 
 const isDev = String(process.env.NODE_ENV || "").toLowerCase() !== "production";
 
-app.use(
-  cors({
-    origin(origin, callback) {
-      if (!origin) return callback(null, true);
+const globalCors = cors({
+  origin(origin, callback) {
+    if (!origin) return callback(null, true);
 
-      if (configuredOrigins.length === 0) return callback(null, true);
-      const isAllowed = 
-        configuredOrigins.includes("*") || 
-        configuredOrigins.some(o => origin === o || origin.replace(/\/$/, "") === o.replace(/\/$/, ""));
+    if (configuredOrigins.length === 0) return callback(null, true);
+    const isAllowed = 
+      configuredOrigins.includes("*") || 
+      configuredOrigins.some(o => origin === o || origin.replace(/\/$/, "") === o.replace(/\/$/, ""));
 
-      if (isAllowed) return callback(null, true);
+    if (isAllowed) return callback(null, true);
 
-      // Always allow localhost/127.0.0.1 for local development against any backend
-      try {
-        const { hostname } = new URL(origin);
-        if (hostname === "localhost" || hostname === "127.0.0.1") {
-          return callback(null, true);
-        }
-      } catch {
-        // ignore invalid origins
+    // Always allow localhost/127.0.0.1 for local development against any backend
+    try {
+      const { hostname } = new URL(origin);
+      if (hostname === "localhost" || hostname === "127.0.0.1") {
+        return callback(null, true);
       }
+    } catch {
+      // ignore invalid origins
+    }
 
-      return callback(new Error(`CORS blocked for origin: ${origin}`));
-    },
-    credentials: true,
-  })
-);
+    return callback(new Error(`CORS blocked for origin: ${origin}`));
+  },
+  credentials: true,
+});
+
+const externalBugsCors = cors({
+  origin: "*",
+  methods: ["GET", "POST", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization", "x-api-key", "x-website-name"],
+});
+
+app.use((req, res, next) => {
+  // Allow open CORS for public external bug reporting from client/third-party websites
+  if (req.path.startsWith("/api/bugs/external") || req.url.startsWith("/api/bugs/external")) {
+    return externalBugsCors(req, res, next);
+  }
+  return globalCors(req, res, next);
+});
 
 // Timing first so it measures the full middleware chain, not just the handler.
 const { requestTiming } = require("./middleware/requestTiming");
@@ -513,7 +525,17 @@ app.use("/api/activity-logs", requireClearHire, activityLogsRoutes);
 app.use("/api/companies", requireClearHire, companiesRoutes);
 app.use("/api/company-locations", requireClearHire, companyLocationsRoutes);
 app.use("/api/asana-import", requireClearHire, asanaImportRoutes);
-app.use("/api/bugs", requireClearHire, bugsRoutes);
+app.use(
+  "/api/bugs",
+  (req, res, next) => {
+    // Allow public access for external bug reporting from other websites
+    if (req.path.startsWith("/external") || req.url.startsWith("/external")) {
+      return next();
+    }
+    return requireClearHire(req, res, next);
+  },
+  bugsRoutes
+);
 app.use("/api/projects", requireClearHire, projectsRoutes);
 app.use("/api/header-settings", requireClearHire, headerSettingsRoutes);
 app.use("/api/admin-info", requireClearHire, adminInfoRoutes);

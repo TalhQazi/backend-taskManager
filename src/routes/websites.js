@@ -149,6 +149,34 @@ router.get("/compliance/leaderboard", requireAuth, async (req, res, next) => {
   }
 });
 
+// Get all recent compliance audit logs across websites (accountability feed)
+router.get("/compliance/audit-logs", requireAuth, async (req, res, next) => {
+  try {
+    const logs = await ChecklistHistory.find({})
+      .sort({ createdAt: -1 })
+      .limit(100)
+      .lean();
+    
+    // Attach website name to each log
+    const siteIds = Array.from(new Set(logs.map(l => l.websiteId).filter(Boolean)));
+    const sites = await Website.find({ _id: { $in: siteIds } }).select("siteName url").lean();
+    const siteMap = {};
+    for (const s of sites) {
+      siteMap[String(s._id)] = s;
+    }
+
+    const enhanced = logs.map(l => ({
+      ...l,
+      websiteName: siteMap[String(l.websiteId)]?.siteName || "Website",
+      websiteUrl: siteMap[String(l.websiteId)]?.url || ""
+    }));
+
+    res.json({ items: enhanced });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // Get overall compliance reports - MUST come before /:id
 router.get("/compliance/reports", requireAuth, async (req, res, next) => {
   try {
@@ -477,20 +505,42 @@ router.put("/:id", requireAuth, async (req, res, next) => {
       return res.status(404).json({ error: { message: "Website not found" } });
     }
 
-    // Sync any updated core requirements to ChecklistItem collection
+    // Sync any updated core requirements to ChecklistItem collection and log accountability
+    const updaterName = String(req.user?.username || req.user?.name || "System");
+    const updaterId = String(req.user?.sub || req.user?.id || "System");
+
     for (const [key, title] of Object.entries(CORE_REQ_MAP)) {
       if (req.body[key] !== undefined) {
         const itemStatus = coreStatusToChecklistStatus(req.body[key]);
-        const isCompleted = itemStatus === "completed";
+        const isChecked = itemStatus === "completed" || itemStatus === "na" || itemStatus === "blocked";
+        
         await ChecklistItem.findOneAndUpdate(
           { websiteId: website._id, title },
           { 
             status: itemStatus, 
-            completedBy: isCompleted ? (req.user?.username || "System") : "", 
-            completedAt: isCompleted ? new Date() : undefined 
+            completedBy: isChecked ? updaterName : "", 
+            completedAt: isChecked ? new Date() : undefined 
           },
           { upsert: true }
         );
+
+        // Record audit entry for accountability
+        try {
+          const historyLog = new ChecklistHistory({
+            websiteId: website._id,
+            action: "requirement_updated",
+            previousState: `${title}: previous`,
+            newState: `${title}: ${req.body[key]}`,
+            notes: `"${title}" requirement marked as ${req.body[key]} by ${updaterName}`,
+            userId: updaterId,
+            username: updaterName,
+            ipAddress: req.ip || req.headers["x-forwarded-for"] || req.socket?.remoteAddress || "",
+            deviceInfo: req.headers["user-agent"] || "",
+          });
+          await historyLog.save();
+        } catch (logErr) {
+          console.error("Failed to write checklist history log:", logErr.message);
+        }
       }
     }
 

@@ -53,6 +53,7 @@ const adminUiSchema = z.object({
   name: z.string().min(1),
   address: z.string().optional(),
   city: z.string().min(1),
+  state: z.string().optional(),
   country: z.string().optional(),
   type: z.string().optional(),
   contactPhone: z.string().optional(),
@@ -66,6 +67,14 @@ const adminUiSchema = z.object({
     fileName: z.string().optional(),
     url: z.string().optional()
   })).optional(),
+  documents: z.array(z.object({
+    fileName: z.string().optional(),
+    url: z.string().optional(),
+    fileType: z.string().optional(),
+    size: z.number().optional(),
+    uploadedAt: z.any().optional(),
+  })).optional(),
+  complianceChecklist: z.any().optional(),
 });
 
 const updateSchema = createSchema.partial();
@@ -95,6 +104,7 @@ router.post("/", requireAuth, async (req, res, next) => {
         name: adminParsed.data.name,
         address: adminParsed.data.address || "",
         city: adminParsed.data.city,
+        state: adminParsed.data.state || "",
         country: adminParsed.data.country || "",
         type: mappedType,
         phone: adminParsed.data.contactPhone || "",
@@ -107,6 +117,8 @@ router.post("/", requireAuth, async (req, res, next) => {
         photoDataUrl: adminParsed.data.photoDataUrl || "",
         photoFileName: adminParsed.data.photoFileName || "",
         attachments: Array.isArray(adminParsed.data.attachments) ? adminParsed.data.attachments : [],
+        documents: Array.isArray(adminParsed.data.documents) ? adminParsed.data.documents : [],
+        complianceChecklist: req.body.complianceChecklist || undefined,
       });
 
       const createdObj = withId(created.toObject());
@@ -228,6 +240,7 @@ router.put("/:id", requireAuth, async (req, res, next) => {
       if (typeof adminParsed.data.name === "string") patch.name = adminParsed.data.name;
       if (typeof adminParsed.data.address === "string") patch.address = adminParsed.data.address;
       if (typeof adminParsed.data.city === "string") patch.city = adminParsed.data.city;
+      if (typeof adminParsed.data.state === "string") patch.state = adminParsed.data.state;
       if (typeof adminParsed.data.country === "string") patch.country = adminParsed.data.country;
 
       if (typeof adminParsed.data.type === "string") {
@@ -241,6 +254,8 @@ router.put("/:id", requireAuth, async (req, res, next) => {
       if (typeof adminParsed.data.photoDataUrl === "string") patch.photoDataUrl = adminParsed.data.photoDataUrl;
       if (typeof adminParsed.data.photoFileName === "string") patch.photoFileName = adminParsed.data.photoFileName;
       if (Array.isArray(adminParsed.data.attachments)) patch.attachments = adminParsed.data.attachments;
+      if (Array.isArray(adminParsed.data.documents)) patch.documents = adminParsed.data.documents;
+      if (req.body.complianceChecklist) patch.complianceChecklist = req.body.complianceChecklist;
 
       const updated = await Location.findByIdAndUpdate(req.params.id, patch, { new: true }).lean();
       if (!updated) return res.status(404).json({ error: { message: "Location not found" } });

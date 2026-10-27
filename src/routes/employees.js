@@ -693,7 +693,214 @@ const { attachActor } = require("../middleware/wipPermissions");
 // Live Workforce Command Center & Employee Live View
 router.get("/live", requireAuth, attachActor, workAssignmentCtrl.getLiveOverview);
 router.get("/:employeeId/live", requireAuth, attachActor, workAssignmentCtrl.getEmployeeLive);
-router.get("/:employeeId/activity", requireAuth, attachActor, workAssignmentCtrl.getEmployeeActivity);
+// GET /api/employees/compliance - Employee Compliance Center Overview
+router.get("/compliance", requireAuth, async (req, res, next) => {
+  try {
+    const includeInactive = req.query?.includeInactive === "true";
+    const empQuery = includeInactive ? {} : { status: { $ne: "inactive" } };
+    
+    const [employees, onboardingDocs, employeeDocs, settings] = await Promise.all([
+      Employee.find(empQuery).sort({ name: 1 }).lean(),
+      Onboarding.find({}).lean(),
+      EmployeeDocument.find({ isArchived: false }).lean(),
+      Settings.find({}).select("userId avatarUrl avatarDataUrl").lean(),
+    ]);
+
+    const idToAvatar = new Map(
+      settings.map((s) => [String(s.userId), String(s.avatarDataUrl || s.avatarUrl || "").trim()])
+    );
+
+    const empIdToOnboarding = new Map();
+    onboardingDocs.forEach((o) => {
+      if (o.employeeId) empIdToOnboarding.set(String(o.employeeId), o);
+      if (o.userId) empIdToOnboarding.set(String(o.userId), o);
+    });
+
+    const empIdToDocs = new Map();
+    employeeDocs.forEach((d) => {
+      const eId = String(d.employeeId);
+      if (!empIdToDocs.has(eId)) empIdToDocs.set(eId, []);
+      empIdToDocs.get(eId).push(d);
+    });
+
+    const items = employees.map((emp) => {
+      const eId = String(emp._id);
+      const onb = empIdToOnboarding.get(eId);
+      const docs = empIdToDocs.get(eId) || [];
+      const stored = emp.complianceChecklist || {};
+
+      // 1. Driver's License
+      const drivLicStatus = stored.drivLic?.status && stored.drivLic.status !== "missing"
+        ? stored.drivLic.status
+        : (onb?.identityVerification?.primaryId?.status === "verified" || onb?.identityVerification?.primaryId?.status === "submitted" || docs.some(d => d.category === "identity"))
+          ? "verified"
+          : "missing";
+
+      // 2. SS Card
+      const ssCardStatus = stored.ssCard?.status && stored.ssCard.status !== "missing"
+        ? stored.ssCard.status
+        : (onb?.identityVerification?.secondaryId?.status === "verified" || onb?.identityVerification?.secondaryId?.status === "submitted" || docs.some(d => d.title?.toLowerCase().includes("ssn") || d.title?.toLowerCase().includes("social")))
+          ? "verified"
+          : "missing";
+
+      // 3. Email
+      const emailStatus = stored.email?.status && stored.email.status !== "missing"
+        ? stored.email.status
+        : (emp.email || emp.personalEmail)
+          ? "verified"
+          : "missing";
+
+      // 4. Phone Number
+      const phoneStatus = stored.phoneNumber?.status && stored.phoneNumber.status !== "missing"
+        ? stored.phoneNumber.status
+        : (emp.phone || emp.personalPhone)
+          ? "verified"
+          : "missing";
+
+      // 5. Signed Docs
+      const signedDocsStatus = stored.signedDocs?.status && stored.signedDocs.status !== "missing"
+        ? stored.signedDocs.status
+        : (onb?.digitalSignature?.status === "verified" || onb?.employeeHandbook?.acknowledged || docs.some(d => d.category === "contracts" || d.category === "compliance" || d.category === "handbook"))
+          ? "verified"
+          : "missing";
+
+      // 6. E-Verify
+      const eVerifyStatus = stored.eVerify?.status || "missing";
+
+      // 7. Downloaded Required Apps
+      const downloadedAppsStatus = stored.downloadedApps?.status || "missing";
+
+      const complianceChecklist = {
+        drivLic: {
+          status: drivLicStatus,
+          fileUrl: stored.drivLic?.fileUrl || onb?.identityVerification?.primaryId?.frontImage || "",
+          updatedBy: stored.drivLic?.updatedBy || (drivLicStatus === "verified" ? "Onboarding System" : ""),
+          updatedAt: stored.drivLic?.updatedAt || null,
+          notes: stored.drivLic?.notes || "",
+        },
+        ssCard: {
+          status: ssCardStatus,
+          fileUrl: stored.ssCard?.fileUrl || onb?.identityVerification?.secondaryId?.image || "",
+          updatedBy: stored.ssCard?.updatedBy || (ssCardStatus === "verified" ? "Onboarding System" : ""),
+          updatedAt: stored.ssCard?.updatedAt || null,
+          notes: stored.ssCard?.notes || "",
+        },
+        email: {
+          status: emailStatus,
+          value: stored.email?.value || emp.email || emp.personalEmail || "",
+          updatedBy: stored.email?.updatedBy || (emailStatus === "verified" ? "HR System" : ""),
+          updatedAt: stored.email?.updatedAt || null,
+          notes: stored.email?.notes || "",
+        },
+        phoneNumber: {
+          status: phoneStatus,
+          value: stored.phoneNumber?.value || emp.phone || emp.personalPhone || "",
+          updatedBy: stored.phoneNumber?.updatedBy || (phoneStatus === "verified" ? "HR System" : ""),
+          updatedAt: stored.phoneNumber?.updatedAt || null,
+          notes: stored.phoneNumber?.notes || "",
+        },
+        signedDocs: {
+          status: signedDocsStatus,
+          docCount: stored.signedDocs?.docCount || (docs.length > 0 ? docs.length : onb ? 2 : 0),
+          updatedBy: stored.signedDocs?.updatedBy || (signedDocsStatus === "verified" ? "HR System" : ""),
+          updatedAt: stored.signedDocs?.updatedAt || null,
+          notes: stored.signedDocs?.notes || "",
+        },
+        eVerify: {
+          status: eVerifyStatus,
+          caseNumber: stored.eVerify?.caseNumber || "",
+          updatedBy: stored.eVerify?.updatedBy || "",
+          updatedAt: stored.eVerify?.updatedAt || null,
+          notes: stored.eVerify?.notes || "",
+        },
+        downloadedApps: {
+          status: downloadedAppsStatus,
+          updatedBy: stored.downloadedApps?.updatedBy || "",
+          updatedAt: stored.downloadedApps?.updatedAt || null,
+          notes: stored.downloadedApps?.notes || "",
+        },
+      };
+
+      const keys = ["drivLic", "ssCard", "email", "phoneNumber", "signedDocs", "eVerify", "downloadedApps"];
+      const verifiedCount = keys.filter((k) => complianceChecklist[k].status === "verified").length;
+      const score = Math.round((verifiedCount / keys.length) * 100);
+      const isCompliant = verifiedCount === keys.length;
+
+      return {
+        _id: String(emp._id),
+        id: String(emp._id),
+        name: emp.name,
+        email: emp.email,
+        phone: emp.phone,
+        department: emp.department || "General",
+        role: emp.role || "Employee",
+        status: emp.status || "active",
+        avatarUrl: idToAvatar.get(eId) || "",
+        complianceChecklist,
+        verifiedCount,
+        totalRequired: keys.length,
+        score,
+        isCompliant,
+      };
+    });
+
+    const total = items.length;
+    const compliantCount = items.filter((i) => i.isCompliant).length;
+    const actionRequiredCount = total - compliantCount;
+    const avgScore = total > 0 ? Math.round(items.reduce((acc, curr) => acc + curr.score, 0) / total) : 0;
+
+    res.json({
+      items,
+      summary: {
+        total,
+        compliantCount,
+        actionRequiredCount,
+        avgScore,
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// PUT /api/employees/:id/compliance - Update Employee Compliance Checklist
+router.put("/:id/compliance", requireAuth, async (req, res, next) => {
+  try {
+    const employee = await Employee.findById(req.params.id);
+    if (!employee) {
+      return res.status(404).json({ error: { message: "Employee not found" } });
+    }
+
+    const { checklist } = req.body;
+    if (!checklist || typeof checklist !== "object") {
+      return res.status(400).json({ error: { message: "Checklist data is required" } });
+    }
+
+    const currentChecklist = employee.complianceChecklist ? employee.complianceChecklist.toObject() : {};
+    const updatedBy = req.user?.name || req.user?.username || "Admin";
+    const now = new Date();
+
+    const allowedKeys = ["drivLic", "ssCard", "email", "phoneNumber", "signedDocs", "eVerify", "downloadedApps"];
+    allowedKeys.forEach((key) => {
+      if (checklist[key]) {
+        currentChecklist[key] = {
+          ...(currentChecklist[key] || {}),
+          ...checklist[key],
+          updatedBy,
+          updatedAt: now,
+        };
+      }
+    });
+
+    employee.complianceChecklist = currentChecklist;
+    employee.markModified("complianceChecklist");
+    await employee.save();
+
+    res.json({ item: withId(employee) });
+  } catch (err) {
+    next(err);
+  }
+});
 
 router.get("/", requireAuth, async (req, res, next) => {
   try {
