@@ -9,6 +9,23 @@
 let redisClient = null;
 let useRedis = false;
 
+// Hit/miss accounting so cache effectiveness is observable rather than assumed.
+const stats = { hits: 0, misses: 0, sets: 0, errors: 0 };
+
+/** Current cache effectiveness snapshot. */
+function getCacheStats() {
+  const lookups = stats.hits + stats.misses;
+  return {
+    backend: useRedis ? "redis" : "memory",
+    hits: stats.hits,
+    misses: stats.misses,
+    sets: stats.sets,
+    errors: stats.errors,
+    hitRatio: lookups ? Number(((stats.hits / lookups) * 100).toFixed(1)) : 0,
+    memoryKeys: useRedis ? undefined : memoryCache.size,
+  };
+}
+
 // In-memory fallback cache
 const memoryCache = new Map();
 const memoryCacheTTL = new Map(); // key -> expiry timestamp
@@ -84,7 +101,12 @@ async function cacheGet(key) {
   try {
     if (useRedis && redisClient) {
       const data = await redisClient.get(key);
-      return data ? JSON.parse(data) : null;
+      if (data) {
+        stats.hits += 1;
+        return JSON.parse(data);
+      }
+      stats.misses += 1;
+      return null;
     }
     // Fallback to memory cache
     const now = Date.now();
@@ -92,10 +114,18 @@ async function cacheGet(key) {
     if (expiry && now > expiry) {
       memoryCache.delete(key);
       memoryCacheTTL.delete(key);
+      stats.misses += 1;
       return null;
     }
-    return memoryCache.get(key) || null;
+    const value = memoryCache.get(key);
+    if (value === undefined) {
+      stats.misses += 1;
+      return null;
+    }
+    stats.hits += 1;
+    return value;
   } catch (err) {
+    stats.errors += 1;
     console.error("[Cache] GET error:", err.message);
     return null;
   }
@@ -111,8 +141,10 @@ async function cacheSet(key, value, ttlSeconds = 30) {
   try {
     if (useRedis && redisClient) {
       await redisClient.set(key, JSON.stringify(value), "EX", ttlSeconds);
+      stats.sets += 1;
       return;
     }
+    stats.sets += 1;
     // Fallback to memory cache
     memoryCache.set(key, value);
     memoryCacheTTL.set(key, Date.now() + ttlSeconds * 1000);
@@ -129,10 +161,17 @@ async function cacheDel(pattern) {
   try {
     if (useRedis && redisClient) {
       if (pattern.includes("*")) {
-        const keys = await redisClient.keys(pattern);
-        if (keys.length > 0) {
-          await redisClient.del(...keys);
-        }
+        // SCAN rather than KEYS: KEYS is O(N) over the entire keyspace and
+        // blocks the Redis event loop, stalling every other client for the
+        // duration. SCAN walks the keyspace in cursor-sized chunks instead.
+        let cursor = "0";
+        do {
+          const [next, keys] = await redisClient.scan(cursor, "MATCH", pattern, "COUNT", 250);
+          cursor = next;
+          if (keys.length > 0) {
+            await redisClient.unlink(...keys).catch(() => redisClient.del(...keys));
+          }
+        } while (cursor !== "0");
       } else {
         await redisClient.del(pattern);
       }
@@ -178,4 +217,5 @@ module.exports = {
   cacheSet,
   cacheDel,
   cacheWrap,
+  getCacheStats,
 };

@@ -5,7 +5,7 @@ const multer = require("multer");
 const path = require("path");
 
 const { requireAuth, requireRole } = require("../middleware/auth");
-const { uploadToS3, extractS3Key } = require("../lib/s3");
+const { uploadToS3, extractS3Key, getFromS3 } = require("../lib/s3");
 const { parsePagination, paginatedResponse } = require("../lib/pagination");
 const AssetLibraryFolder = require("../models/AssetLibraryFolder");
 const AssetLibraryAsset = require("../models/AssetLibraryAsset");
@@ -15,7 +15,7 @@ const router = express.Router();
 const storage = multer.memoryStorage();
 const upload = multer({
   storage,
-  limits: { fileSize: 50 * 1024 * 1024 },
+  limits: { fileSize: 500 * 1024 * 1024 },
 });
 
 function toObjectIdOrNull(value) {
@@ -23,6 +23,10 @@ function toObjectIdOrNull(value) {
   if (!v) return null;
   if (!mongoose.Types.ObjectId.isValid(v)) return null;
   return new mongoose.Types.ObjectId(v);
+}
+
+function getModuleFilter(moduleName) {
+  return moduleName === "asset-library" ? { $in: ["asset-library", null, ""] } : moduleName;
 }
 
 function buildFolderTree(items) {
@@ -63,6 +67,7 @@ const folderCreateSchema = z.object({
   description: z.string().optional().default(""),
   isReadOnly: z.boolean().optional().default(false),
   sortOrder: z.number().optional().default(0),
+  module: z.enum(["asset-library", "company-information"]).optional().default("asset-library"),
 });
 
 const folderPatchSchema = z.object({
@@ -82,13 +87,15 @@ const assetPatchSchema = z.object({
   status: z.enum(["active", "archived", "deleted"]).optional(),
 });
 
-router.get("/folders", requireAuth, async (_req, res, next) => {
+router.get("/folders", requireAuth, async (req, res, next) => {
   try {
-    const items = await AssetLibraryFolder.find({ isArchived: false }).lean();
+    const moduleName = String(req.query.module || "asset-library");
+    const fModuleFilter = getModuleFilter(moduleName);
+    const items = await AssetLibraryFolder.find({ isArchived: false, module: fModuleFilter }).lean();
 
     const folderIds = items.map((f) => f._id);
     const counts = await AssetLibraryAsset.aggregate([
-      { $match: { status: "active", folderId: { $in: folderIds } } },
+      { $match: { status: "active", folderId: { $in: folderIds }, module: fModuleFilter } },
       { $group: { _id: "$folderId", count: { $sum: 1 } } },
     ]);
     const countMap = new Map(counts.map((c) => [String(c._id), Number(c.count || 0)]));
@@ -100,6 +107,17 @@ router.get("/folders", requireAuth, async (_req, res, next) => {
 
     const tree = buildFolderTree(itemsWithCounts);
     res.json({ items: tree });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get("/stats", requireAuth, async (req, res, next) => {
+  try {
+    const moduleName = String(req.query.module || "asset-library");
+    const sModuleFilter = getModuleFilter(moduleName);
+    const totalAssets = await AssetLibraryAsset.countDocuments({ status: "active", module: sModuleFilter });
+    res.json({ totalAssets });
   } catch (err) {
     next(err);
   }
@@ -127,6 +145,7 @@ router.post("/folders", requireAuth, requireRole(["super-admin", "admin"]), asyn
       isReadOnly: parsed.data.isReadOnly,
       sortOrder: parsed.data.sortOrder,
       createdBy,
+      module: parsed.data.module,
     });
 
     res.json({ item: { ...doc.toObject(), id: String(doc._id) } });
@@ -194,34 +213,58 @@ router.get("/assets", requireAuth, async (req, res, next) => {
     const type = String(req.query.type || "").trim().toLowerCase();
     const sort = String(req.query.sort || "newest").trim().toLowerCase();
     const { page, limit, skip } = parsePagination(req.query);
+    const moduleName = String(req.query.module || "asset-library");
+    const aModuleFilter = getModuleFilter(moduleName);
 
-    const filter = { status: "active" };
+    const filter = { status: "active", module: aModuleFilter };
     if (folderId) filter.folderId = folderId;
 
     if (type === "image") {
       filter.mimeType = { $regex: /^image\//i };
     } else if (type === "pdf") {
       filter.mimeType = "application/pdf";
+    } else if (type === "document") {
+      filter.mimeType = { $nin: [/^image\//i, "application/pdf"] };
     }
 
     if (q) {
-      const rx = new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
+      const rx = new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, "\$&"), "i");
       filter.$or = [{ title: rx }, { originalFilename: rx }, { description: rx }, { tags: rx }];
     }
 
     let sortSpec = { createdAt: -1 };
     if (sort === "oldest") sortSpec = { createdAt: 1 };
-    if (sort === "az") sortSpec = { originalFilename: 1 };
-    if (sort === "za") sortSpec = { originalFilename: -1 };
+    if (sort === "az") sortSpec = { title: 1, originalFilename: 1 };
+    if (sort === "za") sortSpec = { title: -1, originalFilename: -1 };
     if (sort === "size-asc") sortSpec = { sizeBytes: 1 };
     if (sort === "size-desc") sortSpec = { sizeBytes: -1 };
 
+    const query = AssetLibraryAsset.find(filter).sort(sortSpec).skip(skip).limit(limit);
+    
+    // Add collation for case-insensitive alphabetical sorting
+    if (sort === "az" || sort === "za") {
+      query.collation({ locale: "en", strength: 2 });
+    }
+
     const [total, docs] = await Promise.all([
       AssetLibraryAsset.countDocuments(filter),
-      AssetLibraryAsset.find(filter).sort(sortSpec).skip(skip).limit(limit).lean(),
+      query.lean(),
     ]);
 
-    const items = docs.map((a) => ({ ...a, id: String(a._id) }));
+    const items = docs.map((a) => ({
+      ...a,
+      id: String(a._id),
+      urlThumbnail: a.urlOriginal || a.attachment?.url || "",
+      urlPreview: a.urlOriginal || a.attachment?.url || "",
+      attachment: a.attachment || {
+        fileName: a.originalFilename || "",
+        url: a.urlOriginal || "",
+        mimeType: a.mimeType || "",
+        size: a.sizeBytes || 0
+      }
+    }));
+    console.log("[asset-library] Returning items:", items.length, "Total:", total);
+    console.log("[asset-library] First item URL:", items[0]?.urlThumbnail, items[0]?.attachment?.url);
     res.json(paginatedResponse(items, total, page, limit));
   } catch (err) {
     next(err);
@@ -290,6 +333,7 @@ router.post(
   async (req, res, next) => {
     try {
       const folderId = toObjectIdOrNull(req.body.folderId);
+      const moduleName = String(req.body.module || "asset-library");
       if (req.body.folderId && !folderId) {
         return res.status(400).json({ error: { message: "Invalid folderId" } });
       }
@@ -305,24 +349,11 @@ router.post(
         return res.status(400).json({ error: { message: "No files uploaded" } });
       }
 
-      const allowed = new Set([
-        "image/png",
-        "image/jpeg",
-        "image/jpg",
-        "image/webp",
-        "image/svg+xml",
-        "application/pdf",
-      ]);
-
       const uploadedBy = String(req.user?.sub || "");
-
       const created = [];
 
       for (const f of files) {
         const mimeType = String(f.mimetype || "");
-        if (!allowed.has(mimeType)) {
-          return res.status(400).json({ error: { message: `Unsupported file type: ${mimeType}` } });
-        }
 
         const originalFilename = String(f.originalname || "");
         const ext = path.extname(originalFilename).replace(".", "").toLowerCase();
@@ -350,6 +381,7 @@ router.post(
           urlOriginal,
           status: "active",
           uploadedBy,
+          module: moduleName,
           attachment: {
             fileName: originalFilename,
             url: urlOriginal,
@@ -368,6 +400,48 @@ router.post(
   }
 );
 
+router.get("/assets/:id/download", async (req, res, next) => {
+  try {
+    const assetId = toObjectIdOrNull(req.params.id);
+    if (!assetId) return res.status(400).json({ error: { message: "Invalid asset id" } });
+
+    const asset = await AssetLibraryAsset.findById(assetId).lean();
+    if (!asset || asset.status !== "active") return res.status(404).json({ error: { message: "Asset not found" } });
+
+    const key =
+      extractS3Key(asset.attachment?.url) ||
+      extractS3Key(asset.urlOriginal) ||
+      asset.s3KeyOriginal ||
+      "";
+    if (!key) return res.status(400).json({ error: { message: "Missing asset key" } });
+
+    const rawFileName = asset.originalFilename || asset.attachment?.fileName || asset.title || "asset";
+    const safeFileName = path.basename(rawFileName).replace(/["\r\n]/g, "");
+
+    const { stream, contentType, contentLength } = await getFromS3(key);
+
+    res.set("Content-Type", contentType || asset.mimeType || "application/octet-stream");
+    if (contentLength) {
+      res.set("Content-Length", String(contentLength));
+    }
+    res.set("Content-Disposition", `attachment; filename="${safeFileName}"; filename*=UTF-8''${encodeURIComponent(safeFileName)}`);
+    res.set("Access-Control-Allow-Origin", "*");
+
+    stream.pipe(res);
+  } catch (err) {
+    if (
+      err.name === "NoSuchKey" ||
+      err.name === "NotFound" ||
+      err.$metadata?.httpStatusCode === 404 ||
+      err.code === "ENOENT" ||
+      (err.message && err.message.toLowerCase().includes("not found"))
+    ) {
+      return res.status(404).json({ error: { message: "File not found" } });
+    }
+    next(err);
+  }
+});
+
 router.post("/assets/:id/download", requireAuth, async (req, res, next) => {
   try {
     const assetId = toObjectIdOrNull(req.params.id);
@@ -376,13 +450,23 @@ router.post("/assets/:id/download", requireAuth, async (req, res, next) => {
     const asset = await AssetLibraryAsset.findById(assetId).lean();
     if (!asset || asset.status !== "active") return res.status(404).json({ error: { message: "Asset not found" } });
 
-    const key = asset.s3KeyOriginal || "";
+    const key =
+      extractS3Key(asset.attachment?.url) ||
+      extractS3Key(asset.urlOriginal) ||
+      asset.s3KeyOriginal ||
+      "";
     if (!key) return res.status(400).json({ error: { message: "Missing asset key" } });
 
+    const fileName = asset.originalFilename || asset.attachment?.fileName || asset.title || "asset";
     const proxiedUrl = `/api/s3-proxy/${key}`;
-    const fileName = asset.originalFilename || asset.title || "asset";
+    const directDownloadUrl = `/api/asset-library/assets/${assetId}/download`;
 
-    res.json({ url: proxiedUrl, fileName });
+    // Self-heal the record if s3KeyOriginal was stale or mismatched
+    if (key && asset.s3KeyOriginal !== key) {
+      AssetLibraryAsset.updateOne({ _id: assetId }, { $set: { s3KeyOriginal: key } }).catch(() => {});
+    }
+
+    res.json({ url: proxiedUrl, fileName, downloadUrl: directDownloadUrl });
   } catch (err) {
     next(err);
   }

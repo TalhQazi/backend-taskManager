@@ -32,6 +32,7 @@ const AssetLibraryAssetSchema = new mongoose.Schema(
     uploadedBy: { type: String, default: "" },
 
     attachment: { type: AttachmentSchema, default: () => ({}) },
+    module: { type: String, enum: ["asset-library", "company-information"], default: "asset-library" },
   },
   { timestamps: true }
 );

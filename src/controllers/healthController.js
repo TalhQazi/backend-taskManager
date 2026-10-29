@@ -1,0 +1,354 @@
+const os = require("os");
+const fs = require("fs");
+const Server = require("../models/Server");
+const ServerMetric = require("../models/ServerMetric");
+const Website = require("../models/Website");
+const WebsiteCheck = require("../models/WebsiteCheck");
+const WebsiteIncident = require("../models/WebsiteIncident");
+const { dispatchAlert } = require("../utils/alertManager");
+const { getStorageHealth } = require("../utils/storageTelemetry");
+
+async function deduplicateServers() {
+  try {
+    const servers = await Server.find().sort({ updatedAt: -1, createdAt: -1 });
+    if (servers.length > 1) {
+      const primary = servers[0];
+      primary.name = "Se7en";
+      primary.ipAddress = "127.0.0.1 (Local Host)";
+      primary.status = "LIVE";
+      primary.isMonitoringEnabled = true;
+      await primary.save();
+
+      const duplicateIds = servers.slice(1).map(s => s._id);
+      await Server.deleteMany({ _id: { $in: duplicateIds } });
+      await ServerMetric.deleteMany({ serverId: { $in: duplicateIds } });
+      console.log(`[Server Health] Cleaned up ${duplicateIds.length} duplicate server records.`);
+    }
+  } catch (err) {
+    console.error("[Server Health] Error deduplicating servers:", err);
+  }
+}
+
+exports.getOverview = async (req, res) => {
+  try {
+    await deduplicateServers();
+    const servers = await Server.find({ isMonitoringEnabled: true });
+    const websites = await Website.find({ websiteType: "active", isMonitoringEnabled: { $ne: false }, url: { $exists: true, $ne: "" } });
+    
+    const liveServers = servers.filter(s => s.status === "LIVE").length;
+    const downServers = servers.filter(s => s.status === "DOWN" || s.status === "DEGRADED").length;
+
+    const liveWebsites = websites.filter(w => w.healthStatus === "LIVE").length;
+    const downWebsites = websites.filter(w => w.healthStatus === "DOWN" || w.healthStatus === "DEGRADED").length;
+
+    const openIncidents = await WebsiteIncident.countDocuments({ status: "OPEN" });
+
+    res.json({
+      servers: { total: servers.length, live: liveServers, down: downServers },
+      websites: { total: websites.length, live: liveWebsites, down: downWebsites },
+      openIncidents
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: { message: "Failed to fetch health overview" } });
+  }
+};
+
+let lastCpuTimes = null;
+function getCpuUsage() {
+  const cpus = os.cpus();
+  let totalMs = 0;
+  let idleMs = 0;
+  for (const cpu of cpus) {
+    for (const type in cpu.times) {
+      totalMs += cpu.times[type];
+    }
+    idleMs += cpu.times.idle;
+  }
+  
+  if (!lastCpuTimes) {
+    lastCpuTimes = { totalMs, idleMs };
+    return 15;
+  }
+  
+  const deltaTotal = totalMs - lastCpuTimes.totalMs;
+  const deltaIdle = idleMs - lastCpuTimes.idleMs;
+  lastCpuTimes = { totalMs, idleMs };
+  
+  if (deltaTotal === 0) return 0;
+  return Math.round(((deltaTotal - deltaIdle) / deltaTotal) * 100);
+}
+
+// Live stats for the host running this backend: RAM (via os) and disk (via fs.statfs).
+exports.getSystemStats = async (req, res) => {
+  try {
+    const totalMem = os.totalmem();
+    const freeMem = os.freemem();
+    const usedMem = Math.max(totalMem - freeMem, 0);
+    const cpuUsage = getCpuUsage();
+
+    // Disk usage — fs.statfs is available on Node 18.15+. Guard so older Node still
+    // returns RAM stats (disk = null) instead of erroring.
+    let disk = null;
+    try {
+      if (typeof fs.promises.statfs === "function") {
+        const targetPath = os.platform() === "win32"
+          ? `${process.cwd().split(":")[0]}:\\`
+          : "/";
+        const s = await fs.promises.statfs(targetPath);
+        const total = s.blocks * s.bsize;
+        const free = s.bavail * s.bsize; // space available to unprivileged users
+        const used = Math.max(total - free, 0);
+        disk = { total, used, free };
+      }
+    } catch (diskErr) {
+      console.error("Failed to read disk stats:", diskErr.message);
+      disk = null;
+    }
+
+    res.json({
+      hostname: os.hostname(),
+      platform: os.platform(),
+      uptimeSeconds: os.uptime(),
+      cpuCount: os.cpus().length,
+      loadAvg: os.loadavg(),
+      cpuUsage,
+      ram: { total: totalMem, used: usedMem, free: freeMem },
+      disk,
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: { message: "Failed to fetch system stats" } });
+  }
+};
+
+exports.getWebsitesStatus = async (req, res) => {
+  try {
+    const websites = await Website.find({ websiteType: "active", isMonitoringEnabled: { $ne: false }, url: { $exists: true, $ne: "" } })
+      .select("siteName url healthStatus lastCheckedAt sslStatus sslExpiryDate responseTimeMs uptimePercentage")
+      .sort({ healthStatus: 1, siteName: 1 });
+      
+    res.json({ websites });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: { message: "Failed to fetch websites status" } });
+  }
+};
+
+exports.getIncidents = async (req, res) => {
+  try {
+    const limit = parseInt(req.query.limit) || 50;
+    const incidents = await WebsiteIncident.find()
+      .populate("websiteId", "siteName url")
+      .populate("serverId", "name ipAddress")
+      .sort({ startedAt: -1 })
+      .limit(limit);
+      
+    res.json({ incidents });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: { message: "Failed to fetch incidents" } });
+  }
+};
+
+async function recordHostTelemetry() {
+  try {
+    await deduplicateServers();
+    const hostName = "Se7en";
+    const totalMem = os.totalmem();
+    const freeMem = os.freemem();
+    const usedMem = Math.max(totalMem - freeMem, 0);
+    const memoryUsagePercent = Math.round((usedMem / (totalMem || 1)) * 100);
+    const cpuUsagePercent = getCpuUsage();
+
+    let diskUsagePercent = 0;
+    try {
+      if (typeof fs.promises.statfs === "function") {
+        const targetPath = os.platform() === "win32" ? `${process.cwd().split(":")[0]}:\\` : "/";
+        const s = await fs.promises.statfs(targetPath);
+        const total = s.blocks * s.bsize;
+        const free = s.bavail * s.bsize;
+        const used = Math.max(total - free, 0);
+        diskUsagePercent = Math.round((used / (total || 1)) * 100);
+      }
+    } catch {}
+
+    let server = await Server.findOne({ $or: [{ name: "Se7en" }, { name: { $regex: /Host Server/i } }] });
+    if (!server) {
+      server = await Server.create({
+        name: hostName,
+        ipAddress: "127.0.0.1 (Local Host)",
+        status: "LIVE",
+        isMonitoringEnabled: true,
+        lastSeenAt: new Date(),
+      });
+    } else {
+      server.name = hostName;
+      server.lastSeenAt = new Date();
+      server.status = cpuUsagePercent > 90 || memoryUsagePercent > 90 ? "DEGRADED" : "LIVE";
+      await server.save();
+    }
+
+    await ServerMetric.create({
+      serverId: server._id,
+      cpuUsagePercent,
+      memoryUsagePercent,
+      diskUsagePercent,
+      networkInKBps: 0,
+      networkOutKBps: 0,
+    });
+  } catch (err) {
+    // catch telemetry errors silently
+  }
+}
+
+// Automatically record local host metrics every 60 seconds
+setInterval(recordHostTelemetry, 60000);
+setTimeout(recordHostTelemetry, 2000);
+
+exports.getServers = async (req, res) => {
+  try {
+    await deduplicateServers();
+    let servers = await Server.find().sort({ name: 1 });
+    if (servers.length === 0) {
+      await recordHostTelemetry();
+      servers = await Server.find().sort({ name: 1 });
+    }
+    res.json({ servers });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: { message: "Failed to fetch servers" } });
+  }
+};
+
+exports.getServerMetrics = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const hours = parseInt(req.query.hours) || 24;
+    const since = new Date(Date.now() - hours * 60 * 60 * 1000);
+
+    let metrics = await ServerMetric.find({ serverId: id, recordedAt: { $gte: since } })
+      .sort({ recordedAt: 1 });
+
+    if (metrics.length === 0) {
+      await recordHostTelemetry();
+      metrics = await ServerMetric.find({ serverId: id, recordedAt: { $gte: since } })
+        .sort({ recordedAt: 1 });
+    }
+    
+    res.json({ metrics });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: { message: "Failed to fetch server metrics" } });
+  }
+};
+
+exports.ingestMetrics = async (req, res) => {
+  try {
+    const { serverId, cpu, memory, disk, networkIn, networkOut } = req.body;
+    
+    if (!serverId) {
+      return res.status(400).json({ error: { message: "serverId is required" } });
+    }
+
+    // 1. Find or create the Server
+    let server = await Server.findOne({ name: serverId });
+    if (!server) {
+      server = new Server({
+        name: serverId,
+        ipAddress: req.ip || req.connection.remoteAddress || 'Unknown'
+      });
+    }
+
+    // 2. Update Server status and last seen
+    const previousStatus = server.status || "UNKNOWN";
+    server.lastSeenAt = new Date();
+    let currentStatus = "LIVE";
+    if (cpu > 90 || memory > 90 || disk > 90) {
+      currentStatus = "DEGRADED";
+    }
+    server.status = currentStatus;
+    await server.save();
+
+    // Trigger alerts immediately on status change
+    if (currentStatus !== previousStatus) {
+      if (currentStatus === "DEGRADED") {
+        let openIncident = await WebsiteIncident.findOne({ serverId: server._id, status: "OPEN" });
+        if (!openIncident) {
+          openIncident = await WebsiteIncident.create({
+            serverId: server._id,
+            type: "DEGRADED",
+            errorDetails: `High usage: CPU ${cpu}%, Memory ${memory}%, Disk ${disk}%`,
+          });
+          await dispatchAlert(
+            `[DEGRADED] Server ${server.name}`,
+            `Server ${server.name} (${server.ipAddress || "Unknown IP"}) is currently DEGRADED.\nDetails: ${openIncident.errorDetails}`,
+            "DEGRADED"
+          );
+        }
+      } else if (currentStatus === "LIVE" && (previousStatus === "DOWN" || previousStatus === "DEGRADED")) {
+        const openIncident = await WebsiteIncident.findOne({ serverId: server._id, status: "OPEN" });
+        if (openIncident) {
+          openIncident.status = "RESOLVED";
+          openIncident.resolvedAt = new Date();
+          await openIncident.save();
+          await dispatchAlert(
+            `[RECOVERED] Server ${server.name}`,
+            `Server ${server.name} (${server.ipAddress || "Unknown IP"}) has recovered and is now LIVE.`,
+            "RECOVERED"
+          );
+        }
+      }
+    }
+
+    // 3. Create the Metric using the Server's ObjectId
+    const metric = await ServerMetric.create({
+      serverId: server._id,
+      cpuUsagePercent: cpu,
+      memoryUsagePercent: memory,
+      diskUsagePercent: disk,
+      networkInKBps: networkIn || 0,
+      networkOutKBps: networkOut || 0
+    });
+
+    res.json({ success: true, metric });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: { message: "Failed to ingest metrics" } });
+  }
+};
+
+// Physical storage & RAID health for a server's drive chassis.
+// `id` may be a Server ObjectId or the sentinel "host" for the local machine.
+exports.getStorageHealth = async (req, res) => {
+  try {
+    const { id } = req.params;
+    let seed = id;
+
+    // Resolve a real server's name for a stable, human-meaningful seed.
+    if (id && id !== "host" && /^[0-9a-fA-F]{24}$/.test(id)) {
+      const server = await Server.findById(id).select("name");
+      if (server) seed = server.name || id;
+    }
+
+    const payload = await getStorageHealth(seed);
+    res.json(payload);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: { message: "Failed to fetch storage health" } });
+  }
+};
+
+exports.testAlert = async (req, res) => {
+  try {
+    await dispatchAlert(
+      "[TEST] System Health Center Alert",
+      "This is a test alert from the System Health Center to verify email delivery.",
+      "DOWN" // using DOWN to trigger alert
+    );
+    res.json({ success: true, message: "Test alert dispatched." });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: { message: "Failed to dispatch test alert" } });
+  }
+};

@@ -1,6 +1,7 @@
 const express = require("express");
 const Note = require("../models/Note");
 const { requireAuth } = require("../middleware/auth");
+const { getAuthorProfileMap, getAuthorProfile } = require("../utils/authorProfile");
 
 const router = express.Router();
 
@@ -9,7 +10,22 @@ router.get("/", requireAuth, async (req, res, next) => {
   try {
     const userId = req.user.sub || req.user.id;
     const notes = await Note.find({ userId }).sort({ isPinned: -1, updatedAt: -1 });
-    res.json({ items: notes.map(n => ({ ...n.toObject(), id: n._id })) });
+    const profile = await getAuthorProfile(userId);
+    res.json({
+      items: notes.map((n) => {
+        const obj = n.toObject();
+        return {
+          ...obj,
+          id: n._id,
+          createdBy: {
+            id: userId,
+            name: profile.fullName || (obj.createdBy && obj.createdBy.name) || "User",
+            avatar: profile.avatar || (obj.createdBy && obj.createdBy.avatar) || "",
+            role: (obj.createdBy && obj.createdBy.role) || "Member",
+          },
+        };
+      }),
+    });
   } catch (err) {
     next(err);
   }
@@ -25,18 +41,43 @@ router.post("/", requireAuth, async (req, res, next) => {
       return res.status(401).json({ error: { message: "User ID not found" } });
     }
 
-    const { title, content, color, isPinned } = req.body;
+    const profile = await getAuthorProfile(userId);
+    const { title, content, overview, color, isPinned, isFavorite, folder, tags, actionItems, notesList, attachments } = req.body;
     
     const note = await Note.create({
       userId,
+      createdBy: {
+        id: userId,
+        name: profile.fullName || (req.body.createdBy && req.body.createdBy.name) || "User",
+        avatar: profile.avatar || (req.body.createdBy && req.body.createdBy.avatar) || "",
+        role: (req.body.createdBy && req.body.createdBy.role) || "Admin",
+      },
       title: title || "",
-      content: content || "",
+      overview: overview || content || "",
+      content: content || overview || "",
       color: color || "#ffffff",
-      isPinned: !!isPinned
+      isPinned: !!isPinned,
+      isFavorite: !!isFavorite,
+      folder: folder || "",
+      tags: tags || [],
+      actionItems: actionItems || [],
+      notesList: notesList || [],
+      attachments: attachments || []
     });
     
     console.log("Note created:", note._id);
-    res.status(201).json({ item: { ...note.toObject(), id: note._id } });
+    res.status(201).json({
+      item: {
+        ...note.toObject(),
+        id: note._id,
+        createdBy: {
+          id: userId,
+          name: profile.fullName || "User",
+          avatar: profile.avatar || "",
+          role: "Admin",
+        },
+      },
+    });
   } catch (err) {
     console.error("Note creation error:", err);
     next(err);
@@ -57,7 +98,19 @@ router.patch("/:id", requireAuth, async (req, res, next) => {
       return res.status(404).json({ error: { message: "Note not found or unauthorized" } });
     }
     
-    res.json({ item: { ...note.toObject(), id: note._id } });
+    const profile = await getAuthorProfile(userId);
+    res.json({
+      item: {
+        ...note.toObject(),
+        id: note._id,
+        createdBy: {
+          id: userId,
+          name: profile.fullName || (note.createdBy && note.createdBy.name) || "User",
+          avatar: profile.avatar || (note.createdBy && note.createdBy.avatar) || "",
+          role: (note.createdBy && note.createdBy.role) || "Member",
+        },
+      },
+    });
   } catch (err) {
     next(err);
   }

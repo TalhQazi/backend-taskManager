@@ -1,0 +1,544 @@
+const express = require("express");
+const { z } = require("zod");
+const mongoose = require("mongoose");
+const multer = require("multer");
+const Meeting = require("../models/Meeting");
+const { requireAuth } = require("../middleware/auth");
+const { sendEmailNotification } = require("../utils/emailNotifications");
+const { sendRawEmail } = require("../lib/email");
+const { uploadToS3 } = require("../lib/s3");
+
+const crypto = require("crypto");
+
+const router = express.Router();
+
+const recordingUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 500 * 1024 * 1024 }, // 500MB
+  fileFilter: (_req, file, cb) => {
+    const mime = String(file.mimetype || "").toLowerCase();
+    const name = String(file.originalname || "").toLowerCase();
+    const okByMime =
+      mime.startsWith("video/") ||
+      mime.startsWith("audio/") ||
+      mime === "application/octet-stream" ||
+      mime === "";
+    const okByExt = /\.(webm|mp4|mkv|mov|ogg|wav|mp3|m4a)$/i.test(name);
+    const ok = okByMime || okByExt;
+    if (!ok) {
+      return cb(new Error("Only video/audio recordings are allowed"));
+    }
+    cb(null, true);
+  },
+});
+
+/** High-entropy room codes: ABC-DEF-GHI (no ambiguous 0/O/1/I). */
+function generateRoomCode() {
+  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  const pick = (n) => {
+    const bytes = crypto.randomBytes(n);
+    let out = "";
+    for (let i = 0; i < n; i++) out += alphabet[bytes[i] % alphabet.length];
+    return out;
+  };
+  return `${pick(3)}-${pick(3)}-${pick(3)}`;
+}
+
+/** Allocate a room code that does not already exist in DB. */
+async function allocateUniqueRoomCode(maxAttempts = 12) {
+  for (let i = 0; i < maxAttempts; i++) {
+    const roomCode = generateRoomCode();
+    const exists = await Meeting.exists({ roomCode });
+    if (!exists) return roomCode;
+  }
+  // Extremely unlikely fallback
+  return `${generateRoomCode()}-${Date.now().toString(36).slice(-4).toUpperCase()}`;
+}
+
+function withId(doc) {
+  if (!doc) return doc;
+  const obj = doc.toObject ? doc.toObject() : doc;
+  const { __v, ...rest } = obj;
+  return { ...rest, id: String(doc._id) };
+}
+
+function formatMeetingTime(date, timeZone) {
+  if (!date) return "TBD";
+  try {
+    return new Intl.DateTimeFormat("en-US", {
+      timeZone: timeZone || "UTC",
+      weekday: "short",
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      timeZoneName: "short",
+    }).format(new Date(date));
+  } catch {
+    return new Date(date).toUTCString();
+  }
+}
+
+function getAppBaseUrl(req) {
+  const fromEnv = (process.env.CORS_ORIGIN || "").split(",")[0]?.trim();
+  if (fromEnv) return fromEnv.replace(/\/$/, "");
+  const origin = req.get("origin");
+  if (origin) return origin.replace(/\/$/, "");
+  return "http://localhost:8080";
+}
+
+async function sendMeetingInviteEmails({ meeting, req }) {
+  const participants = Array.isArray(meeting.invitedParticipants) ? meeting.invitedParticipants : [];
+  if (!participants.length) return { sent: 0, failed: 0 };
+
+  const baseUrl = getAppBaseUrl(req);
+  const meetingTime = formatMeetingTime(meeting.scheduledStartTime, meeting.timezone);
+  let sent = 0;
+  let failed = 0;
+
+  await Promise.all(
+    participants.map(async (p) => {
+      const email = String(p.email || "").trim();
+      if (!email) {
+        failed += 1;
+        return;
+      }
+
+      const role = String(p.role || "employee").toLowerCase();
+      // Always use role-agnostic join URL so managers/admins/employees all land in the right panel
+      const joinLink = `${baseUrl}/join/meeting/${meeting.roomCode}`;
+
+      const variables = {
+        name: p.name || "Team Member",
+        meetingTitle: meeting.title || "Team Meeting",
+        meetingTime,
+        timezone: meeting.timezone || "UTC",
+        duration: String(meeting.durationMinutes || 30),
+        hostName: meeting.hostName || "Host",
+        roomCode: meeting.roomCode,
+        agenda: meeting.description || "No agenda provided.",
+        joinLink,
+        role,
+      };
+
+      try {
+        const result = await sendEmailNotification(email, "meetingInvite", variables);
+        if (result === true || result?.sent === true) {
+          sent += 1;
+          return;
+        }
+
+        // Fallback raw email if template path fails
+        const subject = `Meeting Invite: ${variables.meetingTitle}`;
+        const body = `Hello ${variables.name},\n\nYou have been invited to a video meeting.\n\nTopic: ${variables.meetingTitle}\nWhen: ${variables.meetingTime}\nTimezone: ${variables.timezone}\nDuration: ${variables.duration} minutes\nHost: ${variables.hostName}\nRoom Code: ${variables.roomCode}\n\nAgenda:\n${variables.agenda}\n\nJoin link:\n${variables.joinLink}\n\nBest regards,\nTask Manager System`;
+        const rawOk = await sendRawEmail({ to: email, subject, body });
+        if (rawOk) sent += 1;
+        else failed += 1;
+      } catch (err) {
+        console.error("Meeting invite email failed:", err);
+        failed += 1;
+      }
+    })
+  );
+
+  return { sent, failed };
+}
+
+const participantSchema = z.object({
+  userId: z.string().optional().default(""),
+  name: z.string().optional().default(""),
+  email: z.string().optional().default(""),
+  role: z.string().optional().default("employee"),
+});
+
+const createMeetingSchema = z.object({
+  title: z.string().min(1).default("Quick Meeting"),
+  description: z.string().optional().default(""),
+  meetingType: z.enum(["instant", "scheduled"]).default("instant"),
+  scheduledStartTime: z.string().optional().nullable(),
+  timezone: z.string().optional().default("UTC"),
+  durationMinutes: z.number().min(5).max(480).default(30),
+  invitedParticipants: z.array(participantSchema).optional().default([]),
+  taskId: z.string().optional().nullable(),
+  passcode: z.string().optional().default(""),
+});
+
+const updateMeetingSchema = z.object({
+  title: z.string().min(1).optional(),
+  description: z.string().optional(),
+  scheduledStartTime: z.string().optional().nullable(),
+  timezone: z.string().optional(),
+  durationMinutes: z.number().min(5).max(480).optional(),
+  invitedParticipants: z.array(participantSchema).optional(),
+  status: z.enum(["scheduled", "active", "ended"]).optional(),
+  passcode: z.string().optional(),
+});
+
+// GET /api/meetings - list meetings
+router.get("/", requireAuth, async (req, res, next) => {
+  try {
+    const { type, taskId, q } = req.query;
+    const filter = {};
+    const andClauses = [];
+
+    if (taskId && mongoose.Types.ObjectId.isValid(taskId)) {
+      filter.taskId = new mongoose.Types.ObjectId(taskId);
+    }
+
+    if (type === "active") {
+      filter.status = "active";
+    } else if (type === "upcoming") {
+      filter.status = { $in: ["scheduled", "active"] };
+    } else if (type === "past") {
+      andClauses.push({
+        $or: [
+          { status: "ended" },
+          { endedAt: { $ne: null } },
+          { "recordings.0": { $exists: true } },
+          { recordingUrl: { $nin: ["", null] } },
+        ],
+      });
+    }
+
+    if (q && typeof q === "string") {
+      const rx = new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
+      andClauses.push({
+        $or: [
+          { title: rx },
+          { description: rx },
+          { roomCode: rx },
+          { hostName: rx },
+          { "invitedParticipants.name": rx },
+          { "joinedParticipants.name": rx },
+        ],
+      });
+    }
+
+    // Everyone (including admin/manager) only sees meetings they host, are invited to, or have joined.
+    // Sharing an invite link / room code is the only way into someone else's live room.
+    // Admins can pass ?scope=all to audit every meeting.
+    const userId = String(req.user?.sub || req.user?.id || "");
+    const userEmail = String(req.user?.username || req.user?.email || "").toLowerCase();
+    const scopeAll =
+      String(req.query.scope || "").toLowerCase() === "all" &&
+      ["super-admin", "admin"].includes(String(req.user?.role || ""));
+
+    if (!scopeAll && userId) {
+      andClauses.push({
+        $or: [
+          { hostId: userId },
+          ...(userEmail ? [{ hostEmail: new RegExp(`^${userEmail.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i") }] : []),
+          { "invitedParticipants.userId": userId },
+          ...(userEmail ? [{ "invitedParticipants.email": userEmail }] : []),
+          { "joinedParticipants.userId": userId },
+        ],
+      });
+    }
+
+    if (andClauses.length === 1) {
+      Object.assign(filter, andClauses[0]);
+    } else if (andClauses.length > 1) {
+      filter.$and = andClauses;
+    }
+
+    const sort = type === "past" ? { endedAt: -1, createdAt: -1 } : { scheduledStartTime: 1, createdAt: -1 };
+    const items = await Meeting.find(filter).sort(sort).limit(100).lean();
+
+    res.json({ items: items.map(withId) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /api/meetings/code/:code - lookup by room code (must already exist)
+router.get("/code/:code", requireAuth, async (req, res, next) => {
+  try {
+    const cleanCode = String(req.params.code || "").trim().toUpperCase();
+    if (!cleanCode) {
+      return res.status(400).json({ error: { message: "Invalid room code" } });
+    }
+
+    // Case-insensitive match so typed codes still work
+    const meeting = await Meeting.findOne({
+      roomCode: { $regex: new RegExp(`^${cleanCode.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i") },
+    }).lean();
+
+    if (!meeting) {
+      return res.status(404).json({
+        error: { message: "Meeting not found. Ask the host for a valid room code or start a new meeting." },
+      });
+    }
+
+    // Ended meetings: host can rejoin/reactivate (e.g. after accidentally hitting Back)
+    if (meeting.status === "ended" || meeting.status === "cancelled") {
+      const userId = String(req.user?.sub || req.user?.id || "");
+      const userEmail = String(req.user?.username || req.user?.email || "").toLowerCase();
+      const isHost =
+        String(meeting.hostId) === userId ||
+        (meeting.hostEmail && String(meeting.hostEmail).toLowerCase() === userEmail);
+
+      const endedRecently =
+        meeting.endedAt && Date.now() - new Date(meeting.endedAt).getTime() < 30 * 60 * 1000;
+
+      if (isHost && endedRecently) {
+        await Meeting.updateOne(
+          { _id: meeting._id },
+          { $set: { status: "active", endedAt: null } }
+        );
+        const reopened = await Meeting.findById(meeting._id).lean();
+        return res.json({ item: withId(reopened) });
+      }
+
+      return res.status(410).json({
+        error: { message: "This meeting has ended. Start a new meeting to get a fresh room code." },
+      });
+    }
+
+    res.json({ item: withId(meeting) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /api/meetings/code/:code/recording - upload a meeting recording
+router.post(
+  "/code/:code/recording",
+  requireAuth,
+  recordingUpload.single("recording"),
+  async (req, res, next) => {
+    try {
+      const cleanCode = String(req.params.code || "").trim();
+      if (!cleanCode) {
+        return res.status(400).json({ error: { message: "Invalid room code" } });
+      }
+      if (!req.file) {
+        return res.status(400).json({ error: { message: "Recording file is required" } });
+      }
+
+      let meeting = await Meeting.findOne({
+        roomCode: { $regex: new RegExp(`^${cleanCode.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i") },
+      });
+      if (!meeting) {
+        return res.status(404).json({ error: { message: "Meeting not found for this room code" } });
+      }
+
+      const durationSeconds = Math.max(0, Number(req.body?.durationSeconds) || 0);
+      const originalName =
+        req.file.originalname ||
+        `meeting-${cleanCode}-${Date.now()}.webm`;
+
+      const url = await uploadToS3(
+        req.file.buffer,
+        originalName.endsWith(".webm") || originalName.endsWith(".mp4")
+          ? originalName
+          : `${originalName.replace(/\.[^.]+$/, "") || "meeting-recording"}.webm`,
+        req.file.mimetype && req.file.mimetype !== "application/octet-stream"
+          ? req.file.mimetype
+          : "video/webm",
+        "meeting-recordings"
+      );
+
+      const entry = {
+        url,
+        fileName: originalName,
+        durationSeconds,
+        sizeBytes: req.file.size || req.file.buffer?.length || 0,
+        recordedBy: String(req.user?.sub || req.user?.id || ""),
+        recordedByName: String(req.user?.name || req.user?.username || "Host"),
+        createdAt: new Date(),
+      };
+
+      if (!Array.isArray(meeting.recordings)) meeting.recordings = [];
+      meeting.recordings.push(entry);
+      meeting.recordingUrl = url;
+      await meeting.save();
+
+      res.status(201).json({
+        item: withId(meeting),
+        recording: entry,
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// GET /api/meetings/:id - get single meeting
+router.get("/:id", requireAuth, async (req, res, next) => {
+  try {
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(400).json({ error: { message: "Invalid meeting id" } });
+    }
+
+    const meeting = await Meeting.findById(req.params.id).lean();
+    if (!meeting) {
+      return res.status(404).json({ error: { message: "Meeting not found" } });
+    }
+
+    res.json({ item: withId(meeting) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /api/meetings - create instant or scheduled meeting
+router.post("/", requireAuth, async (req, res, next) => {
+  try {
+    const parsed = createMeetingSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ error: { message: parsed.error.issues[0]?.message || "Invalid payload" } });
+    }
+
+    const data = parsed.data;
+    const roomCode = await allocateUniqueRoomCode();
+
+    const hostId = String(req.user?.sub || req.user?.id || "");
+    const hostName = String(req.user?.name || "Host");
+    const hostEmail = String(req.user?.username || "");
+    const hostRole = String(req.user?.role || "admin");
+
+    const status = data.meetingType === "scheduled" && data.scheduledStartTime ? "scheduled" : "active";
+    const scheduledStartTime = data.scheduledStartTime ? new Date(data.scheduledStartTime) : null;
+    const taskId = data.taskId && mongoose.Types.ObjectId.isValid(data.taskId) ? new mongoose.Types.ObjectId(data.taskId) : null;
+
+    let doc;
+    try {
+      doc = await Meeting.create({
+        roomCode,
+        title: data.title,
+        description: data.description,
+        meetingType: data.meetingType,
+        scheduledStartTime,
+        timezone: data.timezone || "UTC",
+        durationMinutes: data.durationMinutes,
+        hostId,
+        hostName,
+        hostEmail,
+        hostRole,
+        invitedParticipants: data.invitedParticipants,
+        taskId,
+        status,
+        passcode: data.passcode,
+        startedAt: status === "active" ? new Date() : null,
+      });
+    } catch (createErr) {
+      // Rare race on unique index — retry once with a fresh code
+      if (createErr?.code === 11000) {
+        doc = await Meeting.create({
+          roomCode: await allocateUniqueRoomCode(),
+          title: data.title,
+          description: data.description,
+          meetingType: data.meetingType,
+          scheduledStartTime,
+          timezone: data.timezone || "UTC",
+          durationMinutes: data.durationMinutes,
+          hostId,
+          hostName,
+          hostEmail,
+          hostRole,
+          invitedParticipants: data.invitedParticipants,
+          taskId,
+          status,
+          passcode: data.passcode,
+          startedAt: status === "active" ? new Date() : null,
+        });
+      } else {
+        throw createErr;
+      }
+    }
+
+    let emailResult = { sent: 0, failed: 0 };
+    if (data.meetingType === "scheduled" && Array.isArray(data.invitedParticipants) && data.invitedParticipants.length > 0) {
+      emailResult = await sendMeetingInviteEmails({ meeting: doc, req });
+    }
+
+    res.status(201).json({ item: withId(doc), emailResult });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// PATCH /api/meetings/:id - update meeting
+router.patch("/:id", requireAuth, async (req, res, next) => {
+  try {
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(400).json({ error: { message: "Invalid meeting id" } });
+    }
+
+    const parsed = updateMeetingSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ error: { message: parsed.error.issues[0]?.message || "Invalid payload" } });
+    }
+
+    const meeting = await Meeting.findById(req.params.id);
+    if (!meeting) {
+      return res.status(404).json({ error: { message: "Meeting not found" } });
+    }
+
+    const userId = String(req.user?.sub || req.user?.id || "");
+    const isPrivileged = ["super-admin", "admin", "manager"].includes(req.user?.role);
+    if (!isPrivileged && meeting.hostId !== userId) {
+      return res.status(403).json({ error: { message: "Only the host can modify this meeting" } });
+    }
+
+    Object.assign(meeting, parsed.data);
+    if (parsed.data.scheduledStartTime) {
+      meeting.scheduledStartTime = new Date(parsed.data.scheduledStartTime);
+    }
+    await meeting.save();
+
+    res.json({ item: withId(meeting) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// DELETE /api/meetings/:id - cancel/delete meeting
+router.delete("/:id", requireAuth, async (req, res, next) => {
+  try {
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(400).json({ error: { message: "Invalid meeting id" } });
+    }
+
+    const meeting = await Meeting.findById(req.params.id);
+    if (!meeting) {
+      return res.status(404).json({ error: { message: "Meeting not found" } });
+    }
+
+    const userId = String(req.user?.sub || req.user?.id || "");
+    const isPrivileged = ["super-admin", "admin", "manager"].includes(req.user?.role);
+    if (!isPrivileged && meeting.hostId !== userId) {
+      return res.status(403).json({ error: { message: "Only the host can delete this meeting" } });
+    }
+
+    await Meeting.findByIdAndDelete(req.params.id);
+    res.json({ ok: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /api/meetings/:id/end - end meeting
+router.post("/:id/end", requireAuth, async (req, res, next) => {
+  try {
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(400).json({ error: { message: "Invalid meeting id" } });
+    }
+
+    const meeting = await Meeting.findById(req.params.id);
+    if (!meeting) {
+      return res.status(404).json({ error: { message: "Meeting not found" } });
+    }
+
+    meeting.status = "ended";
+    meeting.endedAt = new Date();
+    await meeting.save();
+
+    res.json({ item: withId(meeting) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+module.exports = router;

@@ -12,6 +12,10 @@ const AsanaAttachment = require("../models/AsanaAttachment");
 const AsanaUser = require("../models/AsanaUser");
 const ImportJob = require("../models/ImportJob");
 
+// Internal Task Manager Models
+const Project = require("../models/Project");
+const Task = require("../models/Task");
+const TaskComment = require("../models/TaskComment");
 const router = express.Router();
 
 function newJobId() {
@@ -298,6 +302,278 @@ router.get("/users", requireAuth, requireRole(["admin", "super-admin"]), async (
     return res.json({ ok: true, items });
   } catch (err) {
     return next(err);
+  }
+});
+
+// Transfer Asana Project to Internal Task Manager
+router.post("/transfer-project", requireAuth, requireRole(["admin", "super-admin"]), async (req, res, next) => {
+  try {
+    const { projectAsanaId } = req.body;
+    if (!projectAsanaId) {
+      return res.status(400).json({ error: { message: "projectAsanaId is required" } });
+    }
+
+    const { uploadToS3 } = require("../lib/s3");
+    const fs = require("fs");
+    const path = require("path");
+
+    // 1. Fetch Asana Project
+    const asanaProject = await AsanaProject.findOne({ asanaId: projectAsanaId }).lean();
+    if (!asanaProject) {
+      return res.status(404).json({ error: { message: "Asana project not found" } });
+    }
+
+    // Check if duplicate import
+    const existingProject = await Project.findOne({
+      description: `Imported from Asana (ID: ${asanaProject.asanaId})`
+    });
+    if (existingProject) {
+      return res.status(400).json({ error: { message: "This project has already been transferred." } });
+    }
+
+    // 2. Fetch all Asana Tasks for this project
+    const asanaTasks = await AsanaTask.find({ projectAsanaId }).lean();
+    
+    // 3. Prep User Mapping (Asana Email -> Internal User)
+    const asanaUsers = await AsanaUser.find({}).lean();
+    const Employee = require("../models/Employee");
+    const internalUsers = await Employee.find({}).lean();
+    const emailToInternalUser = new Map(internalUsers.map(u => [(u.email || "").toLowerCase(), u]));
+    
+    const asanaIdToInternalUser = new Map();
+    for (const au of asanaUsers) {
+      const internal = emailToInternalUser.get(au.email.toLowerCase());
+      if (internal) asanaIdToInternalUser.set(au.asanaId, internal);
+    }
+
+    // 4. Create Internal Project
+    const newProject = await Project.create({
+      name: asanaProject.name,
+      description: `Imported from Asana (ID: ${asanaProject.asanaId})`,
+      createdByUserId: req.user?._id || "",
+      createdByUsername: req.user?.username || "",
+      createdByRole: req.user?.role || "admin",
+      status: "Active"
+    });
+
+    let tasksCreated = 0;
+    let commentsCreated = 0;
+    let attachmentsUploaded = 0;
+
+    const asanaIdToInternalTaskId = new Map();
+    const baseUploads = path.resolve(__dirname, "..", "uploads");
+
+    // Helper: ensure attachment URL is an S3 URL (re-upload local files)
+    async function ensureS3Url(att) {
+      const filePath = att.filePath || "";
+      const fileName = att.fileName || "file";
+      const mimeType = att.mimeType || "application/octet-stream";
+
+      // Already an S3 URL — pass through
+      if (filePath.includes("amazonaws.com")) {
+        return { fileName, url: filePath, mimeType, size: att.size || 0 };
+      }
+
+      // Local disk path (e.g. /uploads/images/123_file.png)
+      if (filePath.startsWith("/uploads/")) {
+        const relativePath = filePath.replace(/^\/uploads\//, "");
+        const absPath = path.join(baseUploads, relativePath);
+        try {
+          if (fs.existsSync(absPath)) {
+            const buffer = fs.readFileSync(absPath);
+            const s3Url = await uploadToS3(buffer, fileName, mimeType, "asana-imports");
+            console.log(`[TRANSFER] Re-uploaded to S3: ${fileName} -> ${s3Url}`);
+            
+            // Update the AsanaAttachment record too so future transfers don't re-upload
+            if (att.asanaId) {
+              await AsanaAttachment.updateOne({ asanaId: att.asanaId }, { $set: { filePath: s3Url } }).catch(() => {});
+            }
+            
+            attachmentsUploaded++;
+            return { fileName, url: s3Url, mimeType, size: att.size || buffer.length };
+          }
+        } catch (err) {
+          console.error(`[TRANSFER] Failed to re-upload ${fileName} to S3:`, err.message);
+        }
+      }
+
+      // Fallback: use whatever URL we have
+      return { fileName, url: filePath, mimeType, size: att.size || 0 };
+    }
+
+    // Process top-level tasks first
+    for (const at of asanaTasks.filter(t => !t.parentAsanaId)) {
+      const internalTask = await Task.create({
+        title: at.title,
+        description: at.description,
+        projectId: newProject._id,
+        status: at.completed ? "completed" : "pending",
+        dueDate: at.dueDate ? new Date(at.dueDate) : undefined,
+        createdBy: {
+          userId: req.user?._id || "",
+          name: req.user?.name || req.user?.username || "",
+          email: req.user?.email || "",
+          role: req.user?.role || "admin"
+        }
+      });
+      asanaIdToInternalTaskId.set(at.asanaId, internalTask._id);
+      tasksCreated++;
+
+      // Transfer Comments for this task
+      const asanaComments = await AsanaComment.find({ taskAsanaId: at.asanaId }).sort({ createdAtAsana: 1 }).lean();
+      for (const ac of asanaComments) {
+        const author = asanaIdToInternalUser.get(ac.authorAsanaId);
+        await TaskComment.create({
+          taskId: internalTask._id,
+          authorUserId: author?._id || "",
+          authorUsername: author?.name || author?.username || ac.authorName || "Asana User",
+          authorRole: author?.role || "",
+          message: ac.message,
+          createdAt: ac.createdAtAsana ? new Date(ac.createdAtAsana) : undefined
+        });
+        commentsCreated++;
+      }
+
+      // Transfer Attachments — upload to S3
+      const asanaAtts = await AsanaAttachment.find({ taskAsanaId: at.asanaId }).lean();
+      if (asanaAtts.length > 0) {
+        const processed = [];
+        for (const a of asanaAtts) {
+          const result = await ensureS3Url(a);
+          if (result.url) {
+            processed.push({ ...result, uploadedAt: new Date() });
+          }
+        }
+        if (processed.length > 0) {
+          internalTask.attachments = processed;
+          await internalTask.save();
+        }
+      }
+    }
+
+    // Process subtasks
+    for (const st of asanaTasks.filter(t => t.parentAsanaId)) {
+      const parentId = asanaIdToInternalTaskId.get(st.parentAsanaId);
+      const internalSubtask = await Task.create({
+        title: `[Subtask] ${st.title}`,
+        description: st.description,
+        projectId: newProject._id,
+        status: st.completed ? "completed" : "pending",
+        dueDate: st.dueDate ? new Date(st.dueDate) : undefined,
+        createdBy: {
+          userId: req.user?._id || "",
+          name: req.user?.name || req.user?.username || "",
+          email: req.user?.email || "",
+          role: req.user?.role || "admin"
+        }
+      });
+      tasksCreated++;
+
+      // Comments for subtask
+      const asanaComments = await AsanaComment.find({ taskAsanaId: st.asanaId }).sort({ createdAtAsana: 1 }).lean();
+      for (const ac of asanaComments) {
+        const author = asanaIdToInternalUser.get(ac.authorAsanaId);
+        await TaskComment.create({
+          taskId: internalSubtask._id,
+          authorUserId: author?._id || "",
+          authorUsername: author?.name || author?.username || ac.authorName || "Asana User",
+          authorRole: author?.role || "",
+          message: ac.message,
+          createdAt: ac.createdAtAsana ? new Date(ac.createdAtAsana) : undefined
+        });
+        commentsCreated++;
+      }
+
+      // Attachments for subtask — upload to S3
+      const asanaAtts = await AsanaAttachment.find({ taskAsanaId: st.asanaId }).lean();
+      if (asanaAtts.length > 0) {
+        const processed = [];
+        for (const a of asanaAtts) {
+          const result = await ensureS3Url(a);
+          if (result.url) {
+            processed.push({ ...result, uploadedAt: new Date() });
+          }
+        }
+        if (processed.length > 0) {
+          internalSubtask.attachments = processed;
+          await internalSubtask.save();
+        }
+      }
+    }
+
+    return res.json({ 
+      ok: true, 
+      message: "Project successfully transferred to Task Manager",
+      projectId: newProject._id,
+      stats: {
+        tasks: tasksCreated,
+        comments: commentsCreated,
+        attachmentsUploaded,
+      }
+    });
+
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Clear all imported Asana data so user can do a fresh re-import
+router.delete("/clear", requireAuth, requireRole(["admin", "super-admin"]), async (_req, res, next) => {
+  try {
+    const fs = require("fs");
+    const path = require("path");
+
+    // Count before deleting
+    const counts = {
+      workspaces: await AsanaWorkspace.countDocuments(),
+      projects: await AsanaProject.countDocuments(),
+      tasks: await AsanaTask.countDocuments(),
+      comments: await AsanaComment.countDocuments(),
+      attachments: await AsanaAttachment.countDocuments(),
+      users: await AsanaUser.countDocuments(),
+      jobs: await ImportJob.countDocuments(),
+    };
+
+    // Get all attachment file paths before deleting records
+    const allAttachments = await AsanaAttachment.find({}, { filePath: 1 }).lean();
+    
+    // Delete all Asana data from DB
+    await Promise.all([
+      AsanaWorkspace.deleteMany({}),
+      AsanaProject.deleteMany({}),
+      AsanaTask.deleteMany({}),
+      AsanaComment.deleteMany({}),
+      AsanaAttachment.deleteMany({}),
+      AsanaUser.deleteMany({}),
+      ImportJob.deleteMany({}),
+    ]);
+
+    // Try to delete downloaded files from disk
+    let filesDeleted = 0;
+    const baseUploads = path.resolve(__dirname, "..", "..", "uploads");
+    for (const att of allAttachments) {
+      if (!att.filePath) continue;
+      try {
+        // filePath is like /uploads/images/1234_file.pdf
+        const relativePath = att.filePath.replace(/^\/uploads\//, "");
+        const absPath = path.join(baseUploads, relativePath);
+        if (fs.existsSync(absPath)) {
+          fs.unlinkSync(absPath);
+          filesDeleted++;
+        }
+      } catch {
+        // ignore individual file delete errors
+      }
+    }
+
+    return res.json({
+      ok: true,
+      message: "All Asana imported data has been cleared. You can now run a fresh import.",
+      deleted: counts,
+      filesDeleted,
+    });
+  } catch (err) {
+    next(err);
   }
 });
 
