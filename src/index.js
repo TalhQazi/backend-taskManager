@@ -109,6 +109,7 @@ const expenseSheetsRoutes = require("./routes/expenseSheets");
 const syncRoutes = require("./routes/sync");
 const themeEngineRoutes = require("./routes/themeEngine");
 const meetingsRoutes = require("./routes/meetings");
+const finishesRoutes = require("./routes/finishes");
 const { setupMeetingSocket } = require("./lib/meetingSocket");
 
 //going to express now
@@ -637,6 +638,11 @@ app.use("/api/global-search", requireClearHire, globalSearchRoutes);
 app.use("/api/health", healthRoutes);
 app.use("/api/themes", themeEngineRoutes);
 app.use("/api/meetings", requireClearHire, meetingsRoutes);
+app.use("/api/finishes", requireClearHire, finishesRoutes);
+app.use("/api/properties/:propertyId/finishes", requireClearHire, (req, res, next) => {
+  req.query.propertyId = req.params.propertyId;
+  return finishesRoutes(req, res, next);
+});
 
 // --- WIP Dashboard ---------------------------------------------------------
 // Mounted on three namespaces so the public API matches the spec exactly.

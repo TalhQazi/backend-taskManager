@@ -1,0 +1,10 @@
+node_modules
+uploads
+.git
+.github
+.env
+.env.*
+*.log
+*.pdf
+scratch/
+docs/
