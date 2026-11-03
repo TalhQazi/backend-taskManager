@@ -72,6 +72,21 @@ async function sendSystemEmail({ to, templateKey, variables = {} }) {
         subject: "Manager Account Created — Task Manager",
         body: getManagerRegistrationBody(),
       },
+      userBlocked: {
+        enabled: true,
+        subject: "Account Suspended / Deactivated - Task Manager",
+        body: "Hello {name},\n\nThis notification is to inform you that your Task Manager account has been deactivated or blocked by an administrator.\n\nReason / Details: {reason}\n\nWhile your account is suspended, you will not be able to log in or access your tasks and projects. If you believe this is an error or require further assistance, please contact your administrator or support team.\n\nBest regards,\nTask Manager System",
+      },
+      userUnblocked: {
+        enabled: true,
+        subject: "Account Activated / Unblocked - Task Manager",
+        body: "Hello {name},\n\nGood news! Your Task Manager account has been reactivated and unblocked by an administrator.\n\nYou can now log in and resume using your account:\nWebsite: {websiteUrl}\n\nIf you have any questions or have trouble signing in, please contact your administrator.\n\nBest regards,\nTask Manager System",
+      },
+      userStatusChanged: {
+        enabled: true,
+        subject: "Account Update Notification - Task Manager",
+        body: "Hello {name},\n\nThis is an automated notification to let you know that an update has been made to your Task Manager account by an administrator.\n\nDetails of update:\n- Operation: {operation}\n- Role: {role}\n- Status: {status}\n\nIf you did not expect this change, please contact your administrator immediately.\n\nAccess Task Manager: {websiteUrl}\n\nBest regards,\nTask Manager System",
+      },
     };
 
     if (!template && builtInDefaults[templateKey]) {
@@ -132,9 +147,15 @@ async function sendSystemEmail({ to, templateKey, variables = {} }) {
     let subject = template.subject || (templateKey === "patentExpiration" ? "ALERT: Patent Expiring - {patentName}" : (templateKey === "patentFiled" ? "NEW PATENT FILED: {patentName}" : "Task Manager Notification"));
     let body = template.body || (templateKey === "patentExpiration" ? "Hello {name},\n\nThe patent '{patentName}' is expiring in {daysUntilExpiration} days (Expiration Date: {expirationDate}).\n\nApplication Number: {applicationNumber}\nCategory: {category}\n\nTask Manager System" : "Hello {name},\n\nYou have an update in the Task Manager System.");
 
-    // Always supply app access link variables for registration emails
+    // Always supply app access link variables and sensible defaults
     const accessVars = getAppAccessVariables();
     const mergedVariables = {
+      name: "User",
+      email: to,
+      reason: "Administrative update",
+      operation: "Account update",
+      role: "User",
+      status: "active",
       ...accessVars,
       ...variables,
       websiteUrl: variables.websiteUrl || accessVars.websiteUrl,

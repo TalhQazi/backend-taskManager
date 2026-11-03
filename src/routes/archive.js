@@ -167,7 +167,7 @@ router.post("/:id/restore", requireAuth, async (req, res, next) => {
       }
     }
 
-    else if (itemType === "user") {
+    else if (itemType === "user" || itemType === "employee") {
       const Employee = require("../models/Employee");
       const data = archived.itemData || {};
       let passwordHash = data.passwordHash;
@@ -181,9 +181,29 @@ router.post("/:id/restore", requireAuth, async (req, res, next) => {
         name: data.name || "",
         email: data.email || "",
         passwordHash,
-        userRole: data.role || "employee",
+        userRole: data.role || data.userRole || "employee",
         userStatus: "active",
+        status: "active",
+        department: data.department || "",
+        phone: data.phone || "",
+        initials: data.initials || (data.name ? data.name.split(" ").map(w => w[0]).join("").toUpperCase().slice(0, 2) : "U"),
       });
+
+      if (data.email) {
+        const { sendSystemEmail } = require("../lib/email");
+        const { getAppAccessVariables } = require("../lib/appAccessLinks");
+        sendSystemEmail({
+          to: data.email,
+          templateKey: "userUnblocked",
+          variables: {
+            name: data.name || "",
+            email: data.email,
+            role: data.role || data.userRole || "employee",
+            status: "active",
+            ...getAppAccessVariables(),
+          },
+        }).catch((err) => console.error("Error sending restore unblocked email:", err));
+      }
     }
 
     else if (itemType === "tenant") {

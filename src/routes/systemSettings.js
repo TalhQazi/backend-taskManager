@@ -42,6 +42,10 @@ const systemSettingsSchema = z.object({
     patentExpiration: templateSchema.optional(),
     lunchBreakAlert: templateSchema.optional(),
     meetingInvite: templateSchema.optional(),
+    pollAssignment: templateSchema.optional(),
+    userBlocked: templateSchema.optional(),
+    userUnblocked: templateSchema.optional(),
+    userStatusChanged: templateSchema.optional(),
   }).optional(),
   taskRewardSystemEnabled: z.boolean().optional(),
   scheConfig: z.object({

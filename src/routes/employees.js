@@ -1015,6 +1015,8 @@ router.post("/", requireAuth, async (req, res, next) => {
             templateKey: created.userRole === "manager" ? "managerRegistration" : "userRegistration",
             variables: {
               name: created.name,
+              email: created.email,
+              role: created.userRole || created.role || "employee",
               ...require("../lib/appAccessLinks").getAppAccessVariables(),
             },
           }).catch((err) => console.error("Welcome email failed:", err))
@@ -1032,6 +1034,11 @@ router.put("/:id", requireAuth, async (req, res, next) => {
     const parsed = updateSchema.safeParse(req.body);
     if (!parsed.success) {
       return res.status(400).json({ error: { message: "Invalid payload" } });
+    }
+
+    const oldEmployee = await Employee.findById(req.params.id).lean();
+    if (!oldEmployee) {
+      return res.status(404).json({ error: { message: "Employee not found" } });
     }
 
     const patch = { ...parsed.data };
@@ -1095,6 +1102,75 @@ router.put("/:id", requireAuth, async (req, res, next) => {
       resourceId: String(req.params.id),
     });
 
+    if (oldEmployee) {
+      const targetEmail = updated.email || oldEmployee.email;
+      if (targetEmail) {
+        const { sendSystemEmail } = require("../lib/email");
+        const { getAppAccessVariables } = require("../lib/appAccessLinks");
+        const appVars = getAppAccessVariables();
+
+        const oldStatus = String(oldEmployee.status || oldEmployee.userStatus || "active").toLowerCase();
+        const newStatus = String(patch.status || patch.userStatus || updated.status || updated.userStatus || oldStatus).toLowerCase();
+
+        const statusBecameActive = oldStatus === "inactive" && (patch.status === "active" || newStatus === "active");
+        const roleChanged = Boolean(patch.role && patch.role !== oldEmployee.role) || Boolean(patch.userRole && patch.userRole !== oldEmployee.userRole);
+        const passwordChanged = Boolean(patch.passwordHash);
+
+        if (statusBecameActive) {
+          sendSystemEmail({
+            to: targetEmail,
+            templateKey: "userUnblocked",
+            variables: {
+              name: updated.name || oldEmployee.name,
+              email: targetEmail,
+              role: updated.userRole || updated.role || "employee",
+              status: "active",
+              ...appVars,
+            },
+          }).catch((err) => console.error("Error sending userUnblocked email on employee update:", err));
+        } else if (roleChanged) {
+          sendSystemEmail({
+            to: targetEmail,
+            templateKey: "userStatusChanged",
+            variables: {
+              name: updated.name || oldEmployee.name,
+              email: targetEmail,
+              operation: `Role updated to ${updated.role || updated.userRole}`,
+              role: updated.userRole || updated.role || "employee",
+              status: updated.status || "active",
+              ...appVars,
+            },
+          }).catch((err) => console.error("Error sending userStatusChanged email on role change:", err));
+        } else if (passwordChanged) {
+          sendSystemEmail({
+            to: targetEmail,
+            templateKey: "userStatusChanged",
+            variables: {
+              name: updated.name || oldEmployee.name,
+              email: targetEmail,
+              operation: "Account password updated by administrator",
+              role: updated.userRole || updated.role || "employee",
+              status: updated.status || "active",
+              ...appVars,
+            },
+          }).catch((err) => console.error("Error sending userStatusChanged email on password change:", err));
+        } else if (patch.department || patch.phone || patch.name) {
+          sendSystemEmail({
+            to: targetEmail,
+            templateKey: "userStatusChanged",
+            variables: {
+              name: updated.name || oldEmployee.name,
+              email: targetEmail,
+              operation: "Employee profile information updated by administrator",
+              role: updated.userRole || updated.role || "employee",
+              status: updated.status || "active",
+              ...appVars,
+            },
+          }).catch((err) => console.error("Error sending userStatusChanged email on profile change:", err));
+        }
+      }
+    }
+
     const s = await Settings.findOne({ userId: String(updated._id) }).lean();
     const avatarUrl = s?.avatarDataUrl || s?.avatarUrl || "";
 
@@ -1109,6 +1185,23 @@ async function archiveEmployeeById(employeeId, archivedBy) {
   
   const employee = await Employee.findById(employeeId).lean();
   if (!employee) return null;
+
+  if (employee.email) {
+    const { sendSystemEmail } = require("../lib/email");
+    const { getAppAccessVariables } = require("../lib/appAccessLinks");
+    sendSystemEmail({
+      to: employee.email,
+      templateKey: "userBlocked",
+      variables: {
+        name: employee.name,
+        email: employee.email,
+        reason: "Employee profile archived/deactivated by administrator",
+        role: employee.userRole || employee.role || "employee",
+        status: "archived/inactive",
+        ...getAppAccessVariables(),
+      },
+    }).catch((err) => console.error("Error sending userBlocked email on employee archive:", err));
+  }
 
   await Archive.create({
     itemType: "employee",
@@ -1198,6 +1291,23 @@ router.post("/:id/reset-password", requireAuth, requireRole(["super-admin"]), as
 
     if (!updated) {
       return res.status(404).json({ error: { message: "Employee not found" } });
+    }
+
+    if (updated.email) {
+      const { sendSystemEmail } = require("../lib/email");
+      const { getAppAccessVariables } = require("../lib/appAccessLinks");
+      sendSystemEmail({
+        to: updated.email,
+        templateKey: "userStatusChanged",
+        variables: {
+          name: updated.name,
+          email: updated.email,
+          operation: "Password reset by Super Admin",
+          role: updated.role || updated.userRole || "employee",
+          status: updated.status || updated.userStatus || "active",
+          ...getAppAccessVariables(),
+        },
+      }).catch((err) => console.error("Error sending employee reset password notification email:", err));
     }
 
     return res.json({ success: true, message: "Password reset successfully" });
@@ -2496,6 +2606,23 @@ router.post("/:id/separation", requireAuth, requireRole(["super-admin", "admin"]
       req,
       { separationType, separationReason }
     );
+
+    if (employee.email) {
+      const { sendSystemEmail } = require("../lib/email");
+      const { getAppAccessVariables } = require("../lib/appAccessLinks");
+      sendSystemEmail({
+        to: employee.email,
+        templateKey: "userBlocked",
+        variables: {
+          name: employee.name,
+          email: employee.email,
+          reason: `Separation processed: ${separationType} (${separationReason})`,
+          role: employee.role || employee.userRole || "employee",
+          status: "inactive",
+          ...getAppAccessVariables(),
+        },
+      }).catch((err) => console.error("Error sending separation email:", err));
+    }
 
     // Audit log
     await ActivityLog.create({

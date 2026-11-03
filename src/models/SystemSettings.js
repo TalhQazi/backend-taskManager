@@ -105,6 +105,33 @@ const SystemSettingsSchema = new mongoose.Schema(
             "Hello {name},\n\nA new poll has been published and your feedback is requested.\n\n--------------------------------------------------\n📊 Poll: {pollTitle}\n📝 Details: {pollDescription}\n⏰ Closes: {closesAt}\n--------------------------------------------------\n\nPlease log in to Task Manager to cast your vote.\n\nBest regards,\nTask Manager System",
         },
       },
+      userBlocked: {
+        enabled: { type: Boolean, default: true },
+        subject: { type: String, default: "Account Suspended / Deactivated - Task Manager" },
+        body: {
+          type: String,
+          default:
+            "Hello {name},\n\nThis notification is to inform you that your Task Manager account has been deactivated or blocked by an administrator.\n\nReason / Details: {reason}\n\nWhile your account is suspended, you will not be able to log in or access your tasks and projects. If you believe this is an error or require further assistance, please contact your administrator or support team.\n\nBest regards,\nTask Manager System",
+        },
+      },
+      userUnblocked: {
+        enabled: { type: Boolean, default: true },
+        subject: { type: String, default: "Account Activated / Unblocked - Task Manager" },
+        body: {
+          type: String,
+          default:
+            "Hello {name},\n\nGood news! Your Task Manager account has been reactivated and unblocked by an administrator.\n\nYou can now log in and resume using your account:\nWebsite: {websiteUrl}\n\nIf you have any questions or have trouble signing in, please contact your administrator.\n\nBest regards,\nTask Manager System",
+        },
+      },
+      userStatusChanged: {
+        enabled: { type: Boolean, default: true },
+        subject: { type: String, default: "Account Update Notification - Task Manager" },
+        body: {
+          type: String,
+          default:
+            "Hello {name},\n\nThis is an automated notification to let you know that an update has been made to your Task Manager account by an administrator.\n\nDetails of update:\n- Operation: {operation}\n- Role: {role}\n- Status: {status}\n\nIf you did not expect this change, please contact your administrator immediately.\n\nAccess Task Manager: {websiteUrl}\n\nBest regards,\nTask Manager System",
+        },
+      },
     },
     taskRewardSystemEnabled: { type: Boolean, default: true },
     scheConfig: {
