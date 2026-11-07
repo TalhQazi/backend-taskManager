@@ -5,7 +5,7 @@ const { noteRepository } = require("../../repositories/knowledge");
 const PermissionService = require("../../services/knowledge/PermissionService");
 const { kvContext, wrap } = require("./context");
 
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 100 * 1024 * 1024 } });
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 1024 * 1024 * 1024 /* 1GB */ } });
 const router = express.Router();
 
 function formatBytes(bytes) {

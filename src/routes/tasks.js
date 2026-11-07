@@ -64,7 +64,7 @@ const storage = multer.memoryStorage();
 
 const upload = multer({
   storage,
-  limits: { fileSize: 16 * 1024 * 1024 }, // 16MB - MongoDB max document size
+  limits: { fileSize: 1024 * 1024 * 1024 /* 1GB */ }, // 16MB - MongoDB max document size
 });
 
 const createSchema = z.object({
@@ -921,6 +921,48 @@ router.post("/", requireAuth, async (req, res, next) => {
     if (err.name === 'CastError') {
       return res.status(400).json({ error: { message: `Invalid value for field ${err.path}: ${err.value}` } });
     }
+    return next(err);
+  }
+});
+
+// Dedicated task attachments upload endpoint using disk storage for files up to 1GB
+const taskAttachmentsDir = path.resolve(__dirname, "../../uploads/tasks");
+if (!fs.existsSync(taskAttachmentsDir)) {
+  fs.mkdirSync(taskAttachmentsDir, { recursive: true });
+}
+const taskDiskStorage = multer.diskStorage({
+  destination: (_req, _file, cb) => cb(null, taskAttachmentsDir),
+  filename: (_req, file, cb) => {
+    let ext = path.extname(file.originalname || "");
+    if (!ext && file.mimetype) {
+      const sub = file.mimetype.split("/")[1] || "";
+      if (sub) ext = `.${sub.split(";")[0]}`;
+    }
+    const unique = `${Date.now()}-${Math.random().toString(36).substring(2, 9)}${ext}`;
+    cb(null, unique);
+  },
+});
+const taskAttachmentsUpload = multer({
+  storage: taskDiskStorage,
+  limits: { fileSize: 1024 * 1024 * 1024 /* 1GB */ },
+});
+
+router.post("/attachments/upload", requireAuth, taskAttachmentsUpload.array("files", 10), async (req, res, next) => {
+  try {
+    const files = req.files || [];
+    if (!files.length) {
+      return res.status(400).json({ error: { message: "No files provided" } });
+    }
+    const items = files.map((f) => ({
+      fileName: f.originalname,
+      url: `/uploads/tasks/${f.filename}`,
+      mimeType: f.mimetype,
+      size: f.size,
+      uploadedAt: new Date(),
+    }));
+    return res.status(201).json({ items });
+  } catch (err) {
+    console.error("POST /api/tasks/attachments/upload Error:", err);
     return next(err);
   }
 });

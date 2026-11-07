@@ -396,7 +396,8 @@ app.use(requestTiming);
 // that short-circuit before parsing (static assets, early 4xx).
 app.use(compression());
 
-const jsonParser = express.json({ limit: "100mb" });
+const jsonParser = express.json({ limit: "1gb" });
+const urlencodedParser = express.urlencoded({ limit: "1gb", extended: true });
 app.use((req, res, next) => {
   const ct = req.headers['content-type'] || '';
   if (ct.includes('multipart/form-data')) {

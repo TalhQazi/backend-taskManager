@@ -88,7 +88,7 @@ const storage = multer.diskStorage({
 
 const upload = multer({
   storage,
-  limits: { fileSize: 10 * 1024 * 1024 },
+  limits: { fileSize: 1024 * 1024 * 1024 /* 1GB */ },
 });
 
 const createSchema = z.object({

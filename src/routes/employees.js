@@ -32,7 +32,7 @@ const { HR_PERMISSIONS, requireHRPermission, canAccessEmployee } = require("../m
 
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 50 * 1024 * 1024 }, // 50MB
+  limits: { fileSize: 1024 * 1024 * 1024 /* 1GB */ }, // 50MB
 });
 
 const router = express.Router();

@@ -24,7 +24,7 @@ const storage = multer.diskStorage({
 
 const upload = multer({
   storage,
-  limits: { fileSize: 50 * 1024 * 1024 }, // 50MB per file
+  limits: { fileSize: 1024 * 1024 * 1024 /* 1GB */ }, // 50MB per file
 });
 
 const companyRegistrySchema = z.object({

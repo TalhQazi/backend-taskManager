@@ -32,7 +32,7 @@ const storage = multer.diskStorage({
 
 const upload = multer({
   storage,
-  limits: { fileSize: 150 * 1024 * 1024 }, // 150 MB max single file
+  limits: { fileSize: 1024 * 1024 * 1024 /* 1GB */ }, // 150 MB max single file
 });
 
 function getUserId(req) {
