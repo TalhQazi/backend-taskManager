@@ -518,7 +518,22 @@ app.use("/api/schedules", requireClearHire, eventsRoutes);
 app.use("/api/messages", requireClearHire, messagesRoutes);
 app.use("/api/notifications", requireClearHire, messagesRoutes);
 app.use("/api/settings", requireClearHire, settingsRoutes);
-app.use("/api/mcp", requireClearHire, mcpRoutes);
+app.use(
+  "/api/mcp",
+  (req, res, next) => {
+    // Allow public access to openapi.json and specialized auth for ChatGPT actions
+    if (
+      req.path === "/openapi.json" ||
+      req.url === "/openapi.json" ||
+      req.path.startsWith("/chatgpt") ||
+      req.url.startsWith("/chatgpt")
+    ) {
+      return next();
+    }
+    return requireClearHire(req, res, next);
+  },
+  mcpRoutes
+);
 app.use("/api/reports", requireClearHire, reportsRoutes);
 app.use("/api/users", requireClearHire, usersRoutes);
 app.use("/api/dashboard", requireClearHire, dashboardRoutes);
