@@ -35,6 +35,9 @@ const CORE_REQ_MAP = {
   yelpCompliance: "Yelp",
   truthSocialCompliance: "Truth Social",
   threadsCompliance: "Threads",
+  testedOnDesktop: "Tested on Desktop",
+  testedOnMobile: "Tested on Mobile Phone",
+  testedOnTablet: "Tested on Tablet",
 };
 
 const SOCIAL_MEDIA_ITEMS = [
@@ -48,6 +51,13 @@ const SOCIAL_MEDIA_ITEMS = [
   { title: "Threads", category: "Social Media", description: "Official Threads brand account.", requiresEvidence: false },
 ];
 
+
+const DEVICE_TESTING_ITEMS = [
+  { title: "Tested on Desktop", category: "Device Testing", description: "Verify full layout, desktop navigation bar, forms, and assets on desktop viewport (1280px+).", requiresEvidence: false },
+  { title: "Tested on Mobile Phone", category: "Device Testing", description: "Verify responsive mobile view, burger menu, touch targets, and readability on mobile phones (iOS & Android).", requiresEvidence: false },
+  { title: "Tested on Tablet", category: "Device Testing", description: "Verify responsive grid, portrait & landscape layouts, and touch gestures on tablet viewport (iPad & tablets).", requiresEvidence: false },
+];
+
 const MOBILE_APP_ITEMS = [
   { title: "iOS App Store Deployment", category: "Mobile App", description: "Publish, verify, and link official Apple App Store mobile application.", requiresEvidence: false },
   { title: "Google Play Store Deployment", category: "Mobile App", description: "Publish, verify, and link official Google Play Store mobile application.", requiresEvidence: false },
@@ -56,6 +66,14 @@ const MOBILE_APP_ITEMS = [
 ];
 
 const STANDARD_PROJECT_CATEGORIES = [
+  {
+    name: "Device Testing",
+    items: [
+      { title: "Tested on Desktop", description: "Verify layout, fonts, and interactivity tested on desktop screens.", requiresEvidence: false },
+      { title: "Tested on Mobile Phone", description: "Verify responsive mobile view, burger menu, touch targets, and readability on mobile phones.", requiresEvidence: false },
+      { title: "Tested on Tablet", description: "Verify column wrapping, navigation, and readability tested on tablets.", requiresEvidence: false },
+    ],
+  },
   {
     name: "Domain & DNS",
     items: [
@@ -445,7 +463,7 @@ router.get("/:id/compliance", requireAuth, async (req, res, next) => {
 
     // Ensure all standard & mandatory items exist for every website
     const existingTitles = new Set(items.map(i => String(i.title || "").toLowerCase().trim()));
-    const allExpectedItems = [...mandatoryItems, ...SOCIAL_MEDIA_ITEMS, ...MOBILE_APP_ITEMS];
+    const allExpectedItems = [...mandatoryItems, ...SOCIAL_MEDIA_ITEMS, ...MOBILE_APP_ITEMS, ...DEVICE_TESTING_ITEMS];
     const missingExpected = allExpectedItems.filter(m => !existingTitles.has(String(m.title).toLowerCase().trim()));
 
     if (missingExpected.length > 0) {
@@ -510,6 +528,9 @@ router.put("/:id/compliance/:itemId", requireAuth, async (req, res, next) => {
     if (evidenceUrl !== undefined) item.evidenceUrl = evidenceUrl;
     if (evidenceFile !== undefined) item.evidenceFile = evidenceFile;
     if (blockedReason !== undefined) item.blockedReason = blockedReason;
+    if (req.body.testedOnDesktop !== undefined) item.testedOnDesktop = Boolean(req.body.testedOnDesktop);
+    if (req.body.testedOnMobile !== undefined) item.testedOnMobile = Boolean(req.body.testedOnMobile);
+    if (req.body.testedOnTablet !== undefined) item.testedOnTablet = Boolean(req.body.testedOnTablet);
 
     await item.save();
 
@@ -840,6 +861,17 @@ router.patch("/:id/compliance/category-status", requireAuth, async (req, res, ne
         tikTokCompliance: socialVal,
         instagramCompliance: socialVal,
         threadsCompliance: socialVal,
+      });
+    }
+
+
+    // If category is "Device Testing", sync all 3 device testing compliance fields
+    if (category === "Device Testing") {
+      const deviceVal = checklistStatusToCoreStatus(status);
+      await Website.findByIdAndUpdate(website._id, {
+        testedOnDesktop: deviceVal,
+        testedOnMobile: deviceVal,
+        testedOnTablet: deviceVal,
       });
     }
 

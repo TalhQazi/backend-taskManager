@@ -123,6 +123,10 @@ const websiteSchema = new mongoose.Schema(
     yelpCompliance: { type: String, enum: ["green", "red", "none", "na"], default: "none" },
     truthSocialCompliance: { type: String, enum: ["green", "red", "none", "na"], default: "none" },
     threadsCompliance: { type: String, enum: ["green", "red", "none", "na"], default: "none" },
+    // Device Responsiveness Testing fields (Desktop, Mobile Phone, Tablet)
+    testedOnDesktop: { type: String, enum: ["green", "red", "none", "na"], default: "none" },
+    testedOnMobile: { type: String, enum: ["green", "red", "none", "na"], default: "none" },
+    testedOnTablet: { type: String, enum: ["green", "red", "none", "na"], default: "none" },
     // Hidden / Excluded N/A sections per project
     hiddenCategories: { type: [String], default: [] },
     // System Health Monitoring fields

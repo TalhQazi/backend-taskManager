@@ -29,6 +29,10 @@ const checklistItemSchema = new mongoose.Schema(
       size: Number,
     },
     notes: { type: String, default: "" },
+    // Cross-device responsiveness testing
+    testedOnDesktop: { type: Boolean, default: false },
+    testedOnMobile: { type: Boolean, default: false },
+    testedOnTablet: { type: Boolean, default: false },
   },
   { timestamps: true }
 );
