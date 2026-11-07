@@ -10,9 +10,13 @@ const vendorSchema = z.object({
   name: z.string().min(1, "Name is required"),
   phone: z.string().min(1, "Phone is required"),
   email: z.union([z.string().email(), z.literal("")]).optional().default(""),
-  address: z.string().optional().default(""),
+  street: z.string().optional().default(""),
+  city: z.string().optional().default(""),
+  state: z.string().optional().default(""),
+  zip: z.string().optional().default(""),
+  website: z.string().optional().default(""),
   serviceType: z.string().min(1, "Service type is required"),
-  location: z.string().min(1, "Location is required"),
+  location: z.string().optional().default(""),
   status: z.enum(["approved", "not-approved"]).optional().default("approved"),
   notes: z.string().optional().default(""),
 });
@@ -59,7 +63,7 @@ router.post("/", requireAuth, async (req, res, next) => {
     
     // Create notification
     await createNotification({
-      actor: req.user?.username || req.user?.name || "Admin",
+      actor: req.user?.name || req.user?.username || "Admin",
       actorRole: req.user?.role || "admin",
       action: "created",
       resourceType: "vendor",
@@ -97,7 +101,7 @@ router.put("/:id", requireAuth, async (req, res, next) => {
 
     // Create notification
     await createNotification({
-      actor: req.user?.username || req.user?.name || "Admin",
+      actor: req.user?.name || req.user?.username || "Admin",
       actorRole: req.user?.role || "admin",
       action: "updated",
       resourceType: "vendor",
@@ -120,7 +124,7 @@ router.delete("/:id", requireAuth, async (req, res, next) => {
     
     // Create notification
     await createNotification({
-      actor: req.user?.username || req.user?.name || "Admin",
+      actor: req.user?.name || req.user?.username || "Admin",
       actorRole: req.user?.role || "admin",
       action: "deleted",
       resourceType: "vendor",

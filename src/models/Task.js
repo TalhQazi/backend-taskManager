@@ -6,12 +6,15 @@ const TaskSchema = new mongoose.Schema(
     description: { type: String, default: "" },
     projectId: { type: mongoose.Schema.Types.ObjectId, ref: "Project", required: false, index: true },
     assignees: { type: [String], default: [], index: true },
+    teamLead: { type: String, default: "", index: true },
     priority: { type: String, enum: ["high", "medium", "low"], default: "medium", index: true },
     status: { type: String, enum: ["pending", "in-progress", "completed", "overdue"], default: "pending", index: true },
     category: { type: String, enum: ["task", "bug", "feature", "maintenance"], default: "task", index: true },
     dueDate: { type: Date, index: true },
     dueTime: { type: String, default: "" },
+    location: { type: String, default: "", index: true },
     createdAt: { type: String, default: "", index: true },
+    introVideoUrl: { type: String, default: "" },
     attachmentFileName: { type: String, default: "" },
     attachmentNote: { type: String, default: "" },
     attachment: {
@@ -29,8 +32,54 @@ const TaskSchema = new mongoose.Schema(
         uploadedAt: { type: Date, default: Date.now },
       },
     ],
+    subtasks: [
+      {
+        title: { type: String, required: true },
+        completed: { type: Boolean, default: false },
+        completedAt: { type: Date },
+        completedBy: { type: String, default: "" },
+        createdAt: { type: Date, default: Date.now },
+      },
+    ],
     startedAt: { type: Date },
     totalTimeSpent: { type: Number, default: 0 }, // cumulative time in seconds
+
+    // Start/Close history — permanent timestamps for when work first began and when the task was closed
+    firstStartedAt: { type: Date },        // first time the task was moved to "in-progress"
+    startedByName: { type: String, default: "" },
+    completedAt: { type: Date },           // when the task was marked "completed"
+    completedByName: { type: String, default: "" },
+    
+    // Contributor tracking
+    createdBy: {
+      userId: { type: String, default: "" },
+      name: { type: String, default: "" },
+      email: { type: String, default: "" },
+      role: { type: String, default: "" },
+    },
+    contributors: [
+      {
+        userId: { type: String, required: true },
+        name: { type: String, required: true },
+        email: { type: String },
+        role: { type: String },
+        addedAt: { type: Date, default: Date.now },
+        contributionType: { type: String, enum: ["creator", "assignee", "updater", "reviewer"], default: "assignee" },
+        actions: [String], // e.g., ["created", "updated_status", "added_comment"]
+      },
+    ],
+    contributionHistory: [
+      {
+        userId: { type: String, required: true },
+        name: { type: String, required: true },
+        action: { type: String, required: true }, // e.g., "created", "updated", "completed"
+        timestamp: { type: Date, default: Date.now },
+        details: { type: String, default: "" },
+      },
+    ],
+    taskNumber: { type: Number, index: true },
+    executionPriority: { type: Number, default: null, index: true }, // Admin-only execution order priority
+    websiteId: { type: mongoose.Schema.Types.ObjectId, ref: "Website", required: false, index: true },
   },
   { timestamps: true }
 );
@@ -40,6 +89,13 @@ TaskSchema.index({ projectId: 1, status: 1 });
 TaskSchema.index({ assignees: 1, status: 1 });
 TaskSchema.index({ createdAt: -1, status: 1 });
 TaskSchema.index({ projectId: 1, createdAt: -1 });
+// Covers the dashboard summary aggregation: it groups over exactly these three
+// fields, so Mongo can satisfy it from the index alone instead of fetching whole
+// task documents (which carry description, attachments and contributionHistory).
+TaskSchema.index({ status: 1, dueDate: 1, category: 1 }, { name: "dashboard_summary_cover" });
+// Serves the Day-Ahead / 7-Day views, which filter on a due-date window and
+// exclude completed tasks.
+TaskSchema.index({ dueDate: 1, status: 1 }, { name: "due_window_status" });
 // Text index for search queries (replaces regex scans)
 TaskSchema.index({ title: "text", description: "text" });
 

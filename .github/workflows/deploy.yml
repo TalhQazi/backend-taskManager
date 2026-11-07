@@ -1,0 +1,32 @@
+name: Deploy Backend to Server
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.SERVER_IP }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            cd /var/www/task-manager/backend
+            git pull origin main
+            docker compose up -d --build backend
+            # Apply 1GB upload limit and reload host/docker Nginx
+            if [ -f /etc/nginx/nginx.conf ]; then
+              sudo sed -i '/client_max_body_size/d' /etc/nginx/nginx.conf 2>/dev/null || true
+              sudo sed -i '/http {/a \    client_max_body_size 1024M;' /etc/nginx/nginx.conf 2>/dev/null || true
+            fi
+            for f in /etc/nginx/sites-available/* /etc/nginx/sites-enabled/* /etc/nginx/conf.d/*; do
+              if [ -f "$f" ]; then
+                sudo sed -i 's/client_max_body_size [^;]*;/client_max_body_size 1024M;/g' "$f" 2>/dev/null || true
+              fi
+            done
+            sudo nginx -t && sudo nginx -s reload 2>/dev/null || sudo systemctl reload nginx 2>/dev/null || docker compose restart nginx 2>/dev/null || true

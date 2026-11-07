@@ -3,7 +3,6 @@ const { z } = require("zod");
 
 const TimeEntry = require("../models/TimeEntry");
 const Employee = require("../models/Employee");
-const User = require("../models/User");
 const TimeEditAuditLog = require("../models/TimeEditAuditLog");
 const { createNotification } = require("../utils/notifications");
 const { requireAuth, requireRole } = require("../middleware/auth");
@@ -19,7 +18,7 @@ const { cacheWrap, cacheDel } = require("../lib/cache");
 const router = express.Router();
 
 function escapeRegex(value) {
-  return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\$&");
 }
 
 const createSchema = z.object({
@@ -56,6 +55,8 @@ const adminUiSchema = z.object({
   date: z.string().min(1),
   clockIn: z.string().min(1),
   clockOut: z.string().nullable().optional(),
+  clockInAt: z.string().optional(),
+  clockOutAt: z.string().optional(),
   status: z.string().optional(),
 });
 
@@ -158,7 +159,7 @@ async function writeAuditLogs({ timeEntryId, before, after, editedByUserId, ipAd
   }
 }
 
-router.get("/", requireAuth, async (req, res, next) => {
+router.get("/", requireAuth, requireRole(["manager", "admin", "super-admin"]), async (req, res, next) => {
   try {
     const employeeQuery = String(req.query?.employee || "").trim();
     const { page, limit, skip } = parsePagination(req.query);
@@ -183,34 +184,38 @@ router.get("/", requireAuth, async (req, res, next) => {
         )
       );
 
-      const users = userIds.length
-        ? await User.find({ _id: { $in: userIds } }, { name: 1, username: 1, email: 1 }).lean()
+      const emps = userIds.length
+        ? await Employee.find({ _id: { $in: userIds } }, { name: 1, email: 1 }).lean()
         : [];
 
-      const userById = new Map(users.map((u) => [String(u._id), u]));
+      const empById = new Map(emps.map((e) => [String(e._id), e]));
 
-      const emails = Array.from(
-        new Set(
-          users
-            .map((u) => String(u.email || "").trim().toLowerCase())
-            .filter(Boolean)
-        )
-      );
-
-      const emps = emails.length
-        ? await Employee.find({ email: { $in: emails } }, { name: 1, email: 1 }).lean()
+      // Resolve avatars from Settings. Entries carry userId (Employee._id); legacy
+      // entries only have the employee name, so map those names to an Employee._id too.
+      const namesWithoutId = Array.from(new Set(
+        items
+          .filter((e) => !String(e.userId || "").trim())
+          .map((e) => String(e.employee || "").trim())
+          .filter(Boolean)
+      ));
+      const empsByName = namesWithoutId.length
+        ? await Employee.find({ name: { $in: namesWithoutId } }, { name: 1 }).lean()
         : [];
+      const idByName = new Map(empsByName.map((e) => [e.name, String(e._id)]));
 
-      const employeeByEmail = new Map(emps.map((e) => [String(e.email || "").trim().toLowerCase(), e]));
+      const { getAuthorProfileMap } = require("../utils/authorProfile");
+      const profileMap = await getAuthorProfileMap([
+        ...userIds,
+        ...empsByName.map((e) => String(e._id)),
+      ]);
 
       const enriched = items.map((e) => {
         const uid = String(e.userId || "").trim();
-        const user = uid ? userById.get(uid) : null;
-        const email = String(user?.email || "").trim().toLowerCase();
-        const emp = email ? employeeByEmail.get(email) : null;
-        const resolved = employeeDisplayName(emp) || userDisplayName(user);
-        if (!resolved) return withId(e);
-        return withId({ ...e, employee: resolved });
+        const emp = uid ? empById.get(uid) : null;
+        const resolved = employeeDisplayName(emp) || String(e.employee || "").trim();
+        const avatarId = uid || idByName.get(String(e.employee || "").trim()) || "";
+        const avatar = (avatarId && profileMap[avatarId]?.avatar) || "";
+        return withId({ ...e, employee: resolved || e.employee, avatar });
       });
 
       // Compliance evaluation (partial - don't block list query if it fails)
@@ -241,6 +246,8 @@ router.post("/", requireAuth, async (req, res, next) => {
         date: new Date(adminParsed.data.date),
         clockIn: adminParsed.data.clockIn,
         clockOut: adminParsed.data.clockOut || "",
+        clockInAt: adminParsed.data.clockInAt ? toDateSafe(adminParsed.data.clockInAt) : undefined,
+        clockOutAt: adminParsed.data.clockOutAt ? toDateSafe(adminParsed.data.clockOutAt) : undefined,
         breakTime: "",
         totalHours: 0,
         status: adminParsed.data.clockOut ? "complete" : "incomplete",
@@ -249,7 +256,7 @@ router.post("/", requireAuth, async (req, res, next) => {
       
       // Create notification
       await createNotification({
-        actor: req.user?.username || req.user?.name || "Admin",
+        actor: req.user?.name || req.user?.username || "Admin",
         actorRole: req.user?.role || "admin",
         action: "created",
         resourceType: "time entry",
@@ -284,7 +291,7 @@ router.post("/", requireAuth, async (req, res, next) => {
     // Fire-and-forget side effects
     Promise.allSettled([
       createNotification({
-        actor: req.user?.username || req.user?.name || "Admin",
+        actor: req.user?.name || req.user?.username || "Admin",
         actorRole: req.user?.role || "admin",
         action: "created",
         resourceType: "time entry",
@@ -316,10 +323,8 @@ router.post("/clock-in", requireAuth, async (req, res, next) => {
     try {
       const userId = String(req.user?.sub || "").trim();
       if (userId) {
-        const user = await User.findById(userId, { name: 1, username: 1, email: 1 }).lean();
-        const email = String(user?.email || "").trim().toLowerCase();
-        const emp = email ? await Employee.findOne({ email }, { name: 1, email: 1 }).lean() : null;
-        const resolved = employeeDisplayName(emp) || userDisplayName(user);
+        const emp = await Employee.findById(userId, { name: 1, email: 1 }).lean();
+        const resolved = employeeDisplayName(emp);
         if (resolved) employeeName = resolved;
       }
     } catch {
@@ -355,6 +360,15 @@ router.post("/clock-in", requireAuth, async (req, res, next) => {
       status: "incomplete",
       location: parsed.data.location || "",
     });
+
+    const EmployeePresence = require("../models/EmployeePresence");
+    if (req.user?.sub) {
+      await EmployeePresence.updateOne(
+        { employeeId: req.user.sub },
+        { $set: { clockedIn: true, lastActivityAt: new Date(), employeeName } },
+        { upsert: true }
+      ).catch(() => {});
+    }
 
     cacheDel("time-entries:list:*").catch(() => {});
 
@@ -432,9 +446,66 @@ router.post("/:id/clock-out", requireAuth, async (req, res, next) => {
       return res.status(400).json({ error: { message: "Already clocked out" } });
     }
 
-    entry.clockOutAt = new Date();
+    const now = new Date();
+    entry.clockOutAt = now;
+    entry.clockOut = now.toTimeString().slice(0, 5);
     entry.status = "complete";
     entry.totalHours = calcTotalHours(entry);
+
+    // Accept optional EOD/scrum data from body
+    const body = req.body || {};
+    let eodData = null;
+    if (typeof body.eodReport === "object" && body.eodReport !== null) {
+      entry.scrum = JSON.stringify(body.eodReport);
+      eodData = body.eodReport;
+    } else if (typeof body.scrum === "string" && body.scrum.trim()) {
+      entry.scrum = body.scrum.trim();
+      try {
+        eodData = JSON.parse(body.scrum);
+      } catch {
+        eodData = { tasksCompleted: body.scrum.trim(), issuesBlockers: "", notes: "" };
+      }
+    }
+
+    if (eodData) {
+      try {
+        const EODReport = require("../models/EODReport");
+        const emp = await Employee.findOne({ $or: [{ _id: entry.userId }, { name: entry.employee }] }).lean();
+        if (emp) {
+          const start = new Date(entry.date);
+          start.setHours(0, 0, 0, 0);
+          const end = new Date(entry.date);
+          end.setHours(23, 59, 59, 999);
+
+          const existingReport = await EODReport.findOne({
+            userId: String(emp._id),
+            date: { $gte: start, $lte: end },
+          });
+
+          if (existingReport) {
+            existingReport.rawInput = JSON.stringify(eodData);
+            existingReport.status = "submitted";
+            existingReport.timeEntryId = entry._id;
+            await existingReport.save();
+          } else {
+            await EODReport.create({
+              userId: String(emp._id),
+              employeeId: String(emp._id),
+              employeeName: emp.name,
+              date: entry.date || new Date(),
+              rawInput: JSON.stringify(eodData),
+              inputType: "text",
+              status: "submitted",
+              timeEntryId: entry._id,
+            });
+          }
+          const { cacheDel } = require("../lib/cache");
+          cacheDel("eod-reports:*").catch(() => {});
+        }
+      } catch (err) {
+        console.error("Failed to automatically sync EOD report on clock-out:", err);
+      }
+    }
 
     const check = await evaluateMealBreakCompliance({ timeEntry: entry.toObject(), now: new Date() });
     if (check?.hardStop) {
@@ -442,6 +513,12 @@ router.post("/:id/clock-out", requireAuth, async (req, res, next) => {
     }
 
     await entry.save();
+
+    const EmployeePresence = require("../models/EmployeePresence");
+    await EmployeePresence.updateOne(
+      { $or: [{ employeeId: entry.userId }, { employeeName: entry.employee }] },
+      { $set: { clockedIn: false } }
+    ).catch(() => {});
 
     const refDate = entry.date || new Date();
     const weekStart = startOfWeekISO(refDate);
@@ -494,7 +571,7 @@ router.put("/:id", requireAuth, async (req, res, next) => {
       
       // Create notification
       await createNotification({
-        actor: req.user?.username || req.user?.name || "Admin",
+        actor: req.user?.name || req.user?.username || "Admin",
         actorRole: req.user?.role || "admin",
         action: "updated",
         resourceType: "time entry",
@@ -566,7 +643,7 @@ router.put("/:id", requireAuth, async (req, res, next) => {
     
     // Create notification
     await createNotification({
-      actor: req.user?.username || req.user?.name || "Admin",
+      actor: req.user?.name || req.user?.username || "Admin",
       actorRole: req.user?.role || "admin",
       action: "updated",
       resourceType: "time entry",
@@ -616,7 +693,7 @@ router.delete("/:id", requireAuth, async (req, res, next) => {
     // Create notification
     Promise.allSettled([
       createNotification({
-        actor: req.user?.username || req.user?.name || "Admin",
+        actor: req.user?.name || req.user?.username || "Admin",
         actorRole: req.user?.role || "admin",
         action: "deleted",
         resourceType: "time entry",

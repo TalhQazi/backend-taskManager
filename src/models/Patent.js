@@ -39,6 +39,38 @@ const patentSchema = new mongoose.Schema(
       enum: ["Filed", "Issued", "Expired", "Abandoned", "Concept", "Research", "Drafting", "Ready to File"],
       default: "Filed",
     },
+    // Expiration watch diagnostics & causes
+    expirationReason: {
+      type: String,
+      enum: ["one-year-clock", "fees", "paperwork", "other", ""],
+      default: "",
+    },
+    expirationReasonDetail: {
+      type: String,
+      default: "",
+    },
+    feeStatus: {
+      type: String,
+      enum: ["pending", "paid", "overdue", "na", ""],
+      default: "na",
+    },
+    feeAmount: {
+      type: Number,
+      default: 0,
+    },
+    feeDueDate: {
+      type: Date,
+      default: null,
+    },
+    paperworkStatus: {
+      type: String,
+      enum: ["pending", "complete", "missing", "na", ""],
+      default: "na",
+    },
+    paperworkDetails: {
+      type: String,
+      default: "",
+    },
     // For pending patents
     stage: {
       type: String,
@@ -73,6 +105,10 @@ const patentSchema = new mongoose.Schema(
         },
       },
     ],
+    customReminderDays: {
+      type: [Number],
+      default: [],
+    },
     isExpiringExpiringSoon: {
       type: Boolean,
       default: false,
@@ -80,6 +116,10 @@ const patentSchema = new mongoose.Schema(
     daysUntilExpiration: {
       type: Number,
       default: null,
+    },
+    notifiedDays: {
+      type: [Number],
+      default: [],
     },
     createdBy: {
       type: String,

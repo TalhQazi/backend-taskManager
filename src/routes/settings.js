@@ -25,6 +25,23 @@ const upload = multer({
   },
 });
 
+const preferenceSchema = z.object({
+  taskAssignment: z.boolean().optional(),
+  projectAssignment: z.boolean().optional(),
+  commentAdded: z.boolean().optional(),
+  replyAdded: z.boolean().optional(),
+  taskCompleted: z.boolean().optional(),
+  eodMissAlert: z.boolean().optional(),
+  eodComment: z.boolean().optional(),
+  messageAlert: z.boolean().optional(),
+  systemAlert: z.boolean().optional(),
+  patentExpiration: z.boolean().optional(),
+  complianceReminder: z.boolean().optional(),
+  userRegistration: z.boolean().optional(),
+  lunchBreakAlert: z.boolean().optional(),
+  websiteDownAlert: z.boolean().optional(),
+}).optional();
+
 const settingsSchema = z.object({
   companyName: z.string().optional(),
   supportEmail: z.string().optional(),
@@ -42,8 +59,11 @@ const settingsSchema = z.object({
       weeklyReports: z.boolean().optional(),
     })
     .optional(),
+  emailPreferences: preferenceSchema,
+  webPreferences: preferenceSchema,
   language: z.string().optional(),
   timezone: z.string().optional(),
+  countryCode: z.string().optional(),
   avatarUrl: z.string().optional(),
   avatarDataUrl: z.string().optional(),
 });
@@ -97,6 +117,24 @@ router.put("/", requireAuth, async (req, res, next) => {
       },
       { new: true, upsert: true }
     ).lean();
+
+    // Sync to Employee record as well
+    const Employee = require("../models/Employee");
+    const employeeUpdate = {};
+    if (patch.fullName) {
+      employeeUpdate.name = patch.fullName;
+      employeeUpdate.initials = patch.fullName
+        .split(" ")
+        .map((n) => n[0])
+        .slice(0, 2)
+        .join("")
+        .toUpperCase();
+    }
+    if (patch.email) employeeUpdate.email = patch.email;
+    if (patch.phone) employeeUpdate.phone = patch.phone;
+    if (Object.keys(employeeUpdate).length > 0) {
+      await Employee.findByIdAndUpdate(userId, employeeUpdate);
+    }
 
     res.json({ item: updated });
   } catch (err) {
