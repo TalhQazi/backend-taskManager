@@ -15,6 +15,8 @@ const createSchema = z.object({
   type: z.string().min(1, "Case Type is required"),
   status: z.enum(["Open", "In Progress", "Pending Review", "Closed"]).optional().default("Open"),
   priority: z.enum(["Low", "Medium", "High", "Critical"]).optional().default("Medium"),
+  jurisdiction: z.enum(["State", "Federal", "Other"]).optional().default("State"),
+  courtTier: z.string().optional().default("District"),
   court: z.string().optional().default(""),
   judge: z.string().optional().default(""),
   originatingCaseNumber: z.string().optional().default(""),
@@ -82,10 +84,17 @@ function withId(doc) {
   return { ...rest, id: String(_id) };
 }
 
-// GET all cases
+// GET all cases (supports ?jurisdiction=State&courtTier=Superior)
 router.get("/", requireAuth, async (req, res, next) => {
   try {
-    const items = await LegalCase.find().sort({ createdAt: -1 }).lean();
+    const filter = {};
+    if (req.query.jurisdiction && req.query.jurisdiction !== "all") {
+      filter.jurisdiction = req.query.jurisdiction;
+    }
+    if (req.query.courtTier && req.query.courtTier !== "all") {
+      filter.courtTier = req.query.courtTier;
+    }
+    const items = await LegalCase.find(filter).sort({ createdAt: -1 }).lean();
     res.json({ items: items.map(withId) });
   } catch (err) {
     next(err);

@@ -1,10 +1,52 @@
 const ChecklistTemplate = require("../models/ChecklistTemplate");
 
+const SOCIAL_MEDIA_CATEGORY = {
+  name: "Social Media",
+  items: [
+    { title: "YouTube", description: "Official YouTube brand channel and video embeds.", requiresEvidence: false },
+    { title: "Facebook", description: "Official Facebook brand page and meta integrations.", requiresEvidence: false },
+    { title: "X", description: "Official X (Twitter) profile handle and social cards.", requiresEvidence: false },
+    { title: "Liberty Social", description: "Official Liberty Social brand account.", requiresEvidence: false },
+    { title: "Rumble", description: "Official Rumble channel and video integrations.", requiresEvidence: false },
+    { title: "Tik Tok", description: "Official TikTok profile and embeds.", requiresEvidence: false },
+    { title: "Instagram", description: "Official Instagram business handle and grid.", requiresEvidence: false },
+    { title: "Threads", description: "Official Threads brand account.", requiresEvidence: false },
+  ],
+};
+
+const MOBILE_APP_CATEGORY = {
+  name: "Mobile App",
+  items: [
+    { title: "iOS App Store Deployment", description: "Publish, verify, and link official Apple App Store mobile application.", requiresEvidence: false },
+    { title: "Google Play Store Deployment", description: "Publish, verify, and link official Google Play Store mobile application.", requiresEvidence: false },
+    { title: "Mobile App Responsiveness Review", description: "Verify responsive mobile app layout on iOS and Android devices.", requiresEvidence: false },
+    { title: "Push Notifications Setup", description: "Verify mobile push notification certificates and tokens.", requiresEvidence: false },
+  ],
+};
+
 async function initializeComplianceTemplates() {
   try {
-    const templatesCount = await ChecklistTemplate.countDocuments();
-    if (templatesCount > 0) {
-      console.log("[Compliance Seeder] Templates already exist, skipping seeding.");
+    const existingTemplates = await ChecklistTemplate.find();
+    if (existingTemplates.length > 0) {
+      // Upgrade existing templates to ensure Social Media and Mobile App categories exist
+      for (const t of existingTemplates) {
+        let changed = false;
+        const categoryNames = new Set((t.categories || []).map((c) => c.name));
+
+        if (!categoryNames.has("Social Media")) {
+          t.categories.push(SOCIAL_MEDIA_CATEGORY);
+          changed = true;
+        }
+        if (!categoryNames.has("Mobile App")) {
+          t.categories.push(MOBILE_APP_CATEGORY);
+          changed = true;
+        }
+
+        if (changed) {
+          await t.save();
+          console.log(`[Compliance Seeder] Upgraded template "${t.name}" with Social Media & Mobile App categories.`);
+        }
+      }
       return;
     }
 
@@ -35,18 +77,12 @@ async function initializeComplianceTemplates() {
               { title: "XML Sitemap & Robots.txt", description: "Verify generation of sitemap.xml and configuration of robots.txt.", requiresEvidence: false }
             ]
           },
-          {
-            name: "Marketing & Social",
-            items: [
-              { title: "OpenGraph / Social Previews", description: "Configure OpenGraph image tags for rich sharing cards on Twitter, LinkedIn, and Facebook.", requiresEvidence: true },
-              { title: "Email Newsletter Sync", description: "Connect lead capture forms to Mailchimp, HubSpot, or equivalent email marketing CRM.", requiresEvidence: false }
-            ]
-          },
+          SOCIAL_MEDIA_CATEGORY,
+          MOBILE_APP_CATEGORY,
           {
             name: "QA Testing",
             items: [
               { title: "Contact Form QA", description: "Submit test inquiries on all forms and verify delivery to notification emails.", requiresEvidence: true },
-              { title: "Mobile Responsiveness Review", description: "Audit design across iOS, Android, and tablet viewports.", requiresEvidence: false },
               { title: "Page Speed Audit", description: "Run Lighthouse test and ensure performance score is above 80.", requiresEvidence: true }
             ]
           },
@@ -97,6 +133,8 @@ async function initializeComplianceTemplates() {
               { title: "Redis Cache Configuration", description: "Verify production cache thresholds and eviction policies.", requiresEvidence: false }
             ]
           },
+          SOCIAL_MEDIA_CATEGORY,
+          MOBILE_APP_CATEGORY,
           {
             name: "Analytics & Monitoring",
             items: [
@@ -152,6 +190,8 @@ async function initializeComplianceTemplates() {
               { title: "PCI-DSS Security Audit", description: "Complete PCI self-assessment to verify payment handling safety.", requiresEvidence: true }
             ]
           },
+          SOCIAL_MEDIA_CATEGORY,
+          MOBILE_APP_CATEGORY,
           {
             name: "QA Testing",
             items: [
@@ -200,6 +240,8 @@ async function initializeComplianceTemplates() {
               { title: "Database Encryption at Rest", description: "Enable full database encryption.", requiresEvidence: false }
             ]
           },
+          SOCIAL_MEDIA_CATEGORY,
+          MOBILE_APP_CATEGORY,
           {
             name: "QA Testing",
             items: [
@@ -224,4 +266,4 @@ async function initializeComplianceTemplates() {
   }
 }
 
-module.exports = { initializeComplianceTemplates };
+module.exports = { initializeComplianceTemplates, SOCIAL_MEDIA_CATEGORY, MOBILE_APP_CATEGORY };

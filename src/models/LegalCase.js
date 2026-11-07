@@ -7,6 +7,8 @@ const legalCaseSchema = new mongoose.Schema({
   type: { type: String, required: true },
   status: { type: String, enum: ["Open", "In Progress", "Pending Review", "Closed"], default: "Open" },
   priority: { type: String, enum: ["Low", "Medium", "High", "Critical"], default: "Medium" },
+  jurisdiction: { type: String, enum: ["State", "Federal", "Other"], default: "State", index: true },
+  courtTier: { type: String, default: "District", index: true }, // State: District, Superior, Supreme; Federal: District, Circuit, Supreme
   court: { type: String },
   judge: { type: String },
   originatingCaseNumber: { type: String },

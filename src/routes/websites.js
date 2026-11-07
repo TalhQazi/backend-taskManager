@@ -29,13 +29,153 @@ const CORE_REQ_MAP = {
   rumbleCompliance: "Rumble",
   libertySocialCompliance: "Liberty Social",
   facebookCompliance: "Facebook",
-  xCompliance: "X (Twitter)",
+  xCompliance: "X",
   instagramCompliance: "Instagram",
-  tikTokCompliance: "TikTok",
+  tikTokCompliance: "Tik Tok",
   yelpCompliance: "Yelp",
   truthSocialCompliance: "Truth Social",
   threadsCompliance: "Threads",
 };
+
+const SOCIAL_MEDIA_ITEMS = [
+  { title: "YouTube", category: "Social Media", description: "Official YouTube brand channel and video embeds.", requiresEvidence: false },
+  { title: "Facebook", category: "Social Media", description: "Official Facebook brand page and meta integrations.", requiresEvidence: false },
+  { title: "X", category: "Social Media", description: "Official X (Twitter) profile handle and social cards.", requiresEvidence: false },
+  { title: "Liberty Social", category: "Social Media", description: "Official Liberty Social brand account.", requiresEvidence: false },
+  { title: "Rumble", category: "Social Media", description: "Official Rumble channel and video integrations.", requiresEvidence: false },
+  { title: "Tik Tok", category: "Social Media", description: "Official TikTok profile and embeds.", requiresEvidence: false },
+  { title: "Instagram", category: "Social Media", description: "Official Instagram business handle and grid.", requiresEvidence: false },
+  { title: "Threads", category: "Social Media", description: "Official Threads brand account.", requiresEvidence: false },
+];
+
+const MOBILE_APP_ITEMS = [
+  { title: "iOS App Store Deployment", category: "Mobile App", description: "Publish, verify, and link official Apple App Store mobile application.", requiresEvidence: false },
+  { title: "Google Play Store Deployment", category: "Mobile App", description: "Publish, verify, and link official Google Play Store mobile application.", requiresEvidence: false },
+  { title: "Mobile App Responsiveness Review", category: "Mobile App", description: "Verify responsive mobile app layout on iOS and Android devices.", requiresEvidence: false },
+  { title: "Push Notifications Setup", category: "Mobile App", description: "Verify mobile push notification certificates and tokens.", requiresEvidence: false },
+];
+
+const STANDARD_PROJECT_CATEGORIES = [
+  {
+    name: "Domain & DNS",
+    items: [
+      { title: "Point Domain DNS", description: "Point A/CNAME records to the production hosting provider.", requiresEvidence: true },
+      { title: "SSL / HTTPS Certificate", description: "Verify active HTTPS/SSL certificate for the main domain and subdomains.", requiresEvidence: true },
+    ],
+  },
+  {
+    name: "Security",
+    items: [
+      { title: "HTTPS Redirect", description: "Ensure HTTP calls redirect automatically to secure HTTPS.", requiresEvidence: false },
+      { title: "Spam Protection on Contact Forms", description: "Configure reCAPTCHA, Cloudflare Turnstile, or honeypots to block spam entries.", requiresEvidence: false },
+    ],
+  },
+  {
+    name: "Analytics & SEO",
+    items: [
+      { title: "Google Analytics Tracking", description: "Install Google Analytics / GA4 tracking tags.", requiresEvidence: true },
+      { title: "SEO Meta Tag Audit", description: "Audit titles, descriptions, and keywords across all pages.", requiresEvidence: false },
+      { title: "XML Sitemap & Robots.txt", description: "Verify generation of sitemap.xml and configuration of robots.txt.", requiresEvidence: false },
+    ],
+  },
+  {
+    name: "Social Media",
+    items: SOCIAL_MEDIA_ITEMS,
+  },
+  {
+    name: "Mobile App",
+    items: MOBILE_APP_ITEMS,
+  },
+  {
+    name: "QA Testing",
+    items: [
+      { title: "Contact Form QA", description: "Submit test inquiries on all forms and verify delivery to notification emails.", requiresEvidence: true },
+      { title: "Page Speed Audit", description: "Run Lighthouse test and ensure performance score is above 80.", requiresEvidence: true },
+    ],
+  },
+  {
+    name: "Compliance & Integrations",
+    items: [
+      { title: "Privacy Policy & Terms Links", description: "Add required legal footer links to the layout.", requiresEvidence: false },
+      { title: "Cookie Consent Banner", description: "Render standard GDPR/CCPA cookie notification banner.", requiresEvidence: false },
+      { title: "Stripe Integration", description: "Verify active Stripe payment gateway and webhook handlers.", requiresEvidence: true },
+      { title: "Bug Report Button", description: "Verify functional Bug Report button on the website interface.", requiresEvidence: false },
+      { title: "Google Maps", description: "Verify Google Maps location embed or API integration.", requiresEvidence: false },
+      { title: "Apple Maps", description: "Verify Apple Maps link or MapKit integration.", requiresEvidence: false },
+      { title: "info@ Email Setup", description: "Verify active info@ email account and forwarding.", requiresEvidence: true },
+      { title: "nathan@ Email Setup", description: "Verify active nathan@ email account and forwarding.", requiresEvidence: true },
+    ],
+  },
+  {
+    name: "Launch Approval",
+    items: [
+      { title: "Executive Stakeholder Sign-Off", description: "Obtain formal launch approval from marketing lead or business unit owner.", requiresEvidence: true },
+    ],
+  },
+];
+
+function matchCoreReqKey(title) {
+  const t = String(title || "").trim().toLowerCase();
+  if (t === "youtube") return "youtubeCompliance";
+  if (t === "facebook") return "facebookCompliance";
+  if (t === "x" || t === "x (twitter)" || t === "twitter") return "xCompliance";
+  if (t === "liberty social") return "libertySocialCompliance";
+  if (t === "rumble") return "rumbleCompliance";
+  if (t === "tik tok" || t === "tiktok") return "tikTokCompliance";
+  if (t === "instagram") return "instagramCompliance";
+  if (t === "threads") return "threadsCompliance";
+  if (t === "yelp") return "yelpCompliance";
+  if (t === "truth social") return "truthSocialCompliance";
+  if (t === "google analytics") return "googleAnalytics";
+  if (t === "stripe integration") return "stripeIntegration";
+  if (t === "bug report button") return "bugReportButton";
+  if (t === "google maps") return "googleMaps";
+  if (t === "apple maps") return "appleMaps";
+  if (t.startsWith("info@")) return "infoEmailSetup";
+  if (t.startsWith("nathan@")) return "nathanEmailSetup";
+  if (t === "human verification (math puzzle)" || t === "human verification") return "humanVerification";
+  if (t === "large header image") return "largeHeaderImage";
+  if (t === "contact info section") return "contactInfoSection";
+  if (t === "ada compliance") return "adaCompliance";
+  if (t === "faq") return "faq";
+  if (t === "contact us page") return "contactUsPage";
+  if (t === "privacy policy") return "privacyPolicy";
+  if (t === "seo") return "seo";
+  if (t === "site map") return "siteMap";
+  return null;
+}
+
+async function initializeWebsiteChecklist(websiteId, username = "System") {
+  const existing = await ChecklistItem.countDocuments({ websiteId });
+  if (existing > 0) return;
+
+  const itemsToCreate = [];
+  STANDARD_PROJECT_CATEGORIES.forEach(cat => {
+    cat.items.forEach(it => {
+      itemsToCreate.push({
+        websiteId,
+        category: cat.name,
+        title: it.title,
+        description: it.description || "",
+        requiresEvidence: Boolean(it.requiresEvidence),
+        status: "pending",
+      });
+    });
+  });
+
+  if (itemsToCreate.length > 0) {
+    await ChecklistItem.insertMany(itemsToCreate);
+    const initialHistory = new ChecklistHistory({
+      websiteId,
+      action: "checklist_initialized",
+      notes: "Auto-created standard project categories (Social Media, Mobile App, QA, Security, Compliance)",
+      userId: username,
+      username,
+    });
+    await initialHistory.save();
+  }
+}
+
 
 function coreStatusToChecklistStatus(val) {
   if (val === "green" || val === "completed" || val === "passed") return "completed";
@@ -303,12 +443,14 @@ router.get("/:id/compliance", requireAuth, async (req, res, next) => {
       }
     }
 
-    // Ensure all mandatory items exist for every website
-    const existingTitles = new Set(items.map(i => i.title));
-    const missingMandatory = mandatoryItems.filter(m => !existingTitles.has(m.title));
-    if (missingMandatory.length > 0) {
+    // Ensure all standard & mandatory items exist for every website
+    const existingTitles = new Set(items.map(i => String(i.title || "").toLowerCase().trim()));
+    const allExpectedItems = [...mandatoryItems, ...SOCIAL_MEDIA_ITEMS, ...MOBILE_APP_ITEMS];
+    const missingExpected = allExpectedItems.filter(m => !existingTitles.has(String(m.title).toLowerCase().trim()));
+
+    if (missingExpected.length > 0) {
       const createdMissing = await ChecklistItem.insertMany(
-        missingMandatory.map(m => ({
+        missingExpected.map(m => ({
           websiteId: website._id,
           category: m.category,
           title: m.title,
@@ -387,11 +529,10 @@ router.put("/:id/compliance/:itemId", requireAuth, async (req, res, next) => {
     await historyLog.save();
 
     // Sync to website core requirement field if item matches a core requirement
-    for (const [key, title] of Object.entries(CORE_REQ_MAP)) {
-      if (item.title === title) {
-        const coreVal = checklistStatusToCoreStatus(item.status);
-        await Website.findByIdAndUpdate(item.websiteId, { [key]: coreVal });
-      }
+    const matchedKey = matchCoreReqKey(item.title);
+    if (matchedKey) {
+      const coreVal = checklistStatusToCoreStatus(item.status);
+      await Website.findByIdAndUpdate(item.websiteId, { [matchedKey]: coreVal });
     }
 
     // Recalculate Website Readiness Score
@@ -484,7 +625,13 @@ router.post("/", requireAuth, async (req, res, next) => {
     });
 
     await newWebsite.save();
-    res.status(201).json({ item: newWebsite });
+
+    // Auto-create standard project categories (Social Media, Mobile App, QA, Security, etc.)
+    await initializeWebsiteChecklist(newWebsite._id, req.user?.username || "System");
+    await updateAndGetWebsiteReadinessScore(newWebsite._id);
+    const populated = await Website.findById(newWebsite._id).populate('locations').lean();
+
+    res.status(201).json({ item: populated });
   } catch (err) {
     next(err);
   }
@@ -514,14 +661,21 @@ router.put("/:id", requireAuth, async (req, res, next) => {
         const itemStatus = coreStatusToChecklistStatus(req.body[key]);
         const isChecked = itemStatus === "completed" || itemStatus === "na" || itemStatus === "blocked";
         
+        let titleCondition = { $eq: title };
+        if (title === "X") {
+          titleCondition = { $in: ["X", "X (Twitter)"] };
+        } else if (title === "Tik Tok") {
+          titleCondition = { $in: ["Tik Tok", "TikTok"] };
+        }
+
         await ChecklistItem.findOneAndUpdate(
-          { websiteId: website._id, title },
+          { websiteId: website._id, title: titleCondition },
           { 
             status: itemStatus, 
             completedBy: isChecked ? updaterName : "", 
             completedAt: isChecked ? new Date() : undefined 
           },
-          { upsert: true }
+          { upsert: false }
         );
 
         // Record audit entry for accountability
@@ -621,6 +775,116 @@ router.post("/:id/convert-to-task", requireAuth, async (req, res, next) => {
     await website.save();
 
     res.status(201).json({ item: website, task: newTask });
+  } catch (err) {
+    next(err);
+  }
+});
+
+
+// Bulk update category status (e.g. mark entire category as NA) and optionally hide it
+router.patch("/:id/compliance/category-status", requireAuth, async (req, res, next) => {
+  try {
+    const { category, status = "na", hide = false } = req.body;
+    if (!category) {
+      return res.status(400).json({ error: { message: "Category is required" } });
+    }
+
+    const website = await Website.findById(req.params.id);
+    if (!website) {
+      return res.status(404).json({ error: { message: "Website not found" } });
+    }
+
+    await ChecklistItem.updateMany(
+      { websiteId: website._id, category },
+      {
+        $set: {
+          status,
+          completedBy: status === "na" || status === "completed" ? (req.user?.username || "System") : "",
+          completedAt: status === "na" || status === "completed" ? new Date() : null,
+        }
+      }
+    );
+
+    let hiddenCategories = Array.isArray(website.hiddenCategories) ? [...website.hiddenCategories] : [];
+    if (hide) {
+      if (!hiddenCategories.includes(category)) {
+        hiddenCategories.push(category);
+      }
+    } else if (status !== "na") {
+      hiddenCategories = hiddenCategories.filter(c => c !== category);
+    }
+    website.hiddenCategories = hiddenCategories;
+    await website.save();
+
+    // Log history
+    const historyLog = new ChecklistHistory({
+      websiteId: website._id,
+      action: "category_status_updated",
+      notes: `Category "${category}" marked as ${status.toUpperCase()}${hide ? " and hidden" : ""}`,
+      userId: req.user?.sub || req.user?.id || "System",
+      username: req.user?.username || "System",
+      ipAddress: req.ip || req.headers["x-forwarded-for"] || req.socket.remoteAddress || "",
+      deviceInfo: req.headers["user-agent"] || ""
+    });
+    await historyLog.save();
+
+    // If category is "Social Media", sync all social media compliance fields
+    if (category === "Social Media" || category === "Social Media Compliance") {
+      const socialVal = checklistStatusToCoreStatus(status);
+      await Website.findByIdAndUpdate(website._id, {
+        youtubeCompliance: socialVal,
+        facebookCompliance: socialVal,
+        xCompliance: socialVal,
+        libertySocialCompliance: socialVal,
+        rumbleCompliance: socialVal,
+        tikTokCompliance: socialVal,
+        instagramCompliance: socialVal,
+        threadsCompliance: socialVal,
+      });
+    }
+
+    const readinessScore = await updateAndGetWebsiteReadinessScore(website._id);
+    const updatedItems = await ChecklistItem.find({ websiteId: website._id }).sort({ createdAt: 1 }).lean();
+    const updatedWebsite = await Website.findById(website._id).populate('locations').lean();
+
+    res.json({
+      success: true,
+      readinessScore,
+      items: updatedItems,
+      website: updatedWebsite,
+      hiddenCategories: updatedWebsite.hiddenCategories || [],
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Toggle category visibility (hide / show section for this project)
+router.patch("/:id/compliance/toggle-category-visibility", requireAuth, async (req, res, next) => {
+  try {
+    const { category, hidden } = req.body;
+    if (!category) {
+      return res.status(400).json({ error: { message: "Category is required" } });
+    }
+
+    const website = await Website.findById(req.params.id);
+    if (!website) {
+      return res.status(404).json({ error: { message: "Website not found" } });
+    }
+
+    let hiddenCategories = Array.isArray(website.hiddenCategories) ? [...website.hiddenCategories] : [];
+    if (hidden) {
+      if (!hiddenCategories.includes(category)) {
+        hiddenCategories.push(category);
+      }
+    } else {
+      hiddenCategories = hiddenCategories.filter(c => c !== category);
+    }
+
+    website.hiddenCategories = hiddenCategories;
+    await website.save();
+
+    res.json({ success: true, hiddenCategories: website.hiddenCategories });
   } catch (err) {
     next(err);
   }

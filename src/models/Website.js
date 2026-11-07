@@ -123,6 +123,8 @@ const websiteSchema = new mongoose.Schema(
     yelpCompliance: { type: String, enum: ["green", "red", "none", "na"], default: "none" },
     truthSocialCompliance: { type: String, enum: ["green", "red", "none", "na"], default: "none" },
     threadsCompliance: { type: String, enum: ["green", "red", "none", "na"], default: "none" },
+    // Hidden / Excluded N/A sections per project
+    hiddenCategories: { type: [String], default: [] },
     // System Health Monitoring fields
     healthStatus: { type: String, enum: ["LIVE", "DEGRADED", "DOWN", "UNKNOWN"], default: "UNKNOWN" },
     lastCheckedAt: { type: Date },
