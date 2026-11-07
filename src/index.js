@@ -110,6 +110,7 @@ const syncRoutes = require("./routes/sync");
 const themeEngineRoutes = require("./routes/themeEngine");
 const meetingsRoutes = require("./routes/meetings");
 const finishesRoutes = require("./routes/finishes");
+const mcpRoutes = require("./routes/mcp");
 const { setupMeetingSocket } = require("./lib/meetingSocket");
 
 //going to express now
@@ -517,6 +518,7 @@ app.use("/api/schedules", requireClearHire, eventsRoutes);
 app.use("/api/messages", requireClearHire, messagesRoutes);
 app.use("/api/notifications", requireClearHire, messagesRoutes);
 app.use("/api/settings", requireClearHire, settingsRoutes);
+app.use("/api/mcp", requireClearHire, mcpRoutes);
 app.use("/api/reports", requireClearHire, reportsRoutes);
 app.use("/api/users", requireClearHire, usersRoutes);
 app.use("/api/dashboard", requireClearHire, dashboardRoutes);
