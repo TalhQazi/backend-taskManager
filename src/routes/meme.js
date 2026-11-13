@@ -15,7 +15,7 @@ const router = express.Router();
 const storage = multer.memoryStorage();
 const upload = multer({
   storage,
-  limits: { fileSize: 500 * 1024 }, // 500KB max
+  limits: { fileSize: 25 * 1024 * 1024 }, // 25MB max
 });
 
 function toObjectIdOrNull(value) {
@@ -255,14 +255,16 @@ router.post(
       if (!file) return res.status(400).json({ error: { message: "Missing file" } });
 
       const mimeType = String(file.mimetype || "").toLowerCase();
-      if (mimeType !== "image/jpeg" && mimeType !== "image/png") {
-        return res.status(400).json({ error: { message: "Only JPG or PNG allowed" } });
+      const allowedMimes = ["image/jpeg", "image/png", "image/webp", "image/gif"];
+      if (!allowedMimes.includes(mimeType)) {
+        return res.status(400).json({ error: { message: "Only JPG, PNG, WEBP, or GIF allowed" } });
       }
 
       const originalFilename = String(file.originalname || "meme");
       const ext = path.extname(originalFilename).toLowerCase();
-      if (ext !== ".jpg" && ext !== ".jpeg" && ext !== ".png") {
-        return res.status(400).json({ error: { message: "Only JPG or PNG allowed" } });
+      const allowedExts = [".jpg", ".jpeg", ".png", ".webp", ".gif"];
+      if (!allowedExts.includes(ext)) {
+        return res.status(400).json({ error: { message: "Only JPG, PNG, WEBP, or GIF allowed" } });
       }
 
       const category = parsed.data.category;
