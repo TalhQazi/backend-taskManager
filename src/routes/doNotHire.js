@@ -15,6 +15,8 @@ function withId(doc) {
 
 const adminUiSchema = z.object({
   name: z.string().min(1),
+  phone: z.string().optional().nullable(),
+  email: z.string().optional().nullable(),
   reason: z.string().min(1),
   incidentNotes: z.string().optional().default(""),
   addedAt: z.string().min(1),
@@ -50,8 +52,8 @@ router.post("/", requireAuth, async (req, res, next) => {
     if (adminParsed.success) {
       const created = await DoNotHire.create({
         fullName: adminParsed.data.name,
-        phone: null,
-        email: null,
+        phone: adminParsed.data.phone || null,
+        email: adminParsed.data.email || null,
         reason: adminParsed.data.reason,
         incidentNotes: adminParsed.data.incidentNotes,
         createdAt: adminParsed.data.addedAt,
@@ -59,7 +61,7 @@ router.post("/", requireAuth, async (req, res, next) => {
       
       // Create notification
       await createNotification({
-        actor: req.user?.username || req.user?.name || "Admin",
+        actor: req.user?.name || req.user?.username || "Admin",
         actorRole: req.user?.role || "admin",
         action: "created",
         resourceType: "do not hire entry",
@@ -79,7 +81,7 @@ router.post("/", requireAuth, async (req, res, next) => {
 
     // Create notification
     await createNotification({
-      actor: req.user?.username || req.user?.name || "Admin",
+      actor: req.user?.name || req.user?.username || "Admin",
       actorRole: req.user?.role || "admin",
       action: "created",
       resourceType: "do not hire entry",
@@ -100,6 +102,8 @@ router.put("/:id", requireAuth, async (req, res, next) => {
     if (adminParsed.success) {
       const patch = {};
       if (typeof adminParsed.data.name === "string") patch.fullName = adminParsed.data.name;
+      if (typeof adminParsed.data.phone !== "undefined") patch.phone = adminParsed.data.phone;
+      if (typeof adminParsed.data.email !== "undefined") patch.email = adminParsed.data.email;
       if (typeof adminParsed.data.reason === "string") patch.reason = adminParsed.data.reason;
       if (typeof adminParsed.data.incidentNotes === "string") patch.incidentNotes = adminParsed.data.incidentNotes;
       if (typeof adminParsed.data.addedAt === "string") patch.createdAt = adminParsed.data.addedAt;
@@ -109,7 +113,7 @@ router.put("/:id", requireAuth, async (req, res, next) => {
       
       // Create notification
       await createNotification({
-        actor: req.user?.username || req.user?.name || "Admin",
+        actor: req.user?.name || req.user?.username || "Admin",
         actorRole: req.user?.role || "admin",
         action: "updated",
         resourceType: "do not hire entry",
@@ -129,7 +133,7 @@ router.put("/:id", requireAuth, async (req, res, next) => {
 
     // Create notification
     await createNotification({
-      actor: req.user?.username || req.user?.name || "Admin",
+      actor: req.user?.name || req.user?.username || "Admin",
       actorRole: req.user?.role || "admin",
       action: "updated",
       resourceType: "do not hire entry",
@@ -150,7 +154,7 @@ router.delete("/:id", requireAuth, async (req, res, next) => {
     
     // Create notification
     await createNotification({
-      actor: req.user?.username || req.user?.name || "Admin",
+      actor: req.user?.name || req.user?.username || "Admin",
       actorRole: req.user?.role || "admin",
       action: "deleted",
       resourceType: "do not hire entry",

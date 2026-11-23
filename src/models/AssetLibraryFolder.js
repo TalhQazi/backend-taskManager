@@ -9,6 +9,7 @@ const AssetLibraryFolderSchema = new mongoose.Schema(
     isReadOnly: { type: Boolean, default: false },
     sortOrder: { type: Number, default: 0 },
     createdBy: { type: String, default: "" },
+    module: { type: String, enum: ["asset-library", "company-information"], default: "asset-library" },
   },
   { timestamps: true }
 );

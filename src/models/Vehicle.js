@@ -21,6 +21,7 @@ const VehicleSchema = new mongoose.Schema(
     mileageText: { type: String, default: "" },
     lastInspection: { type: Date },
     nextInspection: { type: Date },
+    requiresInspection: { type: Boolean, default: true },
     tagPhotoFileName: { type: String, default: "" },
     tagPhotoDataUrl: { type: String, default: "" },
     tagPhotoAttachment: {
@@ -29,6 +30,24 @@ const VehicleSchema = new mongoose.Schema(
       mimeType: { type: String, default: "" },
       size: { type: Number, default: 0 },
     },
+    needs: {
+      type: [
+        {
+          id: { type: String, required: true },
+          taskName: { type: String, required: true },
+          assignee: { type: String, default: "" }, // Stores the name of the assigned team member
+          dueDate: { type: String, default: "" },
+          completed: { type: Boolean, default: false },
+          parts: [
+            {
+              name: { type: String, default: "" },
+              cost: { type: Number, default: 0 }
+            }
+          ]
+        }
+      ],
+      default: []
+    },
   },
   { timestamps: true }
 );
@@ -36,6 +55,8 @@ const VehicleSchema = new mongoose.Schema(
 // Indexes for common queries
 VehicleSchema.index({ status: 1 });
 VehicleSchema.index({ assignedTo: 1 });
+VehicleSchema.index({ name: 1 });
+VehicleSchema.index({ licensePlate: 1 });
 VehicleSchema.index({ createdAt: -1 });
 
 module.exports = mongoose.model("Vehicle", VehicleSchema);

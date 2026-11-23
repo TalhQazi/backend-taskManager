@@ -2,7 +2,7 @@ const mongoose = require("mongoose");
 
 const ImportJobSchema = new mongoose.Schema(
   {
-    jobId: { type: String, required: true, unique: true, index: true },
+    jobId: { type: String, required: true, unique: true },
     status: {
       type: String,
       enum: ["running", "completed", "failed", "timeout"],

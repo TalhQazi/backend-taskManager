@@ -1,29 +1,47 @@
 const express = require("express");
 const HeaderSettings = require("../models/HeaderSettings");
 const { requireAuth } = require("../middleware/auth");
+const { getResolvedHolidayTheme } = require("../utils/holidayEngine");
+const { base64ToBuffer, uploadToS3 } = require("../lib/s3");
 
 const router = express.Router();
 
-// Get header settings (public - no auth required for viewing)
-router.get("/", async (_req, res, next) => {
+// Helper function to get user ID from request
+const getUserId = (req) => {
+  return req.user?.sub || req.user?.id || req.user?._id || req.user?.userId;
+};
+
+// Get header settings for the current user
+router.get("/", requireAuth, async (req, res, next) => {
   try {
-    let settings = await HeaderSettings.findOne().lean();
+    const userId = getUserId(req);
+    if (!userId) {
+      return res.status(401).json({ error: { message: "User not authenticated" } });
+    }
+
+    let settings = await HeaderSettings.findOne({ userId }).lean();
     if (!settings) {
       // Create default settings if none exist
-      settings = await HeaderSettings.create({});
+      const doc = await HeaderSettings.create({ userId });
+      settings = doc.toObject();
     }
+
+    // Resolve dynamic active holiday theme
+    const holidayTheme = await getResolvedHolidayTheme(userId);
+    settings.holidayTheme = holidayTheme;
+
     res.json({ item: settings });
   } catch (err) {
     next(err);
   }
 });
 
-// Update header settings (requires admin/super-admin)
+// Update header settings (requires authenticated user)
 router.put("/", requireAuth, async (req, res, next) => {
   try {
-    const role = String(req.user?.role || "").toLowerCase();
-    if (role !== "admin" && role !== "super-admin") {
-      return res.status(403).json({ error: { message: "Forbidden: Admin access required" } });
+    const userId = getUserId(req);
+    if (!userId) {
+      return res.status(401).json({ error: { message: "User not authenticated" } });
     }
 
     const updateData = req.body;
@@ -53,8 +71,17 @@ router.put("/", requireAuth, async (req, res, next) => {
     }
 
     if (updateData.imageConfig) {
-      // Only store dataUrl once (url is redundant and doubles the size)
-      if (updateData.imageConfig.dataUrl) {
+      if (updateData.imageConfig.dataUrl && updateData.imageConfig.dataUrl.startsWith("data:")) {
+        try {
+          const { buffer, mimeType } = base64ToBuffer(updateData.imageConfig.dataUrl);
+          const savedUrl = await uploadToS3(buffer, "header-cover.jpg", mimeType, "headers");
+          $set["imageConfig.dataUrl"] = savedUrl;
+          $set["imageConfig.url"] = savedUrl;
+        } catch (err) {
+          console.error("[HeaderSettings] Failed to save custom header image:", err);
+          return res.status(400).json({ error: { message: "Failed to upload header image" } });
+        }
+      } else if (updateData.imageConfig.dataUrl) {
         $set["imageConfig.dataUrl"] = updateData.imageConfig.dataUrl;
         $set["imageConfig.url"] = updateData.imageConfig.dataUrl;
       } else if (updateData.imageConfig.url) {
@@ -72,7 +99,7 @@ router.put("/", requireAuth, async (req, res, next) => {
     }
 
     const settings = await HeaderSettings.findOneAndUpdate(
-      {},
+      { userId },
       { $set },
       { new: true, upsert: true, setDefaultsOnInsert: true }
     ).lean();
@@ -83,16 +110,16 @@ router.put("/", requireAuth, async (req, res, next) => {
   }
 });
 
-// Reset to defaults
+// Reset to defaults for the current user
 router.post("/reset", requireAuth, async (req, res, next) => {
   try {
-    const role = String(req.user?.role || "").toLowerCase();
-    if (role !== "admin" && role !== "super-admin") {
-      return res.status(403).json({ error: { message: "Forbidden: Admin access required" } });
+    const userId = getUserId(req);
+    if (!userId) {
+      return res.status(401).json({ error: { message: "User not authenticated" } });
     }
 
-    await HeaderSettings.deleteMany({});
-    const settings = await HeaderSettings.create({});
+    await HeaderSettings.deleteMany({ userId });
+    const settings = await HeaderSettings.create({ userId });
 
     res.json({ item: settings.toObject(), message: "Reset to defaults" });
   } catch (err) {

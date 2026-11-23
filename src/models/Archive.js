@@ -6,6 +6,10 @@ const ArchiveSchema = new mongoose.Schema(
     itemType: { type: String, required: true, index: true },
     // The original item data stored as a flexible object
     itemData: { type: mongoose.Schema.Types.Mixed, default: {} },
+    // Legacy / alternative fields for compatibility
+    originalId: { type: String, default: "", index: true },
+    data: { type: mongoose.Schema.Types.Mixed, default: null },
+    archivedBy: { type: String, default: "" },
     // Reference to the parent resource
     parentType: { type: String, default: "" }, // 'task', 'project'
     parentId: { type: String, default: "", index: true },

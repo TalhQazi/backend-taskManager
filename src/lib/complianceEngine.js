@@ -155,7 +155,7 @@ async function evaluateMealBreakCompliance({ timeEntry, now = new Date() }) {
         message: `Violation: Meal break not compliant (only ${mealMinutes} minutes).`,
       });
 
-      const hardStop = !!clockOutAt;
+      const hardStop = false;
       return { hardStop };
     }
   }

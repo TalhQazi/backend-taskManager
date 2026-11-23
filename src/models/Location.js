@@ -6,6 +6,7 @@ const LocationSchema = new mongoose.Schema(
     type: { type: String, enum: ["office", "warehouse", "facility", "site"], required: true },
     address: { type: String, default: "" },
     city: { type: String, required: true },
+    state: { type: String, default: "", index: true },
     country: { type: String, default: "" },
     phone: { type: String, default: "" },
     manager: { type: String, default: "" },
@@ -15,6 +16,52 @@ const LocationSchema = new mongoose.Schema(
     photoDataUrl: { type: String, default: "" },
     photoFileName: { type: String, default: "" },
     photoHeight: { type: Number, default: 48 },
+    attachments: [
+      {
+        fileName: { type: String, default: "" },
+        url: { type: String, default: "" },
+      },
+    ],
+    documents: [
+      {
+        fileName: { type: String, default: "" },
+        url: { type: String, default: "" },
+        fileType: { type: String, default: "" },
+        size: { type: Number, default: 0 },
+        uploadedAt: { type: Date, default: Date.now },
+      },
+    ],
+    complianceChecklist: {
+      water: {
+        status: { type: String, default: "Pending" },
+        notes: { type: String, default: "" },
+        updatedBy: { type: String, default: "" },
+        updatedAt: { type: Date },
+      },
+      power: {
+        status: { type: String, default: "Pending" },
+        notes: { type: String, default: "" },
+        updatedBy: { type: String, default: "" },
+        updatedAt: { type: Date },
+      },
+      townPermitDemo: {
+        status: { type: String, default: "Pending" },
+        notes: { type: String, default: "" },
+      },
+      townPermitRenovations: {
+        status: { type: String, default: "Pending" },
+        notes: { type: String, default: "" },
+      },
+      sitePlanReview: {
+        option: { type: String, default: "Needed" }, // "Needed" | "Not Needed" | "Approved" | "Pending"
+        notes: { type: String, default: "" },
+      },
+      certificateOfOccupancy: {
+        status: { type: String, default: "Pending" }, // "Obtained" | "Pending" | "In Review" | "N/A"
+        date: { type: String, default: "" },
+        notes: { type: String, default: "" },
+      },
+    },
   },
   { timestamps: true }
 );
