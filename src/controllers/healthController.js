@@ -125,7 +125,7 @@ exports.getSystemStats = async (req, res) => {
 exports.getWebsitesStatus = async (req, res) => {
   try {
     const websites = await Website.find({ websiteType: "active", isMonitoringEnabled: { $ne: false }, url: { $exists: true, $ne: "" } })
-      .select("siteName url healthStatus lastCheckedAt sslStatus sslExpiryDate responseTimeMs uptimePercentage")
+      .select("siteName url healthStatus lastCheckedAt sslStatus sslExpiryDate expirationDate responseTimeMs uptimePercentage")
       .sort({ healthStatus: 1, siteName: 1 });
       
     res.json({ websites });

@@ -112,6 +112,7 @@ const websiteSchema = new mongoose.Schema(
     appleMaps: { type: String, enum: ["green", "red", "none", "na"], default: "none" },
     infoEmailSetup: { type: String, enum: ["green", "red", "none", "na"], default: "none" },
     nathanEmailSetup: { type: String, enum: ["green", "red", "none", "na"], default: "none" },
+    se7enFamilyFooter: { type: String, enum: ["green", "red", "none", "na"], default: "none" },
     // Social Media Compliance Checklist fields
     youtubeCompliance: { type: String, enum: ["green", "red", "none", "na"], default: "none" },
     rumbleCompliance: { type: String, enum: ["green", "red", "none", "na"], default: "none" },

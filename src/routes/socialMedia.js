@@ -50,6 +50,17 @@ router.post("/", requireAuth, async (req, res, next) => {
       });
     }
 
+    const esc = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const existingAccount = await SocialMediaAccount.findOne({
+      platform: new RegExp(`^${esc(String(platform).trim())}$`, "i"),
+      accountHandle: new RegExp(`^${esc(String(handle).trim())}$`, "i"),
+    }).lean();
+    if (existingAccount) {
+      return res.status(409).json({
+        error: { message: `A ${platform} account with handle "${handle}" already exists.` },
+      });
+    }
+
     const newAccount = new SocialMediaAccount({
       platform,
       accountHandle: handle,

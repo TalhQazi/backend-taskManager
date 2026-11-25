@@ -1,6 +1,118 @@
 const Task = require("../models/Task");
 const Project = require("../models/Project");
+const Employee = require("../models/Employee");
+const User = require("../models/User");
 const { cacheDel } = require("../lib/cache");
+
+let cachedActiveTokens = null;
+let cachedActiveTokensAt = 0;
+const ACTIVE_TOKEN_TTL_MS = 30000;
+
+function invalidateActiveMemberCache() {
+  cachedActiveTokens = null;
+  cachedActiveTokensAt = 0;
+}
+
+/**
+ * Returns a Set of lowercased tokens (name, email, username, id) belonging to
+ * currently active Employees & Users. Fails open (empty Set) on query errors.
+ */
+async function getActiveMemberTokenSet() {
+  const now = Date.now();
+  if (cachedActiveTokens && now - cachedActiveTokensAt < ACTIVE_TOKEN_TTL_MS) {
+    return cachedActiveTokens;
+  }
+
+  try {
+    const [employees, users] = await Promise.all([
+      Employee.find({ status: { $ne: "inactive" }, userStatus: { $ne: "inactive" } })
+        .select("_id name email username")
+        .lean(),
+      User.find({ status: { $ne: "inactive" } })
+        .select("_id name email username")
+        .lean(),
+    ]);
+
+    const tokens = new Set();
+    for (const person of [...employees, ...users]) {
+      for (const field of [person._id, person.name, person.email, person.username]) {
+        const val = String(field || "").trim().toLowerCase();
+        if (val) tokens.add(val);
+      }
+    }
+
+    cachedActiveTokens = tokens;
+    cachedActiveTokensAt = now;
+    return tokens;
+  } catch (err) {
+    console.error("[EmployeeCleanup] Failed to build active member set:", err.message);
+    return new Set();
+  }
+}
+
+/**
+ * Filters departed/deleted assignees out of formatted Task or Project items
+ * and opportunistically cleans stale entries from MongoDB in the background.
+ */
+function stripInactiveAssigneesForDocs(docs, activeSet, Model = null) {
+  if (!Array.isArray(docs) || docs.length === 0) return docs;
+  if (!activeSet || activeSet.size === 0) return docs;
+
+  const isMemberActive = (val) => {
+    const key = String(val || "").trim().toLowerCase();
+    return key ? activeSet.has(key) : false;
+  };
+
+  const pendingUpdates = [];
+
+  const cleaned = docs.map((doc) => {
+    if (!doc || typeof doc !== "object") return doc;
+    let changed = false;
+    const next = { ...doc };
+
+    if (Array.isArray(doc.assignees)) {
+      const filteredAssignees = [];
+      const seen = new Set();
+      for (const a of doc.assignees) {
+        const trimmed = String(a || "").trim();
+        const lower = trimmed.toLowerCase();
+        if (!trimmed || !activeSet.has(lower)) {
+          changed = true;
+          continue;
+        }
+        if (seen.has(lower)) {
+          changed = true;
+          continue;
+        }
+        seen.add(lower);
+        filteredAssignees.push(trimmed);
+      }
+      next.assignees = filteredAssignees;
+    }
+
+    if (typeof doc.teamLead === "string" && doc.teamLead.trim() && !isMemberActive(doc.teamLead)) {
+      next.teamLead = "";
+      changed = true;
+    }
+
+    if (changed && Model && (doc._id || doc.id)) {
+      const docId = doc._id || doc.id;
+      const updateSet = { assignees: next.assignees || [] };
+      if ("teamLead" in doc) updateSet.teamLead = next.teamLead || "";
+      pendingUpdates.push({ updateOne: { filter: { _id: docId }, update: { $set: updateSet } } });
+    }
+
+    return next;
+  });
+
+  if (pendingUpdates.length > 0 && Model) {
+    void Model.bulkWrite(pendingUpdates, { ordered: false }).catch((err) => {
+      console.error("[EmployeeCleanup] Background assignee heal failed:", err.message);
+    });
+  }
+
+  return cleaned;
+}
 
 function escapeRegex(str) {
   return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -117,12 +229,14 @@ async function cleanupEmployeeAssignments(person) {
       }
     }
 
-    // Flush Redis cache for tasks & projects
+    // Flush Redis cache for tasks & projects and active-member lookup cache
+    invalidateActiveMemberCache();
     try {
       await cacheDel("tasks:*");
       await cacheDel("tasks:list:*");
       await cacheDel("projects:*");
       await cacheDel("projects:list:*");
+      await cacheDel("project:*");
     } catch (e) {}
   } catch (err) {
     console.error("[EmployeeCleanup] error:", err.message);
@@ -131,4 +245,9 @@ async function cleanupEmployeeAssignments(person) {
   return { tasksUpdated, projectsUpdated };
 }
 
-module.exports = { cleanupEmployeeAssignments };
+module.exports = {
+  cleanupEmployeeAssignments,
+  invalidateActiveMemberCache,
+  getActiveMemberTokenSet,
+  stripInactiveAssigneesForDocs,
+};

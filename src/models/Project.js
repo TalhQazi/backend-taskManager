@@ -5,6 +5,14 @@ const ProjectSchema = new mongoose.Schema(
     name: { type: String, required: true, trim: true, index: true },
     description: { type: String, default: "" },
     category: { type: String, default: "", index: true },
+    socialMedia: [
+      {
+        platform: { type: String, required: true, trim: true },
+        enabled: { type: Boolean, default: true },
+        handle: { type: String, default: "", trim: true },
+        url: { type: String, default: "", trim: true },
+      },
+    ],
     assignees: { type: [String], default: [], index: true },
     teamLead: { type: String, default: "", index: true },
     logo: {
@@ -38,6 +46,10 @@ const ProjectSchema = new mongoose.Schema(
     createdByRole: { type: String, default: "" },
     introVideoUrl: { type: String, default: "" },
     status: { type: String, default: "Pending", index: true },
+    startedAt: { type: Date, default: null },
+    completedAt: { type: Date, default: null },
+    completedByName: { type: String, default: "" },
+    lastCheckInAt: { type: Date, default: null },
   },
   { timestamps: true }
 );

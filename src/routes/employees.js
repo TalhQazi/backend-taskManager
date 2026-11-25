@@ -1008,7 +1008,14 @@ router.post("/", requireAuth, async (req, res, next) => {
         resourceName: created.name,
         resourceId: String(created._id),
       }),
-      cacheDel("employees:list"),
+      cacheDel("employees:list*"),
+      (() => {
+        try {
+          const { invalidateActiveMemberCache } = require("../utils/employeeCleanup");
+          invalidateActiveMemberCache();
+        } catch {}
+        return Promise.resolve();
+      })(),
       created.email
         ? sendSystemEmail({
             to: created.email,
@@ -1111,6 +1118,14 @@ router.put("/:id", requireAuth, async (req, res, next) => {
 
         const oldStatus = String(oldEmployee.status || oldEmployee.userStatus || "active").toLowerCase();
         const newStatus = String(patch.status || patch.userStatus || updated.status || updated.userStatus || oldStatus).toLowerCase();
+
+        if (newStatus === "inactive") {
+          const { cleanupEmployeeAssignments } = require("../utils/employeeCleanup");
+          await cleanupEmployeeAssignments(updated || oldEmployee).catch(() => {});
+        } else {
+          const { invalidateActiveMemberCache } = require("../utils/employeeCleanup");
+          invalidateActiveMemberCache();
+        }
 
         const statusBecameActive = oldStatus === "inactive" && (patch.status === "active" || newStatus === "active");
         const roleChanged = Boolean(patch.role && patch.role !== oldEmployee.role) || Boolean(patch.userRole && patch.userRole !== oldEmployee.userRole);
@@ -1252,7 +1267,11 @@ router.delete("/:id", requireAuth, async (req, res, next) => {
       resourceId: String(req.params.id),
     });
     
-    cacheDel("employees:list");
+    cacheDel("employees:list*");
+    try {
+      const { invalidateActiveMemberCache } = require("../utils/employeeCleanup");
+      invalidateActiveMemberCache();
+    } catch {}
     return res.status(204).send();
   } catch (err) {
     return next(err);

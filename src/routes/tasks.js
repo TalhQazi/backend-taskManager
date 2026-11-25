@@ -27,6 +27,7 @@ const contributionTracker = require("../utils/contributionTracker");
 const { sendEmailNotification } = require("../utils/emailNotifications");
 const Website = require("../models/Website");
 const { getTaskExpenseStatusMap, matchesExpenseStatusFilter } = require("../lib/expenseStatusHelper");
+const { getActiveMemberTokenSet, stripInactiveAssigneesForDocs } = require("../utils/employeeCleanup");
 
 async function handleTaskCompletion(task) {
   try {
@@ -235,12 +236,21 @@ function withId(doc) {
 }
 
 function normalizeAssignees(input) {
-  if (Array.isArray(input)) return input.filter((s) => typeof s === "string" && s.trim()).map((s) => s.trim());
-  if (typeof input === "string") {
-    const v = input.trim();
-    return v ? [v] : [];
+  const list = Array.isArray(input)
+    ? input.filter((s) => typeof s === "string" && s.trim()).map((s) => s.trim())
+    : typeof input === "string" && input.trim()
+      ? [input.trim()]
+      : [];
+  const seen = new Set();
+  const deduped = [];
+  for (const item of list) {
+    const key = item.toLowerCase();
+    if (!seen.has(key)) {
+      seen.add(key);
+      deduped.push(item);
+    }
   }
-  return [];
+  return deduped;
 }
 
 function canAccessTask(user, task) {
@@ -446,7 +456,7 @@ router.get("/", requireAuth, async (req, res, next) => {
         conditions.push({ status: statusQ });
       }
     } else if (excludeCompleted) {
-      conditions.push({ status: { $ne: "completed" } });
+      conditions.push({ status: { $nin: ["completed", "Completed", "COMPLETED"] } });
     }
 
     // 5. Assignment Filter
@@ -569,7 +579,9 @@ router.get("/", requireAuth, async (req, res, next) => {
       }), total, page, limit);
     }, 15);
 
-    res.json(result);
+    const activeSet = await getActiveMemberTokenSet();
+    const cleanedItems = stripInactiveAssigneesForDocs(result?.items || [], activeSet, Task);
+    res.json({ ...result, items: cleanedItems });
   } catch (err) {
     next(err);
   }
@@ -579,21 +591,27 @@ router.get("/", requireAuth, async (req, res, next) => {
 // shipping every task to the client just to count them.
 router.get("/assignee-stats", requireAuth, async (req, res, next) => {
   try {
-    const rows = await Task.aggregate([
-      { $unwind: "$assignees" },
-      {
-        $group: {
-          _id: "$assignees",
-          total: { $sum: 1 },
-          completed: { $sum: { $cond: [{ $eq: ["$status", "completed"] }, 1, 0] } },
-          pending: { $sum: { $cond: [{ $in: ["$status", ["pending", "in-progress"]] }, 1, 0] } },
-          overdue: { $sum: { $cond: [{ $eq: ["$status", "overdue"] }, 1, 0] } },
+    const [rows, activeSet] = await Promise.all([
+      Task.aggregate([
+        { $unwind: "$assignees" },
+        {
+          $group: {
+            _id: "$assignees",
+            total: { $sum: 1 },
+            completed: { $sum: { $cond: [{ $eq: ["$status", "completed"] }, 1, 0] } },
+            pending: { $sum: { $cond: [{ $in: ["$status", ["pending", "in-progress"]] }, 1, 0] } },
+            overdue: { $sum: { $cond: [{ $eq: ["$status", "overdue"] }, 1, 0] } },
+          },
         },
-      },
+      ]),
+      getActiveMemberTokenSet(),
     ]);
     const stats = {};
     rows.forEach((r) => {
-      stats[String(r._id)] = {
+      const key = String(r._id || "").trim();
+      if (!key) return;
+      if (activeSet.size > 0 && !activeSet.has(key.toLowerCase())) return;
+      stats[key] = {
         total: r.total,
         completed: r.completed,
         pending: r.pending,
@@ -652,7 +670,46 @@ router.get("/:id", requireAuth, async (req, res, next) => {
       return res.status(403).json({ error: { message: "Forbidden" } });
     }
 
-    return res.json({ item: { ...withId(task), isArchived } });
+    const activeSet = await getActiveMemberTokenSet();
+    const [cleanedTask] = stripInactiveAssigneesForDocs([withId(task)], activeSet, isArchived ? null : Task);
+    return res.json({ item: { ...cleanedTask, isArchived } });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// Send a status check-in notification ("Hey, is this task done?")
+router.post("/:id/check-in", requireAuth, async (req, res, next) => {
+  try {
+    const task = await Task.findById(req.params.id).lean();
+    if (!task) {
+      return res.status(404).json({ error: { message: "Task not found" } });
+    }
+    const actorName = String(req.user?.name || req.user?.username || "Admin");
+    const customMsg = String(req.body?.message || "").trim();
+    const recipients = Array.from(
+      new Set([...(Array.isArray(task.assignees) ? task.assignees : []), task.teamLead].filter(Boolean))
+    );
+    const details =
+      customMsg ||
+      `Hey, is "${task.title}" done? Please update or mark it complete if finished so it doesn't stay pending.`;
+
+    if (recipients.length > 0) {
+      await createNotification({
+        actor: actorName,
+        actorRole: String(req.user?.role || ""),
+        action: "checked on status of",
+        resourceType: "task",
+        resourceName: task.title,
+        assignees: recipients,
+        details,
+        resourceId: String(task._id),
+        category: "TASK_CHECK_IN",
+      });
+    }
+
+    await logActivity(req, "TASK_CHECK_IN", "task", task._id, task.title, details);
+    return res.json({ ok: true, recipients, message: details });
   } catch (err) {
     return next(err);
   }
@@ -778,6 +835,18 @@ router.post("/", requireAuth, async (req, res, next) => {
     }
 
     const data = parsed.data;
+
+    // Prevent accidental rapid double-submit duplicates within 15s
+    const trimmedTitle = String(data.title || "").trim();
+    const recentTaskFilter = {
+      title: new RegExp(`^${escapeRegExp(trimmedTitle)}$`, "i"),
+      ...(data.projectId && mongoose.isValidObjectId(data.projectId) ? { projectId: new mongoose.Types.ObjectId(data.projectId) } : { projectId: { $in: [null, undefined] } }),
+      description: String(data.description || ""),
+    };
+    const recentDupTask = await Task.findOne(recentTaskFilter).sort({ _id: -1 }).lean();
+    if (recentDupTask && recentDupTask._id && Date.now() - recentDupTask._id.getTimestamp().getTime() < 15000) {
+      return res.status(200).json({ item: withId(recentDupTask), deduplicated: true });
+    }
 
     // Convert Base64 attachments to S3 URLs if present
     if (data.attachment?.url && data.attachment.url.startsWith("data:")) {

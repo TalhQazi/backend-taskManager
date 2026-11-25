@@ -188,6 +188,13 @@ router.put("/:id", requireAuth, requireRole(["super-admin", "admin"]), async (re
       const oldStatus = String(oldUser.userStatus || "active").toLowerCase();
       const newStatus = String(updated.userStatus || oldStatus).toLowerCase();
       const statusBecameInactive = oldStatus !== "inactive" && newStatus === "inactive";
+      if (newStatus === "inactive") {
+        const { cleanupEmployeeAssignments } = require("../utils/employeeCleanup");
+        await cleanupEmployeeAssignments(updated || oldUser).catch(() => {});
+      } else {
+        const { invalidateActiveMemberCache } = require("../utils/employeeCleanup");
+        invalidateActiveMemberCache();
+      }
       const statusBecameActive = oldStatus === "inactive" && newStatus === "active";
       const roleChanged = Boolean(parsed.data.role && parsed.data.role !== oldUser.userRole);
       const passwordChanged = Boolean(parsed.data.password);

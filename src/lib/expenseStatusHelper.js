@@ -48,7 +48,7 @@ async function getProjectExpenseStatusMap() {
     CostSheet.find({ projectId: { $nin: [null, ""] } })
       .select("_id projectId name quoteStatus availableBudgetCents")
       .lean(),
-    ExpenseSheet.find({ projectId: { $nin: [null, ""] } })
+    ExpenseSheet.find({ projectId: { $exists: true, $ne: null } })
       .select("_id projectId title status")
       .lean(),
   ]);

@@ -1,4 +1,5 @@
 const express = require("express");
+const mongoose = require("mongoose");
 const ExpenseSheet = require("../models/ExpenseSheet");
 const ExpenseItem = require("../models/ExpenseItem");
 const { requireAuth } = require("../middleware/auth");
@@ -8,6 +9,9 @@ const router = express.Router();
 // Get expense sheets by Project ID
 router.get("/:projectId", requireAuth, async (req, res, next) => {
   try {
+    if (!mongoose.isValidObjectId(req.params.projectId)) {
+      return res.json([]);
+    }
     const sheets = await ExpenseSheet.find({ projectId: req.params.projectId }).lean();
     res.json(sheets);
   } catch (err) {
@@ -18,6 +22,9 @@ router.get("/:projectId", requireAuth, async (req, res, next) => {
 // Get expense items for a sheet
 router.get("/items/:sheetId", requireAuth, async (req, res, next) => {
   try {
+    if (!mongoose.isValidObjectId(req.params.sheetId)) {
+      return res.json([]);
+    }
     const items = await ExpenseItem.find({ expenseSheetId: req.params.sheetId }).lean();
     res.json(items);
   } catch (err) {
@@ -28,6 +35,9 @@ router.get("/items/:sheetId", requireAuth, async (req, res, next) => {
 // Create new expense sheet for Project
 router.post("/:projectId", requireAuth, async (req, res, next) => {
   try {
+    if (!mongoose.isValidObjectId(req.params.projectId)) {
+      return res.status(400).json({ error: { message: "Invalid project id" } });
+    }
     const { title, description } = req.body;
     let sheet = await ExpenseSheet.findOne({ projectId: req.params.projectId });
     
@@ -50,6 +60,9 @@ router.post("/:projectId", requireAuth, async (req, res, next) => {
 // Add item to expense sheet
 router.post("/:projectId/items", requireAuth, async (req, res, next) => {
   try {
+    if (!mongoose.isValidObjectId(req.params.projectId)) {
+      return res.status(400).json({ error: { message: "Invalid project id" } });
+    }
     const { phase, itemName, partNumber, vendorName, estimatedTotalCents, purchaseStatus } = req.body;
     
     let sheet = await ExpenseSheet.findOne({ projectId: req.params.projectId });
@@ -83,6 +96,9 @@ router.post("/:projectId/items", requireAuth, async (req, res, next) => {
 // Update expense item
 router.put("/:projectId/items/:itemId", requireAuth, async (req, res, next) => {
   try {
+    if (!mongoose.isValidObjectId(req.params.projectId) || !mongoose.isValidObjectId(req.params.itemId)) {
+      return res.status(400).json({ error: { message: "Invalid project or item id" } });
+    }
     const { phase, itemName, partNumber, vendorName, estimatedTotalCents, purchaseStatus, paidCents, quotes } = req.body;
     
     const updateData = {};
@@ -112,6 +128,9 @@ router.put("/:projectId/items/:itemId", requireAuth, async (req, res, next) => {
 // Delete expense item
 router.delete("/:projectId/items/:itemId", requireAuth, async (req, res, next) => {
   try {
+    if (!mongoose.isValidObjectId(req.params.projectId) || !mongoose.isValidObjectId(req.params.itemId)) {
+      return res.status(400).json({ error: { message: "Invalid project or item id" } });
+    }
     const item = await ExpenseItem.findOneAndDelete({ _id: req.params.itemId, projectId: req.params.projectId });
     if (!item) return res.status(404).json({ error: { message: "Item not found" } });
     res.json({ success: true });

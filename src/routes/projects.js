@@ -17,6 +17,7 @@ const { parsePagination, paginatedResponse } = require("../lib/pagination");
 const { cacheWrap, cacheDel } = require("../lib/cache");
 const { uploadToS3, saveToServer, base64ToBuffer } = require("../lib/s3");
 const { getProjectExpenseStatusMap, matchesExpenseStatusFilter } = require("../lib/expenseStatusHelper");
+const { getActiveMemberTokenSet, stripInactiveAssigneesForDocs } = require("../utils/employeeCleanup");
 
 const router = express.Router();
 
@@ -33,12 +34,42 @@ function withId(doc) {
 }
 
 function normalizeAssignees(input) {
-  if (Array.isArray(input)) return input.filter((s) => typeof s === "string" && s.trim()).map((s) => s.trim());
-  if (typeof input === "string") {
-    const v = input.trim();
-    return v ? [v] : [];
+  const list = Array.isArray(input)
+    ? input.filter((s) => typeof s === "string" && s.trim()).map((s) => s.trim())
+    : typeof input === "string" && input.trim()
+      ? [input.trim()]
+      : [];
+  const seen = new Set();
+  const deduped = [];
+  for (const item of list) {
+    const key = item.toLowerCase();
+    if (!seen.has(key)) {
+      seen.add(key);
+      deduped.push(item);
+    }
   }
-  return [];
+  return deduped;
+}
+
+function normalizeSocialMedia(input) {
+  if (!Array.isArray(input)) return [];
+  const seen = new Set();
+  const out = [];
+  for (const entry of input) {
+    if (!entry || typeof entry !== "object") continue;
+    const platform = String(entry.platform || "").trim();
+    if (!platform || entry.enabled === false) continue;
+    const key = platform.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({
+      platform,
+      enabled: true,
+      handle: String(entry.handle || "").trim(),
+      url: String(entry.url || "").trim(),
+    });
+  }
+  return out;
 }
 
 async function logActivity(req, action, resourceType, resourceId, resourceName, description) {
@@ -96,10 +127,18 @@ const logoSchema = z.object({
   size: z.number().optional(),
 }).optional();
 
+const socialMediaItemSchema = z.object({
+  platform: z.string().trim().min(1),
+  enabled: z.boolean().optional().default(true),
+  handle: z.string().optional().default(""),
+  url: z.string().optional().default(""),
+});
+
 const projectCreateSchema = z.object({
   name: z.string().min(1, "Project name is required"),
   description: z.string().optional().default(""),
   category: z.string().optional().default(""),
+  socialMedia: z.array(socialMediaItemSchema).optional().default([]),
   assignees: z.array(z.string()).optional().default([]),
   teamLead: z.string().optional().default(""),
   introVideoUrl: z.string().optional().default(""),
@@ -145,6 +184,18 @@ router.post("/", requireAuth, async (req, res, next) => {
 
     const data = { ...parsed.data };
 
+    // Prevent accidental double-submit duplicates within 30s for the same user + project name
+    const trimmedName = String(data.name || "").trim();
+    const creatorId = String(req.user?.sub || req.user?.id || "");
+    const recentDup = await Project.findOne({
+      name: new RegExp(`^${escapeRegExp(trimmedName)}$`, "i"),
+      createdByUserId: creatorId,
+      createdAt: { $gte: new Date(Date.now() - 30000) },
+    }).lean();
+    if (recentDup) {
+      return res.status(200).json({ item: withId(recentDup), deduplicated: true });
+    }
+
     // 1. Upload Project Logo to S3
     if (data.logo?.url && data.logo.url.startsWith("data:")) {
       try {
@@ -187,7 +238,9 @@ router.post("/", requireAuth, async (req, res, next) => {
     const createdProject = await Project.create({
       name: data.name,
       description: data.description || "",
-      assignees: data.assignees || [],
+      category: String(data.category || "").trim(),
+      socialMedia: normalizeSocialMedia(data.socialMedia),
+      assignees: normalizeAssignees(data.assignees),
       teamLead: data.teamLead || "",
       introVideoUrl: data.introVideoUrl || "",
       logo: data.logo || { fileName: "", url: "", mimeType: "", size: 0 },
@@ -459,6 +512,8 @@ router.get("/", requireAuth, async (req, res, next) => {
           status: {
             $switch: {
               branches: [
+                { case: { $eq: [{ $toLower: { $ifNull: ["$status", ""] } }, "completed"] }, then: "Completed" },
+                { case: { $and: [{ $eq: [{ $size: "$tasks" }, 0] }, { $in: [{ $toLower: { $ifNull: ["$status", ""] } }, ["in progress", "in-progress", "active", "overdue"]] }] }, then: "$status" },
                 { case: { $eq: [{ $size: "$tasks" }, 0] }, then: "No tasks" },
                 { case: { $allElementsTrue: { $map: { input: "$tasks", as: "t", in: { $eq: ["$$t.status", "completed"] } } } }, then: "Completed" },
                 { case: { $anyElementTrue: { $map: { input: "$tasks", as: "t", in: { $eq: ["$$t.status", "in-progress"] } } } }, then: "In Progress" },
@@ -477,6 +532,7 @@ router.get("/", requireAuth, async (req, res, next) => {
           name: 1,
           description: 1,
           category: 1,
+          socialMedia: { $ifNull: ["$socialMedia", []] },
           assignees: 1,
           teamLead: 1,
           logo: {
@@ -523,6 +579,10 @@ router.get("/", requireAuth, async (req, res, next) => {
           taskCount: 1,
           taskAttachmentStats: 1,
           status: 1,
+          startedAt: 1,
+          completedAt: 1,
+          completedByName: 1,
+          lastCheckInAt: 1,
           createdAt: 1,
           createdByUserId: 1,
           createdByUsername: 1,
@@ -544,7 +604,9 @@ router.get("/", requireAuth, async (req, res, next) => {
 
     const [result] = await Project.aggregate(pipeline);
     const rawItems = result?.items || [];
-    const items = rawItems.map((p) => {
+    const activeSet = await getActiveMemberTokenSet();
+    const cleanedItems = stripInactiveAssigneesForDocs(rawItems, activeSet, Project);
+    const items = cleanedItems.map((p) => {
       const exp = projectExpenseMap.get(String(p.id || p._id || ""));
       return {
         ...p,
@@ -564,19 +626,20 @@ router.get("/", requireAuth, async (req, res, next) => {
 router.get("/categories", requireAuth, async (_req, res, next) => {
   try {
     const rawCategories = await Project.distinct("category");
-    const cleaned = Array.from(new Set(
-      rawCategories
-        .map((c) => String(c || "").trim())
-        .filter(Boolean)
-    )).sort();
-    // Include common categories if not already present
-    const standardCategories = ["Location", "Mechanical", "Medical", "Software", "Hardware", "Marketing"];
+    const catMap = new Map();
+    const standardCategories = ["Location", "Mechanical", "Medical", "Software", "Hardware", "Marketing", "Social Media"];
     for (const std of standardCategories) {
-      if (!cleaned.some(c => c.toLowerCase() === std.toLowerCase())) {
-        cleaned.push(std);
+      catMap.set(std.toLowerCase(), std);
+    }
+    for (const c of rawCategories) {
+      const trimmed = String(c || "").trim();
+      if (!trimmed) continue;
+      const key = trimmed.toLowerCase();
+      if (!catMap.has(key)) {
+        catMap.set(key, trimmed.charAt(0).toUpperCase() + trimmed.slice(1));
       }
     }
-    cleaned.sort();
+    const cleaned = Array.from(catMap.values()).sort((a, b) => a.localeCompare(b));
     res.json({ categories: cleaned });
   } catch (err) {
     next(err);
@@ -676,6 +739,8 @@ router.get("/:id", requireAuth, async (req, res, next) => {
             status: {
               $switch: {
                 branches: [
+                  { case: { $eq: [{ $toLower: { $ifNull: ["$status", ""] } }, "completed"] }, then: "Completed" },
+                  { case: { $and: [{ $eq: [{ $size: "$tasks" }, 0] }, { $in: [{ $toLower: { $ifNull: ["$status", ""] } }, ["in progress", "in-progress", "active", "overdue"]] }] }, then: "$status" },
                   { case: { $eq: [{ $size: "$tasks" }, 0] }, then: "No tasks" },
                   { case: { $allElementsTrue: { $map: { input: "$tasks", as: "t", in: { $eq: ["$$t.status", "completed"] } } } }, then: "Completed" },
                   { case: { $anyElementTrue: { $map: { input: "$tasks", as: "t", in: { $eq: ["$$t.status", "in-progress"] } } } }, then: "In Progress" },
@@ -739,7 +804,12 @@ router.get("/:id", requireAuth, async (req, res, next) => {
             tasks: 1,
             taskCount: 1,
             category: 1,
+            socialMedia: { $ifNull: ["$socialMedia", []] },
             status: 1,
+            startedAt: 1,
+            completedAt: 1,
+            completedByName: 1,
+            lastCheckInAt: 1,
             createdAt: 1,
             createdByUserId: 1,
             createdByUsername: 1,
@@ -756,10 +826,15 @@ router.get("/:id", requireAuth, async (req, res, next) => {
     }
 
     const cloned = JSON.parse(JSON.stringify(cached));
+    const activeSet = await getActiveMemberTokenSet();
+    const [cleanedProject] = stripInactiveAssigneesForDocs([cloned], activeSet, Project);
+    if (Array.isArray(cleanedProject?.tasks)) {
+      cleanedProject.tasks = stripInactiveAssigneesForDocs(cleanedProject.tasks, activeSet, Task);
+    }
 
     // Accessibility: intentionally unrestricted — every role (super-admin,
     // admin, manager, employee) can see every project and all its tasks without limitation.
-    return res.json({ item: cloned });
+    return res.json({ item: cleanedProject });
   } catch (err) {
     return next(err);
   }
@@ -769,6 +844,7 @@ const projectUpdateSchema = z.object({
   name: z.string().min(1, "Project name is required").optional(),
   description: z.string().optional(),
   category: z.string().optional(),
+  socialMedia: z.array(socialMediaItemSchema).optional(),
   assignees: z.array(z.string()).optional(),
   teamLead: z.string().optional(),
   introVideoUrl: z.string().optional(),
@@ -813,10 +889,34 @@ router.put("/:id", requireAuth, async (req, res, next) => {
     }
 
     const patch = { ...parsed.data };
+    if (Array.isArray(patch.socialMedia)) {
+      patch.socialMedia = normalizeSocialMedia(patch.socialMedia);
+    }
+    if (Array.isArray(patch.assignees)) {
+      patch.assignees = normalizeAssignees(patch.assignees);
+    }
 
     const project = await Project.findById(req.params.id);
     if (!project) {
       return res.status(404).json({ error: { message: "Project not found" } });
+    }
+
+    if (typeof patch.status === "string" && patch.status.trim()) {
+      const normalizedStatus = patch.status.trim().toLowerCase();
+      const actorName = String(req.user?.name || req.user?.username || "Unknown");
+      if (normalizedStatus === "completed") {
+        patch.status = "Completed";
+        patch.completedAt = project.completedAt || new Date();
+        patch.completedByName = actorName;
+        if (!project.startedAt) patch.startedAt = project.createdAt || new Date();
+      } else if (["in progress", "in-progress", "active"].includes(normalizedStatus)) {
+        patch.status = normalizedStatus === "active" ? "Active" : "In Progress";
+        if (!project.startedAt) patch.startedAt = new Date();
+        patch.completedAt = null;
+      } else if (normalizedStatus === "pending") {
+        patch.status = "Pending";
+        patch.completedAt = null;
+      }
     }
 
     // Upload Logo to S3 if update includes new base64 logo
@@ -878,6 +978,7 @@ router.put("/:id", requireAuth, async (req, res, next) => {
     console.log("[ProjectUpdate] Saved. DB logo URL:", updated.logo?.url?.substring(0, 80));
 
     void cacheDel(`project:${req.params.id}`);
+    void cacheDel("projects:*");
 
     await logActivity(
       req,
@@ -956,6 +1057,7 @@ router.delete("/:id/attachments/:attachmentIndex", requireAuth, async (req, res,
     await project.save();
 
     void cacheDel(`project:${req.params.id}`);
+    void cacheDel("projects:*");
 
     await logActivity(
       req,
@@ -1012,6 +1114,7 @@ router.post("/:id/attachments/:attachmentIndex/archive", requireAuth, async (req
     project.attachments.splice(idx, 1);
     await project.save();
     void cacheDel(`project:${req.params.id}`);
+    void cacheDel("projects:*");
 
     await logActivity(
       req,
@@ -1039,14 +1142,24 @@ router.post("/:id/close", requireAuth, async (req, res, next) => {
     const actorName = String(req.user?.name || req.user?.username || "Unknown");
     const now = new Date();
 
-    // Mark all tasks under this project as completed
+    // Mark the project itself and all tasks under it as completed
+    project.status = "Completed";
+    project.completedAt = now;
+    project.completedByName = actorName;
+    if (!project.startedAt) {
+      project.startedAt = project.createdAt || now;
+    }
+    await project.save();
+
     await Task.updateMany(
       { projectId: project._id },
       { $set: { status: "completed", completedAt: now, completedByName: actorName } }
     );
 
     void cacheDel(`project:${req.params.id}`);
+    void cacheDel("projects:*");
     void cacheDel("tasks:list:*");
+    void cacheDel("projects:*");
 
     await logActivity(
       req,
@@ -1057,7 +1170,55 @@ router.post("/:id/close", requireAuth, async (req, res, next) => {
       `Closed project and all associated tasks: ${project.name}`
     );
 
-    return res.json({ ok: true, message: "Project and all associated tasks marked as completed" });
+    return res.json({
+      ok: true,
+      item: withId(project.toObject()),
+      message: "Project and all associated tasks marked as completed",
+    });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// Send a status check-in notification ("Hey, is this project done?")
+router.post("/:id/check-in", requireAuth, async (req, res, next) => {
+  try {
+    const project = await Project.findById(req.params.id);
+    if (!project) {
+      return res.status(404).json({ error: { message: "Project not found" } });
+    }
+
+    const actorName = String(req.user?.name || req.user?.username || "Admin");
+    const customMsg = String(req.body?.message || "").trim();
+    const recipients = Array.from(
+      new Set([...(Array.isArray(project.assignees) ? project.assignees : []), project.teamLead].filter(Boolean))
+    );
+
+    project.lastCheckInAt = new Date();
+    await project.save();
+    void cacheDel(`project:${req.params.id}`);
+    void cacheDel("projects:*");
+
+    const details =
+      customMsg ||
+      `Hey, is "${project.name}" done? Please update or mark it complete if finished so it doesn't stay pending.`;
+
+    if (recipients.length > 0) {
+      await createNotification({
+        actor: actorName,
+        actorRole: String(req.user?.role || ""),
+        action: "checked on status of",
+        resourceType: "project",
+        resourceName: project.name,
+        assignees: recipients,
+        details,
+        resourceId: String(project._id),
+        category: "PROJECT_CHECK_IN",
+      });
+    }
+
+    await logActivity(req, "PROJECT_CHECK_IN", "project", project._id, project.name, details);
+    return res.json({ ok: true, recipients, message: details, lastCheckInAt: project.lastCheckInAt });
   } catch (err) {
     return next(err);
   }
@@ -1084,6 +1245,7 @@ router.put("/:id/reassign", requireAuth, async (req, res, next) => {
     project.assignees = assignees;
     await project.save();
     void cacheDel(`project:${req.params.id}`);
+    void cacheDel("projects:*");
 
     // Log activity
     await logActivity(req, "PROJECT_REASSIGN", "project", req.params.id, project.name, `Reassigned project: ${project.name} to ${assignees.join(", ")}`);
@@ -1185,6 +1347,7 @@ router.delete("/:id", requireAuth, async (req, res, next) => {
     // Delete the project
     await Project.findByIdAndDelete(req.params.id);
     void cacheDel(`project:${req.params.id}`);
+    void cacheDel("projects:*");
 
     await logActivity(
       req,

@@ -16,6 +16,7 @@ const CORE_REQ_MAP = {
   appleMaps: "Apple Maps",
   infoEmailSetup: "info@ Email Setup",
   nathanEmailSetup: "nathan@ Email Setup",
+  se7enFamilyFooter: "Se7en Family Footer (Part of the Se7en family of companies.)",
   largeHeaderImage: "Large Header Image",
   contactInfoSection: "Contact Info Section",
   adaCompliance: "ADA Compliance",
@@ -122,6 +123,7 @@ const STANDARD_PROJECT_CATEGORIES = [
       { title: "Apple Maps", description: "Verify Apple Maps link or MapKit integration.", requiresEvidence: false },
       { title: "info@ Email Setup", description: "Verify active info@ email account and forwarding.", requiresEvidence: true },
       { title: "nathan@ Email Setup", description: "Verify active nathan@ email account and forwarding.", requiresEvidence: true },
+      { title: "Se7en Family Footer (Part of the Se7en family of companies.)", description: "Include 'Part of the Se7en family of companies.' at the bottom of the website with Se7en hyperlinked to the Se7en website.", requiresEvidence: false },
     ],
   },
   {
@@ -151,6 +153,7 @@ function matchCoreReqKey(title) {
   if (t === "apple maps") return "appleMaps";
   if (t.startsWith("info@")) return "infoEmailSetup";
   if (t.startsWith("nathan@")) return "nathanEmailSetup";
+  if (t.includes("se7en family") || t.includes("family of companies")) return "se7enFamilyFooter";
   if (t === "human verification (math puzzle)" || t === "human verification") return "humanVerification";
   if (t === "large header image") return "largeHeaderImage";
   if (t === "contact info section") return "contactInfoSection";
@@ -630,6 +633,9 @@ router.get("/:id/history", requireAuth, async (req, res, next) => {
 router.post("/", requireAuth, async (req, res, next) => {
   try {
     const { siteName, url, websiteType, ...rest } = req.body;
+    if (rest.expirationDate === "") rest.expirationDate = null;
+    if (rest.launchDate === "") rest.launchDate = null;
+    if (rest.originalPurchaseDate === "") rest.originalPurchaseDate = null;
 
     if (!siteName || !url || !websiteType) {
       return res.status(400).json({
@@ -662,6 +668,9 @@ router.post("/", requireAuth, async (req, res, next) => {
 router.put("/:id", requireAuth, async (req, res, next) => {
   try {
     const { siteName, url, websiteType, ...rest } = req.body;
+    if (rest.expirationDate === "") rest.expirationDate = null;
+    if (rest.launchDate === "") rest.launchDate = null;
+    if (rest.originalPurchaseDate === "") rest.originalPurchaseDate = null;
 
     const website = await Website.findByIdAndUpdate(
       req.params.id,
