@@ -7,7 +7,7 @@ const CostInventoryRecordSchema = new mongoose.Schema(
   {
     lineItemId: { type: mongoose.Schema.Types.ObjectId, ref: "CostLineItem", required: true, index: true },
     costSheetId: { type: mongoose.Schema.Types.ObjectId, ref: "CostSheet", required: true, index: true },
-    projectId: { type: String, required: true, index: true },
+    projectId: { type: String, default: "", index: true },
 
     locationName: { type: String, required: true, trim: true },
     address: { type: String, default: "" },

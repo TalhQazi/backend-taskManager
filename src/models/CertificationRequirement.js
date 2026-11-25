@@ -5,7 +5,7 @@ const mongoose = require("mongoose");
 // projected prototype total and build readiness.
 const CertificationRequirementSchema = new mongoose.Schema(
   {
-    projectId: { type: String, required: true, index: true },
+    projectId: { type: String, default: "", index: true },
     costSheetId: { type: mongoose.Schema.Types.ObjectId, ref: "CostSheet", required: true, index: true },
     // Paired cost line item (created automatically when cost is tracked).
     lineItemId: { type: mongoose.Schema.Types.ObjectId, ref: "CostLineItem", default: null },

@@ -59,20 +59,22 @@ async function maybeSendBudgetAlert(req, sheet, summary) {
     if (over && !sheet.budgetAlertActive) {
       sheet.budgetAlertActive = true;
       await sheet.save();
-      const project = await Project.findById(sheet.projectId).select("name assignees").lean();
-      await createNotification({
-        actor: req.user?.username || req.user?.name || "Cost Manager",
-        actorRole: req.user?.role || "system",
-        action: "flagged budget exceeded on",
-        resourceType: "project",
-        resourceName: project?.name || "project",
-        assignees: project?.assignees || [],
-        details: `Projected prototype cost is now over the available budget by ${(
-          (summary.projectedCents - summary.availableBudgetCents) / 100
-        ).toFixed(2)} ${sheet.currency || "USD"}`,
-        resourceId: String(sheet.projectId),
-        category: "COST_ALERT",
-      });
+      if (sheet.projectId && mongoose.isValidObjectId(sheet.projectId)) {
+        const project = await Project.findById(sheet.projectId).select("name assignees").lean();
+        await createNotification({
+          actor: req.user?.username || req.user?.name || "Cost Manager",
+          actorRole: req.user?.role || "system",
+          action: "flagged budget exceeded on",
+          resourceType: "project",
+          resourceName: project?.name || "project",
+          assignees: project?.assignees || [],
+          details: `Projected prototype cost is now over the available budget by ${(
+            (summary.projectedCents - summary.availableBudgetCents) / 100
+          ).toFixed(2)} ${sheet.currency || "USD"}`,
+          resourceId: String(sheet.projectId),
+          category: "COST_ALERT",
+        });
+      }
     } else if (!over && sheet.budgetAlertActive) {
       sheet.budgetAlertActive = false;
       await sheet.save();
@@ -485,18 +487,31 @@ router.post("/sheets", requireAuth, async (req, res, next) => {
   try {
     if (!requireEditor(req, res)) return;
     const { name, availableBudgetCents, vendorName, quoteNumber, isQuote, quoteStatus } = req.body;
-    if (!name) return res.status(400).json({ error: { message: "Name is required" } });
+    const trimmedName = String(name || "").trim();
+    if (!trimmedName) return res.status(400).json({ error: { message: "Name is required" } });
 
-    const sheet = await CostSheet.create({
-      name,
-      vendorName: vendorName || "",
-      quoteNumber: quoteNumber || "",
-      isQuote: !!isQuote || !!vendorName || !!quoteNumber,
+    const doc = {
+      name: trimmedName,
+      vendorName: String(vendorName || "").trim(),
+      quoteNumber: String(quoteNumber || "").trim(),
+      isQuote: !!isQuote || !!String(vendorName || "").trim() || !!String(quoteNumber || "").trim(),
       quoteStatus: quoteStatus || "draft",
-      availableBudgetCents: Number(availableBudgetCents) || 0,
+      availableBudgetCents: toCents(availableBudgetCents),
       createdByUserId: req.user?.id || "",
       createdByUsername: req.user?.username || req.user?.name || "",
-    });
+    };
+
+    let sheet;
+    try {
+      sheet = await CostSheet.create(doc);
+    } catch (createErr) {
+      if (createErr?.code === 11000 && typeof CostSheet.ensureCostSheetIndexes === "function") {
+        await CostSheet.ensureCostSheetIndexes();
+        sheet = await CostSheet.create(doc);
+      } else {
+        throw createErr;
+      }
+    }
 
     await CostSection.insertMany(
       DEFAULT_SECTIONS.map((sectionName, idx) => ({ costSheetId: sheet._id, name: sectionName, sortOrder: idx }))
@@ -541,13 +556,19 @@ router.patch("/sheets/:sheetId/attach", requireAuth, async (req, res, next) => {
     const oldProject = sheet.projectId;
     const oldTask = sheet.taskId;
 
-    sheet.projectId = projectId;
-    sheet.taskId = taskId;
+    sheet.projectId = projectId || undefined;
+    sheet.taskId = taskId || undefined;
     await sheet.save();
 
     // Also update all line items and certifications associated with this sheet
-    await CostLineItem.updateMany({ costSheetId: sheet._id }, { $set: { projectId, taskId } });
-    await CertificationRequirement.updateMany({ costSheetId: sheet._id }, { $set: { projectId } });
+    await CostLineItem.updateMany(
+      { costSheetId: sheet._id },
+      { $set: { projectId: projectId || "", taskId: taskId || "" } }
+    );
+    await CertificationRequirement.updateMany(
+      { costSheetId: sheet._id },
+      { $set: { projectId: projectId || "" } }
+    );
 
     await writeAudit(req, "cost_sheet", sheet._id, projectId, "attach", { projectId: oldProject, taskId: oldTask }, { projectId, taskId });
 
@@ -709,7 +730,7 @@ router.post("/sections/:sectionId/items", requireAuth, async (req, res, next) =>
       vendorId: data.vendorId || null,
       costSheetId: sheet._id,
       costSectionId: section._id,
-      projectId: sheet.projectId,
+      projectId: sheet.projectId || "",
       createdByUserId: req.user?.id || "",
       createdByUsername: req.user?.username || req.user?.name || "",
     });
@@ -1171,7 +1192,7 @@ async function syncCertLineItem(req, sheet, cert) {
     item = new CostLineItem({
       costSheetId: sheet._id,
       costSectionId: section._id,
-      projectId: sheet.projectId,
+      projectId: sheet.projectId || "",
       createdByUserId: req.user?.id || "",
       createdByUsername: req.user?.username || req.user?.name || "",
     });
@@ -1215,7 +1236,7 @@ router.post("/projects/:projectId/certifications", requireAuth, async (req, res,
       filingDate: parseDateField(data.filingDate) ?? null,
       approvalDate: parseDateField(data.approvalDate) ?? null,
       expirationDate: parseDateField(data.expirationDate) ?? null,
-      projectId: sheet.projectId,
+      projectId: sheet.projectId || "",
       costSheetId: sheet._id,
       createdByUserId: req.user?.id || "",
       createdByUsername: req.user?.username || req.user?.name || "",

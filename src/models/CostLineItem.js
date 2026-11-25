@@ -31,7 +31,7 @@ const CostLineItemSchema = new mongoose.Schema(
   {
     costSheetId: { type: mongoose.Schema.Types.ObjectId, ref: "CostSheet", required: true, index: true },
     costSectionId: { type: mongoose.Schema.Types.ObjectId, ref: "CostSection", required: true, index: true },
-    projectId: { type: String, required: true, index: true },
+    projectId: { type: String, default: "", index: true },
     // Optional link back to a task so task expenses roll up into project totals.
     taskId: { type: String, default: "", index: true },
 

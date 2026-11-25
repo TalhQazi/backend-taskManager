@@ -22,4 +22,29 @@ const CostSheetSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-module.exports = mongoose.model("CostSheet", CostSheetSchema);
+const CostSheet = mongoose.model("CostSheet", CostSheetSchema);
+
+async function ensureCostSheetIndexes() {
+  try {
+    const indexes = await CostSheet.collection.indexes();
+    for (const idx of indexes) {
+      if (idx.name !== "_id_" && idx.unique && (idx.key?.projectId || idx.key?.taskId)) {
+        await CostSheet.collection.dropIndex(idx.name).catch(() => {});
+      }
+    }
+    await CostSheet.syncIndexes();
+  } catch (err) {
+    console.error("[CostSheet] index sync failed:", err.message);
+  }
+}
+
+if (mongoose.connection.readyState === 1) {
+  void ensureCostSheetIndexes();
+} else {
+  mongoose.connection.once("open", () => {
+    void ensureCostSheetIndexes();
+  });
+}
+
+CostSheet.ensureCostSheetIndexes = ensureCostSheetIndexes;
+module.exports = CostSheet;
