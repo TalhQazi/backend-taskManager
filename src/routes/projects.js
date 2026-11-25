@@ -16,6 +16,7 @@ const { extractMentions } = require("../utils/mentions");
 const { parsePagination, paginatedResponse } = require("../lib/pagination");
 const { cacheWrap, cacheDel } = require("../lib/cache");
 const { uploadToS3, saveToServer, base64ToBuffer } = require("../lib/s3");
+const { getProjectExpenseStatusMap, matchesExpenseStatusFilter } = require("../lib/expenseStatusHelper");
 
 const router = express.Router();
 
@@ -340,6 +341,27 @@ router.get("/", requireAuth, async (req, res, next) => {
       });
     }
 
+    const expenseStatusFilter = String(req.query.expenseStatus || "all").toLowerCase().trim();
+    const projectExpenseMap = await getProjectExpenseStatusMap();
+    if (expenseStatusFilter && expenseStatusFilter !== "all") {
+      if (expenseStatusFilter === "none") {
+        const idsWithSheet = Array.from(projectExpenseMap.keys())
+          .filter((id) => mongoose.isValidObjectId(id))
+          .map((id) => new mongoose.Types.ObjectId(id));
+        if (idsWithSheet.length > 0) {
+          matchStages.push({ $match: { _id: { $nin: idsWithSheet } } });
+        }
+      } else {
+        const matchingIds = [];
+        for (const [pid, entry] of projectExpenseMap.entries()) {
+          if (matchesExpenseStatusFilter(entry, expenseStatusFilter) && mongoose.isValidObjectId(pid)) {
+            matchingIds.push(new mongoose.Types.ObjectId(pid));
+          }
+        }
+        matchStages.push({ $match: { _id: { $in: matchingIds } } });
+      }
+    }
+
     const shapeStages = [
       {
         $lookup: {
@@ -454,6 +476,7 @@ router.get("/", requireAuth, async (req, res, next) => {
           id: 1,
           name: 1,
           description: 1,
+          category: 1,
           assignees: 1,
           teamLead: 1,
           logo: {
@@ -520,7 +543,15 @@ router.get("/", requireAuth, async (req, res, next) => {
     ];
 
     const [result] = await Project.aggregate(pipeline);
-    const items = result?.items || [];
+    const rawItems = result?.items || [];
+    const items = rawItems.map((p) => {
+      const exp = projectExpenseMap.get(String(p.id || p._id || ""));
+      return {
+        ...p,
+        expenseSheetStatus: exp?.status || "none",
+        expenseSheetName: exp?.sheetName || "",
+      };
+    });
     const total = result?.total?.[0]?.count || 0;
 
     return res.json(paginatedResponse(items, total, page, limit));

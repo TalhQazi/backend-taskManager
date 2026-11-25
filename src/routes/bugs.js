@@ -43,6 +43,10 @@ function getUserName(req) {
   return String(req.user?.username || req.user?.name || req.user?.email || "User").trim();
 }
 
+function getDisplayName(req) {
+  return String(req.user?.name || req.user?.username || req.user?.email || "User").trim();
+}
+
 function getUserRole(req) {
   return String(req.user?.role || req.user?.userRole || "").toLowerCase().trim();
 }
@@ -51,6 +55,21 @@ function withId(doc) {
   if (!doc) return doc;
   const obj = typeof doc.toObject === "function" ? doc.toObject() : { ...doc };
   obj.id = String(obj._id || obj.id || "");
+  const statusUpper = String(obj.status || "").toUpperCase();
+  const isFixedOrClosed = [
+    "RESOLUTION_SUBMITTED",
+    "AWAITING_REPORTER_CONFIRMATION",
+    "CLOSED_VERIFIED",
+    "CLOSED_ADMIN_OVERRIDE",
+    "CLOSED",
+  ].includes(statusUpper);
+  const submittedBy = String(obj.resolution?.submittedBy || "").trim();
+  const explicitFixedBy = String(obj.fixedByName || "").trim();
+  obj.fixedByName =
+    explicitFixedBy ||
+    submittedBy ||
+    (isFixedOrClosed ? String(obj.assignedDeveloperName || "").trim() : "");
+  obj.fixedAt = obj.fixedAt || obj.resolution?.submittedAt || null;
   return obj;
 }
 
@@ -773,6 +792,8 @@ router.get("/", requireAuth, async (req, res, next) => {
         { taskTitle: new RegExp(search, "i") },
         { createdByUsername: new RegExp(search, "i") },
         { assignedDeveloperName: new RegExp(search, "i") },
+        { fixedByName: new RegExp(search, "i") },
+        { "resolution.submittedBy": new RegExp(search, "i") },
         { module: new RegExp(search, "i") },
         { websiteName: new RegExp(search, "i") },
         { reporterName: new RegExp(search, "i") },
@@ -787,7 +808,7 @@ router.get("/", requireAuth, async (req, res, next) => {
         .sort({ lastActivity: -1, createdAt: -1 })
         .skip(skip)
         .limit(limit)
-        .select("title description status severity priority company module taskTitle createdByUsername createdByRole assignedDeveloperName createdAt source attachments.fileName attachments.url attachments.mimeType attachments.size websiteName websiteUrl pageUrl reporterName reporterEmail originType browserInfo")
+        .select("title description status severity priority company module taskTitle createdByUsername createdByRole assignedDeveloperName fixedByUserId fixedByName fixedAt resolution.submittedBy resolution.submittedAt createdAt source attachments.fileName attachments.url attachments.mimeType attachments.size websiteName websiteUrl pageUrl reporterName reporterEmail originType browserInfo")
         .lean(),
     ]);
 
@@ -860,6 +881,11 @@ router.put("/:id", requireAuth, async (req, res, next) => {
       );
     }
 
+    if (typeof req.body?.fixedByName === "string") {
+      patch.fixedByName = String(req.body.fixedByName || "").trim();
+      patch.fixedAt = patch.fixedByName ? (bug.fixedAt || new Date()) : null;
+    }
+
     // Status Updates
     if (typeof req.body?.status === "string") {
       const nextStatus = req.body.status.toUpperCase();
@@ -869,6 +895,19 @@ router.put("/:id", requireAuth, async (req, res, next) => {
         return res.status(403).json({
           error: { message: "Developers cannot directly close a bug. Please submit resolution for reporter confirmation." },
         });
+      }
+
+      if (["RESOLUTION_SUBMITTED", "AWAITING_REPORTER_CONFIRMATION", "CLOSED_VERIFIED", "CLOSED", "CLOSED_ADMIN_OVERRIDE"].includes(nextStatus)) {
+        if (!bug.fixedByName && !patch.fixedByName) {
+          patch.fixedByName =
+            String(bug.resolution?.submittedBy || bug.assignedDeveloperName || getDisplayName(req)).trim();
+          patch.fixedByUserId = bug.fixedByUserId || bug.assignedDeveloperId || getUserId(req);
+          patch.fixedAt = bug.fixedAt || bug.resolution?.submittedAt || new Date();
+        }
+      } else if (nextStatus === "REOPENED" && typeof req.body?.fixedByName !== "string") {
+        patch.fixedByName = "";
+        patch.fixedByUserId = "";
+        patch.fixedAt = null;
       }
 
       patch.status = nextStatus;
@@ -905,6 +944,15 @@ router.put("/:id/close", requireAuth, async (req, res, next) => {
     }
 
     bug.status = "CLOSED_VERIFIED";
+    bug.fixedByName = String(
+      req.body?.fixedByName ||
+      bug.fixedByName ||
+      bug.resolution?.submittedBy ||
+      bug.assignedDeveloperName ||
+      getDisplayName(req)
+    ).trim();
+    bug.fixedByUserId = bug.fixedByUserId || bug.assignedDeveloperId || getUserId(req);
+    bug.fixedAt = bug.fixedAt || bug.resolution?.submittedAt || new Date();
     bug.lastActivity = new Date();
     await bug.save();
 
@@ -1061,11 +1109,13 @@ router.post("/:id/resolution", requireAuth, async (req, res, next) => {
     const commitUrl = String(req.body?.commitUrl || "").trim();
     const pullRequestUrl = String(req.body?.pullRequestUrl || "").trim();
     const disposition = String(req.body?.disposition || "Fixed").trim();
+    const fixerName = String(req.body?.fixedByName || getDisplayName(req)).trim();
     const attachments = Array.isArray(req.body?.attachments) ? req.body.attachments : [];
 
     if (!summary) return res.status(400).json({ error: { message: "Resolution summary is required" } });
     if (!verificationPerformed) return res.status(400).json({ error: { message: "Verification performed details are required" } });
 
+    const now = new Date();
     bug.resolution = {
       summary,
       verificationPerformed,
@@ -1075,25 +1125,28 @@ router.post("/:id/resolution", requireAuth, async (req, res, next) => {
       pullRequestUrl,
       attachments,
       disposition,
-      submittedBy: getUserName(req),
-      submittedAt: new Date(),
+      submittedBy: fixerName,
+      submittedAt: now,
     };
 
+    bug.fixedByUserId = getUserId(req);
+    bug.fixedByName = fixerName;
+    bug.fixedAt = now;
     bug.status = "AWAITING_REPORTER_CONFIRMATION";
-    bug.lastActivity = new Date();
+    bug.lastActivity = now;
     await bug.save();
 
     await logBugEvent(
       bug._id,
       req,
       "RESOLUTION_SUBMITTED",
-      `Resolution submitted by ${getUserName(req)}. Awaiting reporter confirmation.`,
-      { disposition, releaseVersion }
+      `Resolution submitted by ${fixerName}. Awaiting reporter confirmation.`,
+      { disposition, releaseVersion, fixedByName: fixerName }
     );
 
     // Notify original reporter
     void createNotification({
-      actor: getUserName(req),
+      actor: fixerName,
       actorRole: getUserRole(req),
       action: "submitted resolution for",
       resourceType: "bug",
@@ -1128,6 +1181,9 @@ router.post("/:id/confirm-resolution", requireAuth, async (req, res, next) => {
     if (confirmed === false || confirmed === "no") {
       // Reporter Rejected -> REOPENED
       bug.status = "REOPENED";
+      bug.fixedByUserId = "";
+      bug.fixedByName = "";
+      bug.fixedAt = null;
       bug.verification = {
         reporterConfirmed: false,
         confirmedAt: new Date(),
@@ -1160,6 +1216,10 @@ router.post("/:id/confirm-resolution", requireAuth, async (req, res, next) => {
 
     // Reporter Confirmed -> CLOSED_VERIFIED
     bug.status = "CLOSED_VERIFIED";
+    bug.fixedByName = String(
+      bug.fixedByName || bug.resolution?.submittedBy || bug.assignedDeveloperName || getDisplayName(req)
+    ).trim();
+    bug.fixedAt = bug.fixedAt || bug.resolution?.submittedAt || new Date();
     bug.verification = {
       reporterConfirmed: true,
       confirmedAt: new Date(),
@@ -1236,6 +1296,15 @@ router.post("/:id/admin-override", requireAuth, async (req, res, next) => {
 
     const reason = String(req.body?.reason || "Admin override close").trim();
     bug.status = "CLOSED_ADMIN_OVERRIDE";
+    bug.fixedByName = String(
+      req.body?.fixedByName ||
+      bug.fixedByName ||
+      bug.resolution?.submittedBy ||
+      bug.assignedDeveloperName ||
+      getDisplayName(req)
+    ).trim();
+    bug.fixedByUserId = bug.fixedByUserId || bug.assignedDeveloperId || getUserId(req);
+    bug.fixedAt = bug.fixedAt || bug.resolution?.submittedAt || new Date();
     bug.lastActivity = new Date();
     await bug.save();
 

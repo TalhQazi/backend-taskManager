@@ -12,6 +12,7 @@ const Project = require("../models/Project");
 const { uploadToS3 } = require("../lib/s3");
 const { createNotification } = require("../utils/notifications");
 const { requireAuth } = require("../middleware/auth");
+const { computeCostSheetProgress } = require("../lib/expenseStatusHelper");
 
 const { READINESS_WEIGHTS } = CostLineItem;
 
@@ -439,50 +440,26 @@ router.get("/sheets", requireAuth, async (req, res, next) => {
 
     // Fetch line items for all sheets in a single query
     const allItems = await CostLineItem.find({
-      sheetId: { $in: sheetIds },
+      costSheetId: { $in: sheetIds },
       isActive: { $ne: false },
     }).lean();
 
-    // Group items by sheetId
+    // Group items by costSheetId
     const itemsBySheet = {};
     for (const item of allItems) {
-      const sId = String(item.sheetId);
+      const sId = String(item.costSheetId);
       if (!itemsBySheet[sId]) itemsBySheet[sId] = [];
       itemsBySheet[sId].push(item);
     }
 
     const enhancedSheets = rawSheets.map((sheet) => {
       const items = itemsBySheet[String(sheet._id)] || [];
-      const itemCount = items.length;
-      const projectedCents = items.reduce((sum, i) => sum + (i.estimatedTotalCents || 0), 0);
-      const spentCents = items.reduce((sum, i) => sum + (i.paidCents || 0), 0);
-
-      const purchasedCount = items.filter((i) =>
-        ["purchased", "shipped", "received", "stored"].includes(i.purchaseStatus)
-      ).length;
-
-      const isDone =
-        sheet.quoteStatus === "accepted" ||
-        (itemCount > 0 && purchasedCount === itemCount);
-
-      const isStarted =
-        itemCount > 0 ||
-        spentCents > 0 ||
-        sheet.quoteStatus === "submitted" ||
-        sheet.quoteStatus === "accepted" ||
-        (sheet.availableBudgetCents > 0 && itemCount > 0);
-
-      const status = isDone ? "done" : isStarted ? "started" : "not-started";
+      const progress = computeCostSheetProgress(sheet, items);
 
       return {
         ...sheet,
-        itemCount,
-        purchasedCount,
-        projectedCents,
-        spentCents,
-        isStarted,
-        isDone,
-        status,
+        id: String(sheet._id),
+        ...progress,
       };
     });
 

@@ -34,34 +34,56 @@ const LocationSchema = new mongoose.Schema(
     complianceChecklist: {
       water: {
         status: { type: String, default: "Pending" },
+        accountNumber: { type: String, default: "" },
         notes: { type: String, default: "" },
         updatedBy: { type: String, default: "" },
         updatedAt: { type: Date },
       },
       power: {
         status: { type: String, default: "Pending" },
+        accountNumber: { type: String, default: "" },
         notes: { type: String, default: "" },
         updatedBy: { type: String, default: "" },
         updatedAt: { type: Date },
       },
       townPermitDemo: {
         status: { type: String, default: "Pending" },
+        accountNumber: { type: String, default: "" },
         notes: { type: String, default: "" },
+        updatedBy: { type: String, default: "" },
+        updatedAt: { type: Date },
       },
       townPermitRenovations: {
         status: { type: String, default: "Pending" },
+        accountNumber: { type: String, default: "" },
         notes: { type: String, default: "" },
+        updatedBy: { type: String, default: "" },
+        updatedAt: { type: Date },
       },
       sitePlanReview: {
         option: { type: String, default: "Needed" }, // "Needed" | "Not Needed" | "Approved" | "Pending"
+        accountNumber: { type: String, default: "" },
         notes: { type: String, default: "" },
+        updatedBy: { type: String, default: "" },
+        updatedAt: { type: Date },
       },
       certificateOfOccupancy: {
         status: { type: String, default: "Pending" }, // "Obtained" | "Pending" | "In Review" | "N/A"
         date: { type: String, default: "" },
+        accountNumber: { type: String, default: "" },
         notes: { type: String, default: "" },
+        updatedBy: { type: String, default: "" },
+        updatedAt: { type: Date },
       },
     },
+    accountNumbers: [
+      {
+        label: { type: String, default: "" },
+        accountNumber: { type: String, default: "" },
+        provider: { type: String, default: "" },
+        notes: { type: String, default: "" },
+      },
+    ],
   },
   { timestamps: true }
 );

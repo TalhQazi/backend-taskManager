@@ -26,6 +26,7 @@ const { uploadToS3, saveToServer, base64ToBuffer, getFromS3, extractS3Key } = re
 const contributionTracker = require("../utils/contributionTracker");
 const { sendEmailNotification } = require("../utils/emailNotifications");
 const Website = require("../models/Website");
+const { getTaskExpenseStatusMap, matchesExpenseStatusFilter } = require("../lib/expenseStatusHelper");
 
 async function handleTaskCompletion(task) {
   try {
@@ -437,8 +438,15 @@ router.get("/", requireAuth, async (req, res, next) => {
     }
 
     // 4. Status Filter
+    const excludeCompleted = String(req.query.excludeCompleted || "").toLowerCase() === "true";
     if (statusQ && statusQ !== "all") {
-      conditions.push({ status: statusQ });
+      if (statusQ === "active") {
+        conditions.push({ status: { $in: ["pending", "in-progress", "overdue"] } });
+      } else {
+        conditions.push({ status: statusQ });
+      }
+    } else if (excludeCompleted) {
+      conditions.push({ status: { $ne: "completed" } });
     }
 
     // 5. Assignment Filter
@@ -477,9 +485,31 @@ router.get("/", requireAuth, async (req, res, next) => {
       conditions.push({ assignees: { $elemMatch: { $regex: new RegExp(`^${escapeRegExp(assigneeQ)}$`, "i") } } });
     }
 
+    // 7. Expense Sheet status filter
+    const expenseStatusQ = String(req.query.expenseStatus || "all").toLowerCase().trim();
+    const taskExpenseMap = await getTaskExpenseStatusMap();
+    if (expenseStatusQ && expenseStatusQ !== "all") {
+      if (expenseStatusQ === "none") {
+        const idsWithSheet = Array.from(taskExpenseMap.keys())
+          .filter((id) => mongoose.isValidObjectId(id))
+          .map((id) => new mongoose.Types.ObjectId(id));
+        if (idsWithSheet.length > 0) {
+          conditions.push({ _id: { $nin: idsWithSheet } });
+        }
+      } else {
+        const matchingIds = [];
+        for (const [tid, entry] of taskExpenseMap.entries()) {
+          if (matchesExpenseStatusFilter(entry, expenseStatusQ) && mongoose.isValidObjectId(tid)) {
+            matchingIds.push(new mongoose.Types.ObjectId(tid));
+          }
+        }
+        conditions.push({ _id: { $in: matchingIds } });
+      }
+    }
+
     const filter = conditions.length > 0 ? { $and: conditions } : {};
 
-    const cacheKey = `tasks:list:${role}:${req.user?.sub || ''}:p${page}:l${limit}:s${searchQ}:st${statusQ}:pr${priorityQ}:so${sortQ}:pid${projectIdQ}:a${assigneeQ}:df${dueFromQ}:dt${dueToQ}`;
+    const cacheKey = `tasks:list:${role}:${req.user?.sub || ''}:p${page}:l${limit}:s${searchQ}:st${statusQ}:ec${excludeCompleted}:ex${expenseStatusQ}:pr${priorityQ}:so${sortQ}:pid${projectIdQ}:a${assigneeQ}:df${dueFromQ}:dt${dueToQ}`;
     const result = await cacheWrap(cacheKey, async () => {
 
       const total = await Task.countDocuments(filter);
@@ -503,7 +533,11 @@ router.get("/", requireAuth, async (req, res, next) => {
         ];
 
         const items = await Task.aggregate(pipeline);
-        return paginatedResponse(items.map(withId), total, page, limit);
+        return paginatedResponse(items.map((item) => {
+          const out = withId(item);
+          const exp = taskExpenseMap.get(String(out.id));
+          return { ...out, expenseSheetStatus: exp?.status || "none", expenseSheetName: exp?.sheetName || "" };
+        }), total, page, limit);
       }
 
       const items = await Task.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit).lean();
@@ -528,7 +562,11 @@ router.get("/", requireAuth, async (req, res, next) => {
         }
       }
 
-      return paginatedResponse(items.map(withId), total, page, limit);
+      return paginatedResponse(items.map((item) => {
+        const out = withId(item);
+        const exp = taskExpenseMap.get(String(out.id));
+        return { ...out, expenseSheetStatus: exp?.status || "none", expenseSheetName: exp?.sheetName || "" };
+      }), total, page, limit);
     }, 15);
 
     res.json(result);

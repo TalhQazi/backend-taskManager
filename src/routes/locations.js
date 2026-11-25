@@ -47,6 +47,13 @@ const createSchema = z.object({
   employeeCount: z.number().min(0),
   status: z.enum(["active", "inactive"]),
   operatingHours: z.string().min(1),
+  complianceChecklist: z.any().optional(),
+  accountNumbers: z.array(z.object({
+    label: z.string().optional(),
+    accountNumber: z.string().optional(),
+    provider: z.string().optional(),
+    notes: z.string().optional(),
+  })).optional(),
 });
 
 const adminUiSchema = z.object({
@@ -75,6 +82,12 @@ const adminUiSchema = z.object({
     uploadedAt: z.any().optional(),
   })).optional(),
   complianceChecklist: z.any().optional(),
+  accountNumbers: z.array(z.object({
+    label: z.string().optional(),
+    accountNumber: z.string().optional(),
+    provider: z.string().optional(),
+    notes: z.string().optional(),
+  })).optional(),
 });
 
 const updateSchema = createSchema.partial();
@@ -119,6 +132,7 @@ router.post("/", requireAuth, async (req, res, next) => {
         attachments: Array.isArray(adminParsed.data.attachments) ? adminParsed.data.attachments : [],
         documents: Array.isArray(adminParsed.data.documents) ? adminParsed.data.documents : [],
         complianceChecklist: req.body.complianceChecklist || undefined,
+        accountNumbers: Array.isArray(req.body.accountNumbers) ? req.body.accountNumbers : [],
       });
 
       const createdObj = withId(created.toObject());
@@ -256,6 +270,7 @@ router.put("/:id", requireAuth, async (req, res, next) => {
       if (Array.isArray(adminParsed.data.attachments)) patch.attachments = adminParsed.data.attachments;
       if (Array.isArray(adminParsed.data.documents)) patch.documents = adminParsed.data.documents;
       if (req.body.complianceChecklist) patch.complianceChecklist = req.body.complianceChecklist;
+      if (Array.isArray(req.body.accountNumbers)) patch.accountNumbers = req.body.accountNumbers;
 
       const updated = await Location.findByIdAndUpdate(req.params.id, patch, { new: true }).lean();
       if (!updated) return res.status(404).json({ error: { message: "Location not found" } });
